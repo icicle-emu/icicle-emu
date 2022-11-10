@@ -1,0 +1,73 @@
+c.addi sp,-0x20
+<L0> (entry=0x0):
+	sp = sp + 0xffffffffffffffe0:8
+
+c.sdsp s0,0x18(sp)
+<L0> (entry=0x2):
+	$U1:8 = 0x18:8 + sp
+	ram[$U1:8] = s0
+
+c.addi4spn s0,sp,0x20
+<L0> (entry=0x4):
+	s0 = sp + 0x20:8
+
+c.mv a5,a0
+<L0> (entry=0x6):
+	a5 = a0
+
+sw a5,-0x14(s0)
+<L0> (entry=0x8):
+	$U1:8 = s0 + 0xffffffffffffffec:8
+	ram[$U1:8] = a5:4
+
+lw a4,-0x14(s0)
+<L0> (entry=0xc):
+	$U1:8 = s0 + 0xffffffffffffffec:8
+	$U2:4 = ram[$U1:8]
+	a4 = sext($U2:4)
+
+lw a5,-0x14(s0)
+<L0> (entry=0x10):
+	$U1:8 = s0 + 0xffffffffffffffec:8
+	$U2:4 = ram[$U1:8]
+	a5 = sext($U2:4)
+
+mulw a5,a4,a5
+<L0> (entry=0x14):
+	$U1:4 = a4:4 * a5:4
+	a5 = sext($U1:4)
+
+c.addiw a5,0x0
+<L0> (entry=0x18):
+	$U1:8 = a5
+	a5 = sext($U1:4)
+
+c.mv a0,a5
+<L0> (entry=0x1a):
+	a0 = a5
+
+c.ldsp s0,0x18(sp)
+<L0> (entry=0x1c):
+	$U1:8 = 0x18:8 + sp
+	$U2:8 = ram[$U1:8]
+	s0 = $U2:8
+
+c.addi16sp sp,0x20
+<L0> (entry=0x1e):
+	sp = sp + 0x20:8
+
+ret
+<L0> (entry=0x20):
+	return ra
+
+amoswap.w zero,zero,(a5)
+<L0> (entry=0x0):
+	$U3:4 = ram[a5]
+	ram[a5] = 0x0:4
+
+amoadd.d.aq zero,a4,(a5)
+<L0> (entry=0x0):
+	$U3:8 = ram[a5]
+	$U3:8 = $U3:8 + a4
+	ram[a5] = $U3:8
+

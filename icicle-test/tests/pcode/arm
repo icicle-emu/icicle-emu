@@ -1,0 +1,554 @@
+add r1,r1,r1
+<L0> (entry=0x0):
+	r1 = r1 + r1
+
+adds r1,r1,r1
+<L0> (entry=0x0):
+	tmpCY = r1 carry r1
+	tmpOV = r1 scarry r1
+	r1 = r1 + r1
+	tmpNG = r1 s< 0x0:4
+	tmpZR = r1 == 0x0:4
+	CY = tmpCY
+	ZR = tmpZR
+	NG = tmpNG
+	OV = tmpOV
+
+adds r3,r1,r2
+<L0> (entry=0x0):
+	tmpCY = r1 carry r2
+	tmpOV = r1 scarry r2
+	r3 = r1 + r2
+	tmpNG = r3 s< 0x0:4
+	tmpZR = r3 == 0x0:4
+	CY = tmpCY
+	ZR = tmpZR
+	NG = tmpNG
+	OV = tmpOV
+
+sub r1,r1,r1
+<L0> (entry=0x0):
+	r1 = 0x0:4
+
+subs r1,r1,r1
+<L0> (entry=0x0):
+	r1 = 0x0:4
+	CY = 0x1:1
+	ZR = 0x1:1
+	NG = 0x0:1
+	OV = 0x0:1
+
+swivc 0xffa324
+<L0> (entry=0x80000000):
+	$U3:1 = !OV
+	$U2:1 = !$U3:1
+	if $U2:1 jump 0x80000004:8
+<L1>:
+	NEXT_PC = 0x80000004:8
+	exception(0x101:4, 0xffa324:4)
+
+smlawteq r0,r1,r1,pc
+<L0> (entry=0x80000000):
+	$U6:4 = r1
+	$U7:2 = $U6[2]:2
+	$U8:1 = !ZR
+	if $U8:1 jump 0x80000004:8
+<L1>:
+	$U2:6 = sext(r1)
+	$U3:6 = sext($U7:2)
+	$U1:6 = $U2:6 * $U3:6
+	$U4:4 = $U1[2]:4
+	$U5:1 = $U4:4 scarry 0x80000000:4
+	Q = $U5:1 || Q
+	r0 = $U4:4 + 0x80000000:4
+
+rsbmi lr,r12,r1, lsl #0x14
+<L0> (entry=0x11000):
+	$U1:1 = !NG
+	if $U1:1 jump 0x11004:8
+<L1>:
+	$U5:4 = r1 << 0x14:4
+	lr = $U5:4 - r12
+
+udf #0x0
+<L0> (entry=0x11000):
+	exception(0x1001:4, 0x0:4)
+	jump $U2:4
+
+bkpt 0x0
+<L0> (entry=0x11000):
+	NEXT_PC = 0x11002:8
+	exception(0x101:4, 0x0:4)
+
+hlt 0x3a
+<L0> (entry=0x11000):
+	exception(0x2:4, 0x3a:4)
+
+push {r4,r5,r6,r7,r8,lr}
+<L0> (entry=0x0):
+	mult_addr = sp - 0x4:4
+	ram[mult_addr] = lr
+	mult_addr = mult_addr - 0x4:4
+	ram[mult_addr] = r8
+	mult_addr = mult_addr - 0x4:4
+	ram[mult_addr] = r7
+	mult_addr = mult_addr - 0x4:4
+	ram[mult_addr] = r6
+	mult_addr = mult_addr - 0x4:4
+	ram[mult_addr] = r5
+	mult_addr = mult_addr - 0x4:4
+	ram[mult_addr] = r4
+	mult_addr = mult_addr - 0x4:4
+	sp = mult_addr + 0x4:4
+
+pop {r4,r5,pc}
+<L0> (entry=0x0):
+	r4 = ram[sp]
+	mult_addr = sp + 0x4:4
+	r5 = ram[mult_addr]
+	mult_addr = mult_addr + 0x4:4
+	tmp_pc = ram[mult_addr]
+	mult_addr = mult_addr + 0x4:4
+	sp = mult_addr
+	$U1:4 = tmp_pc & 0x1:4
+	$U2:1 = $U1:4 != 0x0:4
+	ISAModeSwitch = $U2:1
+	TB = $U2:1
+	$U3:4 = tmp_pc & 0xfffffffe:4
+	return $U3:4
+
+mov r5,r0
+<L0> (entry=0x0):
+	r5 = r0
+
+ldr r0,[0x3c]
+<L0> (entry=0x0):
+	r0 = ram[0x3c:4]
+
+bl 0x100
+<L0> (entry=0x0):
+	lr = 0x5:4
+	ISAModeSwitch = 0x1:1
+	TB = 0x1:1
+	call 0x100:4
+
+b.w 0x100
+<L0> (entry=0x0):
+	jump 0x100:4
+
+lsls r1,r4
+<L0> (entry=0x0):
+	$U1:4 = r4 & 0xff:4
+	$U3:4 = $U1:4 - 0x1:4
+	$U4:4 = r1 << $U3:4
+	$U2:4 = $U4:4 & 0x80000000:4
+	$U5:1 = $U1:4 == 0x0:4
+	$U6:1 = $U5:1 && CY
+	$U7:1 = $U1:4 != 0x0:4
+	$U8:1 = $U2:4 != 0x0:4
+	$U9:1 = $U7:1 && $U8:1
+	tmpCY = $U6:1 || $U9:1
+	r1 = r1 << $U1:4
+	tmpNG = r1 s< 0x0:4
+	tmpZR = r1 == 0x0:4
+	CY = tmpCY
+	ZR = tmpZR
+	NG = tmpNG
+
+lsls r0,r1,#0x18
+<L0> (entry=0x11000):
+	$U3:4 = r1 << 0x17:4
+	$U1:4 = $U3:4 & 0x80000000:4
+	$U7:1 = $U1:4 != 0x0:4
+	r0 = r1 << 0x18:4
+	tmpNG = r0 s< 0x0:4
+	tmpZR = r0 == 0x0:4
+	CY = $U7:1
+	ZR = tmpZR
+	NG = tmpNG
+
+ands r3,r3,#0x300
+<L0> (entry=0x11000):
+	r3 = r3 & 0x300:4
+	tmpZR = r3 == 0x0:4
+	ZR = tmpZR
+	NG = 0x0:1
+
+sel r6,r5,r7
+<L0> (entry=0x11000):
+	$U1:1 = GE1 == 0x1:1
+	$U2:1 = $U1:1 * r5:1
+	$U3:1 = GE1 == 0x0:1
+	$U4:1 = $U3:1 * r7:1
+	r6:1 = $U2:1 + $U4:1
+	$U5:1 = GE2 == 0x1:1
+	$U6:1 = $U5:1 * r5[1]:1
+	$U7:1 = GE2 == 0x0:1
+	$U8:1 = $U7:1 * r7[1]:1
+	r6[1]:1 = $U6:1 + $U8:1
+	$U9:1 = GE3 == 0x1:1
+	$U10:1 = $U9:1 * r5[2]:1
+	$U11:1 = GE3 == 0x0:1
+	$U12:1 = $U11:1 * r7[2]:1
+	r6[2]:1 = $U10:1 + $U12:1
+	$U13:1 = GE4 == 0x1:1
+	$U14:1 = $U13:1 * r5[3]:1
+	$U15:1 = GE4 == 0x0:1
+	$U16:1 = $U15:1 * r7[3]:1
+	r6[3]:1 = $U14:1 + $U16:1
+
+ittet ge
+strb.ge.w r2,[r0,#0x300]
+<L0> (entry=0x0):
+	instruction(0x0)
+	instruction(0x2)
+	$U3:1 = NG == OV
+	$U2:1 = !$U3:1
+	if $U2:1 jump 0x6:8
+<L1>:
+	$U4:4 = r0 + 0x300:4
+	$U1:4 = r2
+	ram[$U4:4] = $U1:1
+
+ldrb.w r2,[r3],#0x1
+<L0> (entry=0x0):
+	$U2:4 = r3
+	r3 = r3 + 0x1:4
+	$U1:1 = ram[$U2:4]
+	r2 = zext($U1:1)
+
+cmp r2,#0x0
+<L0> (entry=0x0):
+	tmpCY = 0x0:4 <= r2
+	tmpNG = r2 s< 0x0:4
+	tmpZR = r2 == 0x0:4
+	CY = tmpCY
+	ZR = tmpZR
+	NG = tmpNG
+	OV = 0x0:1
+
+bne 0x0
+<L0> (entry=0x6):
+	$U1:1 = ZR == 0x0:1
+	if $U1:1 jump 0x0:4
+
+cpsid i
+<L0> (entry=0x0):
+	disableIRQinterrupts()
+
+cpsie i
+<L0> (entry=0x0):
+	enableIRQinterrupts()
+
+mrs r0,msp
+<L0> (entry=0x0):
+	r0 = getMainStackPointer()
+
+ittt eq
+ldr.eq.w r2,[r0,#0x104]
+orr.eq r3,r2
+str.w.eq r3,[r0,#0x104]
+ldr r3,[r4,#0x4]
+movs r0,#0x0
+adds r2,r3,#0x1
+adds r3,#0x2
+str r2,[r4,#0x4]
+str.w r7,[r4,r3,lsl #0x2]
+pop.w {r3,r4,r5,r6,r7,r8,r9,pc}
+<L0> (entry=0x8011ea6):
+	instruction(0x8011ea6)
+	instruction(0x8011ea8)
+	$U2:1 = ZR != 0x0:1
+	$U1:1 = !$U2:1
+	if $U1:1 jump <L2>
+<L1>:
+	$U3:4 = r0 + 0x104:4
+	r2 = ram[$U3:4]
+<L2>:
+	instruction(0x8011eac)
+	$U2:1 = ZR != 0x0:1
+	$U1:1 = !$U2:1
+	if $U1:1 jump <L4>
+<L3>:
+	r3 = r3 | r2
+<L4>:
+	instruction(0x8011eae)
+	$U1:4 = r0 + 0x104:4
+	$U3:1 = ZR != 0x0:1
+	$U2:1 = !$U3:1
+	if $U2:1 jump <L6>
+<L5>:
+	ram[$U1:4] = r3
+<L6>:
+	instruction(0x8011eb2)
+	$U1:4 = r4 + 0x4:4
+	r3 = ram[$U1:4]
+	instruction(0x8011eb4)
+	r0 = 0x0:4
+	ZR = 0x1:1
+	NG = 0x0:1
+	instruction(0x8011eb6)
+	tmpCY = r3 carry 0x1:4
+	tmpOV = r3 scarry 0x1:4
+	r2 = r3 + 0x1:4
+	tmpNG = r2 s< 0x0:4
+	tmpZR = r2 == 0x0:4
+	CY = tmpCY
+	ZR = tmpZR
+	NG = tmpNG
+	OV = tmpOV
+	instruction(0x8011eb8)
+	tmpCY = r3 carry 0x2:4
+	tmpOV = r3 scarry 0x2:4
+	r3 = r3 + 0x2:4
+	tmpNG = r3 s< 0x0:4
+	tmpZR = r3 == 0x0:4
+	CY = tmpCY
+	ZR = tmpZR
+	NG = tmpNG
+	OV = tmpOV
+	instruction(0x8011eba)
+	$U1:4 = r4 + 0x4:4
+	ram[$U1:4] = r2
+	instruction(0x8011ebc)
+	$U2:4 = r3 << 0x2:4
+	$U1:4 = r4 + $U2:4
+	ram[$U1:4] = r7
+	instruction(0x8011ec0)
+	r3 = ram[sp]
+	mult_addr = sp + 0x4:4
+	r4 = ram[mult_addr]
+	mult_addr = mult_addr + 0x4:4
+	r5 = ram[mult_addr]
+	mult_addr = mult_addr + 0x4:4
+	r6 = ram[mult_addr]
+	mult_addr = mult_addr + 0x4:4
+	r7 = ram[mult_addr]
+	mult_addr = mult_addr + 0x4:4
+	r8 = ram[mult_addr]
+	mult_addr = mult_addr + 0x4:4
+	r9 = ram[mult_addr]
+	mult_addr = mult_addr + 0x4:4
+	tmp_pc = ram[mult_addr]
+	mult_addr = mult_addr + 0x4:4
+	sp = mult_addr
+	$U1:4 = tmp_pc & 0x1:4
+	$U2:1 = $U1:4 != 0x0:4
+	ISAModeSwitch = $U2:1
+	TB = $U2:1
+	$U3:4 = tmp_pc & 0xfffffffe:4
+	return $U3:4
+
+udiv r2,r2,r3
+<L0> (entry=0x0):
+	$U1:1 = r3 != 0x0:4
+	if $U1:1 jump <L2>
+<L1>:
+	r2 = 0x0:4
+	jump 0x4:8
+<L2>:
+	$U3:8 = zext(r2)
+	$U4:8 = zext(r3)
+	$U2:8 = $U3:8 / $U4:8
+	r2 = $U2:4
+
+sdiv r0,r0,r1
+<L0> (entry=0x0):
+	$U1:1 = r1 != 0x0:4
+	if $U1:1 jump <L2>
+<L1>:
+	r0 = 0x0:4
+	jump 0x4:8
+<L2>:
+	r0 = r0 s/ r1
+
+b 0x80000
+<L0> (entry=0x80000):
+	jump 0x80000:4
+
+bfc r3,#0x3,#0x1
+<L0> (entry=0x8001066):
+	r3 = r3 & 0xfffffff7:4
+
+b.w 0x8005708
+mov r7,r1
+<L0> (entry=0x8005704):
+	instruction(0x8005704)
+<L1>:
+	instruction(0x8005708)
+	r7 = r1
+
+ldr.w r4,[r3,#-0x4]!
+ldr.w r2,[r1,#-0x4]!
+cmp r4,r2
+beq 0x8008c40
+<L0> (entry=0x8008c44):
+	instruction(0x8008c44)
+	$U1:4 = r3 - 0x4:4
+	r3 = $U1:4
+	r4 = ram[$U1:4]
+	instruction(0x8008c48)
+	$U1:4 = r1 - 0x4:4
+	r1 = $U1:4
+	r2 = ram[$U1:4]
+	instruction(0x8008c4c)
+	tmpCY = r2 <= r4
+	tmpOV = r4 sborrow r2
+	$U1:4 = r4 - r2
+	tmpNG = $U1:4 s< 0x0:4
+	tmpZR = $U1:4 == 0x0:4
+	CY = tmpCY
+	ZR = tmpZR
+	NG = tmpNG
+	OV = tmpOV
+	instruction(0x8008c4e)
+	$U1:1 = tmpZR
+	if $U1:1 jump 0x8008c40:4
+
+mvns.w r12,r4, asr #0x15
+it ne
+mvns.ne.w r12,r5, asr #0x15
+beq 0x80003aa
+<L0> (entry=0x800034a):
+	instruction(0x800034a)
+	$U4:4 = r4 s>> 0x15:4
+	r12 = ~$U4:4
+	tmpNG = r12 s< 0x0:4
+	tmpZR = r12 == 0x0:4
+	ZR = tmpZR
+	NG = tmpNG
+	instruction(0x800034e)
+	instruction(0x8000350)
+	$U4:4 = r5 s>> 0x15:4
+	$U6:1 = tmpZR == 0x0:1
+	$U5:1 = !$U6:1
+	if $U5:1 jump <L2>
+<L1>:
+	r12 = ~$U4:4
+	tmpNG = r12 s< 0x0:4
+	tmpZR = r12 == 0x0:4
+	ZR = tmpZR
+	NG = tmpNG
+<L2>:
+	instruction(0x8000354)
+	$U1:1 = ZR != 0x0:1
+	if $U1:1 jump 0x80003aa:4
+
+and r12,r12,#0x80000000
+orr.w r0,r12,r0, lsr #0x9
+adds r2,#0x7f
+ittt gt
+rsbs.gt.w r3,r2,#0xff
+orr.gt.w r0,r0,r2, lsl #0x17
+bx.gt lr
+<L0> (entry=0x8000eb8):
+	instruction(0x8000eb8)
+	r12 = r12 & 0x80000000:4
+	instruction(0x8000ebc)
+	$U4:4 = r0 >> 0x9:4
+	r0 = r12 | $U4:4
+	instruction(0x8000ec0)
+	tmpCY = r2 carry 0x7f:4
+	tmpOV = r2 scarry 0x7f:4
+	r2 = r2 + 0x7f:4
+	tmpNG = r2 s< 0x0:4
+	tmpZR = r2 == 0x0:4
+	CY = tmpCY
+	ZR = tmpZR
+	NG = tmpNG
+	OV = tmpOV
+	instruction(0x8000ec2)
+	instruction(0x8000ec4)
+	$U4:1 = !tmpZR
+	$U5:1 = tmpNG == tmpOV
+	$U3:1 = $U4:1 && $U5:1
+	$U2:1 = !$U3:1
+	if $U2:1 jump <L2>
+<L1>:
+	tmpCY = r2 <= 0xff:4
+	tmpOV = 0xff:4 sborrow r2
+	r3 = 0xff:4 - r2
+	tmpNG = r3 s< 0x0:4
+	tmpZR = r3 == 0x0:4
+	CY = tmpCY
+	ZR = tmpZR
+	NG = tmpNG
+	OV = tmpOV
+<L2>:
+	instruction(0x8000ec8)
+	$U4:4 = r2 << 0x17:4
+	$U7:1 = !ZR
+	$U8:1 = NG == OV
+	$U6:1 = $U7:1 && $U8:1
+	$U5:1 = !$U6:1
+	if $U5:1 jump <L4>
+<L3>:
+	r0 = r0 | $U4:4
+<L4>:
+	instruction(0x8000ecc)
+	$U6:1 = !ZR
+	$U7:1 = NG == OV
+	$U5:1 = $U6:1 && $U7:1
+	$U4:1 = !$U5:1
+	if $U4:1 jump 0x8000ece:8
+<L5>:
+	$U1:4 = lr & 0x1:4
+	$U2:1 = $U1:4 != 0x0:4
+	ISAModeSwitch = $U2:1
+	TB = $U2:1
+	$U3:4 = lr & 0xfffffffe:4
+	return $U3:4
+
+subs r3,r2,r3
+ldr r2,[r7,#0x50]
+cmp r2,r3
+bcs 0x80022b0
+<L0> (entry=0x8002286):
+	instruction(0x8002286)
+	tmpCY = r3 <= r2
+	tmpOV = r2 sborrow r3
+	r3 = r2 - r3
+	tmpNG = r3 s< 0x0:4
+	tmpZR = r3 == 0x0:4
+	CY = tmpCY
+	ZR = tmpZR
+	NG = tmpNG
+	OV = tmpOV
+	instruction(0x8002288)
+	$U1:4 = r7 + 0x50:4
+	r2 = ram[$U1:4]
+	instruction(0x800228a)
+	tmpCY = r3 <= r2
+	tmpOV = r2 sborrow r3
+	$U1:4 = r2 - r3
+	tmpNG = $U1:4 s< 0x0:4
+	tmpZR = $U1:4 == 0x0:4
+	CY = tmpCY
+	ZR = tmpZR
+	NG = tmpNG
+	OV = tmpOV
+	instruction(0x800228c)
+	$U1:1 = tmpCY
+	if $U1:1 jump 0x80022b0:4
+
+ldr.w pc,[sp],#0x8
+<L0> (entry=0x80009ce):
+	$U1:4 = sp
+	sp = sp + 0x8:4
+	tmp_pc = ram[$U1:4]
+	$U2:4 = tmp_pc & 0x1:4
+	$U3:1 = $U2:4 != 0x0:4
+	ISAModeSwitch = $U3:1
+	TB = $U3:1
+	$U4:4 = tmp_pc & 0xfffffffe:4
+	jump $U4:4
+
+vext.8 d9,d8,d5,#0xb
+<L0> (entry=0x1100):
+	$U2:16 = zext(d5)
+	$U3:16 = $U2:16 << 0x40:4
+	$U4:16 = zext(d8)
+	$U1:16 = $U3:16 | $U4:16
+	$U1:16 = $U1:16 >> 0x58:1
+	d9 = $U1:8
+

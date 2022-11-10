@@ -1,0 +1,190 @@
+lui v0, 0x2
+<L0> (entry=0x0):
+	v0 = 0x20000:4
+
+lui gp, 0x1122
+<L0> (entry=0x0):
+	gp = 0x11220000:4
+
+addiu v0, v0, -0x6ef0
+<L0> (entry=0x4):
+	v0 = v0 + 0xffff9110:4
+
+addiu sp, sp, -0x60
+<L0> (entry=0x8):
+	sp = sp + 0xffffffa0:4
+
+or s8, sp, zero
+<L0> (entry=0x1c):
+	s8 = sp
+
+addu s0, v0, t9
+<L0> (entry=0x20):
+	s0 = v0 + t9
+
+sw s0, 0x50(sp)
+<L0> (entry=0x18):
+	$U1:4 = sp + 0x50:4
+	ram[$U1:4] = s0
+
+lw t9, -0x7fc0(s0)
+<L0> (entry=0x28):
+	$U2:4 = s0 + 0xffff8040:4
+	$U1:4 = ram[$U2:4]
+	t9 = $U1:4
+
+swl v0, 0x3(a0)
+<L0> (entry=0x54):
+	$U13:4 = a0 + 0x3:4
+	$U2:4 = $U13:4 & 0x3:4
+	$U3:4 = $U13:4 - $U2:4
+	$U5:4 = ram[$U3:4]
+	$U6:4 = $U2:4 + 0x1:4
+	$U7:4 = $U6:4 * 0x8:4
+	$U8:4 = 0xffffffff:4 << $U7:4
+	$U4:4 = $U5:4 & $U8:4
+	$U10:4 = 0x3:4 - $U2:4
+	$U11:4 = $U10:4 * 0x8:4
+	$U9:4 = v0 >> $U11:4
+	$U12:4 = $U4:4 | $U9:4
+	ram[$U3:4] = $U12:4
+
+swr v0, 0x0(a0)
+<L0> (entry=0x58):
+	$U2:4 = a0 & 0x3:4
+	$U3:4 = a0 - $U2:4
+	$U5:4 = ram[$U3:4]
+	$U6:4 = 0x4:4 - $U2:4
+	$U7:4 = $U6:4 * 0x8:4
+	$U8:4 = 0xffffffff:4 >> $U7:4
+	$U4:4 = $U5:4 & $U8:4
+	$U10:4 = $U2:4 * 0x8:4
+	$U9:4 = v0 << $U10:4
+	$U11:4 = $U4:4 | $U9:4
+	ram[$U3:4] = $U11:4
+
+pref load_streamed, 0x0(a1)
+<L0> (entry=0x5c):
+
+bal 0xf9c
+<L0> (entry=0x38):
+	ra = 0x40:4
+	call 0xf9c:4
+
+bgtz v0, 0x60
+<L0> (entry=0x40):
+	$U1:1 = 0x0:4 s< v0
+	if $U1:1 jump 0x60:4
+
+bal 0x1074
+<L0> (entry=0x4c):
+	ra = 0x54:4
+	call 0x1074:4
+
+bc1f 0x1e0
+<L0> (entry=0x7c):
+	$U2:4 = fcsr >> 0x17:4
+	$U2:4 = $U2:4 & 0x1:4
+	$U1:1 = $U2:1
+	if $U1:1 jump 0x84:8
+<L1>:
+	jump 0x1e0:4
+
+blezl v0, 0xc
+<L0> (entry=0x68):
+	$U1:1 = v0 s<= 0x0:4
+	$U2:1 = !$U1:1
+	if $U2:1 jump 0x70:8
+<L1>:
+	jump 0xc:4
+
+jr ra
+<L0> (entry=0x94):
+	$U1:4 = ra & 0x1:4
+	ISAModeSwitch = $U1:4 != 0x0:4
+	$U2:4 = 0xfffffffe:4 & ra
+	pc = $U2:4
+	return $U2:4
+
+nal
+<L0> (entry=0x0):
+	ra = 0x8:4
+	at = 0x0:4
+
+nop
+<L0> (entry=0x50):
+
+seb v1, v0
+<L0> (entry=0x60):
+	v1 = sext(v0:1)
+
+ext v0, v0, 0x8, 0x10
+<L0> (entry=0x64):
+	$U1:4 = v0 << 0x8:4
+	$U1:4 = $U1:4 >> 0x10:4
+	v0 = $U1:4
+
+mtc1 v0, f0
+<L0> (entry=0x6c):
+	f0 = v0
+
+mthc1 s5, f0
+<L0> (entry=0x70):
+	f1 = s5
+
+c.ult.D f20, f0
+<L0> (entry=0x74):
+	$U1:1 = f20_21 f< f0_1
+	$U2:1 = isnan(f20_21)
+	$U3:1 = $U1:1 || $U2:1
+	$U4:1 = isnan(f0_1)
+	$U5:1 = $U3:1 || $U4:1
+	$U6:4 = fcsr & 0xff7fffff:4
+	$U7:4 = zext($U5:1)
+	$U7:4 = $U7:4 << 0x17:4
+	fcsr = $U6:4 | $U7:4
+
+c.un.D f20, f20
+<L0> (entry=0x78):
+	$U1:1 = isnan(f20_21)
+	$U2:1 = isnan(f20_21)
+	$U3:1 = $U1:1 || $U2:1
+	$U4:4 = fcsr & 0xff7fffff:4
+	$U5:4 = zext($U3:1)
+	$U5:4 = $U5:4 << 0x17:4
+	fcsr = $U4:4 | $U5:4
+
+cvt.s.D f0, f0
+<L0> (entry=0x80):
+	f0 = float2float(f0_1)
+
+mfc1 a2, f0
+<L0> (entry=0x84):
+	a2 = f0
+
+cfc1 a0, fcsr
+<L0> (entry=0x88):
+	a0 = fcsr
+
+mul.D f0, f0, f0
+<L0> (entry=0x8c):
+	f0_1 = f0_1 f* f0_1
+
+madd v1, a2
+<L0> (entry=0x90):
+	$U1:8 = sext(v1)
+	$U2:8 = sext(a2)
+	$U3:8 = $U1:8 * $U2:8
+	$U5:8 = zext(hi)
+	$U6:8 = $U5:8 << 0x20:4
+	$U7:8 = zext(lo)
+	$U8:8 = $U6:8 + $U7:8
+	$U4:8 = $U8:8 + $U3:8
+	lo = $U4:4
+	$U4:8 = $U4:8 >> 0x20:4
+	hi = $U4:4
+
+rdhwr v1, HW_ULR
+<L0> (entry=0x0):
+	v1 = HW_ULR
+

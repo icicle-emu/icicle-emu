@@ -1,0 +1,68 @@
+0x000000 [02 00 02 3c]   "lui v0, 0x2"
+    v0 = 0 => v0 = 0x20000;
+0x000000 [22 11 1c 3c]  "lui gp, 0x1122"
+    gp = 0x0 => gp = 0x11220000;
+0x000004 [10 91 42 24]   "addiu v0, v0, -0x6ef0"
+    v0 = 0x6ef0 => v0 = 0x0;
+0x000008 [a0 ff bd 27]   "addiu sp, sp, -0x60"
+    sp = 0x60 => sp = 0x0;
+0x00001c [25 f0 a0 03]   "or s8, sp, zero"
+    sp = 0x1234_1234, s8 = 0x0 => s8 = 0x1234_1234;
+0x000020 [21 80 59 00]   "addu s0, v0, t9"
+    s0 = 0x0, v0 = 0x10, t9 = 0x20 => s0 = 0x30;
+
+0x000018 [50 00 b0 af]   "sw s0, 0x50(sp)"
+    sp = 0xfb0, s0 = 0x0001_0203, mem[0x1000]:WRITE = [00 00 00 00] =>
+                                  mem[0x1000]       = [03 02 01 00];
+0x000028 [40 80 19 8e]   "lw t9, -0x7fc0(s0)"
+    t9 = 0x0, s0 = 0x8fc0, mem[0x1000]:READ = [03 02 01 00] => t9 = 0x0001_0203;
+
+0x000054 [03 00 82 a8]   "swl v0, 0x3(a0)"
+{
+    a0 = 0x1001, v0 = 0x0001_0203,  mem[0x1000]:READ_WRITE = [aa aa aa aa aa aa aa aa] =>
+                                    mem[0x1000]            = [aa aa aa aa 00 aa aa aa];
+    a0 = 0x1003, v0 = 0x0001_0203,  mem[0x1000]:READ_WRITE = [aa aa aa aa aa aa aa aa] =>
+                                    mem[0x1000]            = [aa aa aa aa 02 01 00 aa];
+}
+0x000058 [00 00 82 b8]   "swr v0, 0x0(a0)"
+{
+    a0 = 0x1001, v0 = 0x0001_0203,  mem[0x1000]:READ_WRITE = [aa aa aa aa aa aa aa aa] =>
+                                    mem[0x1000]            = [aa 03 02 01 aa aa aa aa];
+    a0 = 0x1003, v0 = 0x0001_0203,  mem[0x1000]:READ_WRITE = [aa aa aa aa aa aa aa aa] =>
+                                    mem[0x1000]            = [aa aa aa 03 aa aa aa aa];
+}
+0x00005c [00 00 a4 cc]   "pref load_streamed, 0x0(a1)";
+
+@skip // @fixme? should not actually write to the zero register. Generally doesn't matter since nothing ever reads from the zero reg
+0x000000 [25 00 e0 03]   "or zero,ra,zero"
+    ra = 0x1234_1234 => zero = 0;
+
+0x000038 [d8 03 11 04 00 00 00 00]  "bal 0xf9c";
+0x000040 [07 00 40 1c 00 00 00 00]  "bgtz v0, 0x60";
+0x00004c [09 04 11 04 00 00 00 00]  "bal 0x1074";
+0x00007c [58 00 00 45 00 00 00 00]  "bc1f 0x1e0";
+0x000068 [e8 ff 40 58 00 00 00 00]  "blezl v0, 0xc";
+0x000094 [08 00 e0 03 00 00 00 00]  "jr ra";
+0x000000 [01 00 10 04 00 00 01 24]  "nal";
+
+0x000050 [00 00 00 00]   "nop";
+
+0x000060 [20 1c 02 7c]   "seb v1, v0";
+0x000064 [00 7a 42 7c]   "ext v0, v0, 0x8, 0x10";
+
+0x00006c [00 00 82 44]   "mtc1 v0, f0";
+0x000070 [00 00 f5 44]   "mthc1 s5, f0";
+0x000074 [35 a0 20 46]   "c.ult.D f20, f0";
+0x000078 [31 a0 34 46]   "c.un.D f20, f20";
+0x000080 [20 00 20 46]   "cvt.s.D f0, f0";
+0x000084 [00 00 06 44]   "mfc1 a2, f0";
+0x000088 [00 f8 44 44]   "cfc1 a0, fcsr";
+
+0x00008c [02 00 20 46]   "mul.D f0, f0, f0";
+0x000090 [00 00 66 70]   "madd v1, a2"
+{
+    v1 = 0x1_0000, a2 = 0x1234_1234 => hi = 0x0000_1234, lo = 0x1234_0000;
+}
+
+0x000000 [3b e8 03 7c]   "rdhwr v1, HW_ULR"
+    HW_ULR = 0x1234_0000 => v1 = 0x1234_0000;

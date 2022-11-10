@@ -1,0 +1,149 @@
+mov x29, #0x0
+<L0> (entry=0x402260):
+	x29 = 0x0:8
+
+adrp x1, 0x402000
+<L0> (entry=0x40226c):
+	x1 = 0x402000:8
+
+b 0x40227c
+<L0> (entry=0x402278):
+
+ccmp w21, #0x6, #0x0, ne
+<L0> (entry=0x43120c):
+	$U9:1 = !ZR
+	NG = 0x0:1
+	ZR = 0x0:1
+	CY = 0x0:1
+	OV = 0x0:1
+	$U7:1 = !$U9:1
+	if $U7:1 jump 0x431210:8
+<L1>:
+	tmpCY = 0x6:4 <= w21
+	tmpOV = w21 sborrow 0x6:4
+	$U8:4 = w21 - 0x6:4
+	tmpNG = $U8:4 s< 0x0:4
+	tmpZR = $U8:4 == 0x0:4
+	NG = tmpNG
+	ZR = tmpZR
+	CY = tmpCY
+	OV = tmpOV
+
+b.cc 0x40d5e8
+<L0> (entry=0x40d520):
+	$U1:1 = !CY
+	if $U1:1 jump 0x40d5e8:8
+
+subs x8, x25, x0
+<L0> (entry=0x40d51c):
+	tmpCY = x0 <= x25
+	tmpOV = x25 sborrow x0
+	$U2:8 = x25 - x0
+	tmpNG = $U2:8 s< 0x0:8
+	tmpZR = $U2:8 == 0x0:8
+	x8 = $U2:8
+	NG = tmpNG
+	ZR = tmpZR
+	CY = tmpCY
+	OV = tmpOV
+
+tbz w0, #0x1f, 0x34
+<L0> (entry=0x0):
+	$U4:4 = w0 >> 0x1f:8
+	$U3:1 = $U4:4 == 0x0:4
+	if $U3:1 jump 0x34:8
+
+and x5, x5, #0x1f
+<L0> (entry=0x0):
+	$U1:8 = x5 & 0x1f:8
+	x5 = $U1:8
+
+tst x0, #-0x7f7f7f7f7f7f7f80
+<L0> (entry=0x0):
+	$U2:8 = x0 & 0x8080808080808080:8
+	tmpNG = $U2:8 s< 0x0:8
+	tmpZR = $U2:8 == 0x0:8
+	NG = tmpNG
+	ZR = tmpZR
+	CY = 0x0:1
+	OV = 0x0:1
+
+cbz x0, 0x413d64
+<L0> (entry=0x413d80):
+	$U1:1 = x0 == 0x0:8
+	if $U1:1 jump 0x413d64:8
+
+mov w16, #0x800000
+<L0> (entry=0x2122ac):
+	x16 = 0x800000:8
+
+adrp x17, 0x224000
+<L0> (entry=0x212290):
+	x17 = 0x224000:8
+
+stlxr w1, wzr, [x19]
+<L0> (entry=0x40e694):
+	$tmp0:1 = 0x1:1
+	$U3:1 = 0x1:1
+	$U4:1 = 0x0:1
+	if $U4:1 jump <L2>
+<L1>:
+	ram[x19] = 0x0:4
+	$tmp0:1 = 0x0:1
+<L2>:
+	x1 = zext($tmp0:1)
+
+mov x1, v0.D[0x0]
+<L0> (entry=0x0):
+	x1 = d0
+
+dup v0.16B, w1
+<L0> (entry=0x0):
+	b0 = x1:1
+	z0[1]:1 = x1:1
+	z0[2]:1 = x1:1
+	z0[3]:1 = x1:1
+	z0[4]:1 = x1:1
+	z0[5]:1 = x1:1
+	z0[6]:1 = x1:1
+	z0[7]:1 = x1:1
+	z0[8]:1 = x1:1
+	z0[9]:1 = x1:1
+	z0[10]:1 = x1:1
+	z0[11]:1 = x1:1
+	z0[12]:1 = x1:1
+	z0[13]:1 = x1:1
+	z0[14]:1 = x1:1
+	z0[15]:1 = x1:1
+	z0_16:8 = 0x0:8
+	z0_16[8]:8 = 0x0:8
+
+uminv b3, v2.16B
+<L0> (entry=0x0):
+	b3 = NEON_uminv(q2, 0x1:1)
+
+sminv b3, v2.16B
+<L0> (entry=0x0):
+	b3 = NEON_sminv(q2, 0x1:1)
+
+umaxv b3, v2.16B
+<L0> (entry=0x0):
+	b3 = NEON_umaxv(q2, 0x1:1)
+
+smaxv b3, v2.16B
+<L0> (entry=0x0):
+	b3 = NEON_smaxv(q2, 0x1:1)
+
+str q0, [x0]
+<L0> (entry=0x0):
+	ram[x0] = q0
+
+ldr q0, [x1, w2, sxtw]
+<L0> (entry=0x0):
+	$U3:8 = sext(w2)
+	$U2:8 = x1 + $U3:8
+	q0 = ram[$U2:8]
+	z0_16:8 = 0x0:8
+	z0_16[8]:8 = 0x0:8
+
+

@@ -1,0 +1,2250 @@
+XOR RBP,RBP
+<L0> (entry=0x0):
+	CF = 0x0:1
+	OF = 0x0:1
+	RBP = 0x0:8
+	SF = 0x0:1
+	ZF = 0x1:1
+	PF = 0x1:1
+
+XOR EAX,EAX
+<L0> (entry=0x0):
+	CF = 0x0:1
+	OF = 0x0:1
+	RAX = 0x0:8
+	SF = 0x0:1
+	ZF = 0x1:1
+	PF = 0x1:1
+
+MOV EDX,0x130
+<L0> (entry=0x3):
+	RDX = 0x130:8
+
+MOV R8D,0x6fffffff
+<L0> (entry=0x41):
+	R8 = 0x6fffffff:8
+
+XOR ESI,ESI
+<L0> (entry=0x8):
+	CF = 0x0:1
+	OF = 0x0:1
+	RSI = 0x0:8
+	SF = 0x0:1
+	ZF = 0x1:1
+	PF = 0x1:1
+
+NEG EAX
+<L0> (entry=0x60):
+	CF = EAX != 0x0:4
+	OF = 0x0:4 sborrow EAX
+	EAX = -EAX
+	SF = EAX s< 0x0:4
+	ZF = EAX == 0x0:4
+	$U1:4 = EAX & 0xff:4
+	$U2:1 = count_ones($U1:4)
+	$U3:1 = $U2:1 & 0x1:1
+	PF = $U3:1 == 0x0:1
+	RAX = zext(EAX)
+
+MOV CX,SS
+<L0> (entry=0x91):
+	RCX = zext(SS)
+
+MOVD XMM0, ESI
+<L0> (entry=0x1d):
+	XMM0 = zext(ESI)
+
+MOVD ESI, MM1
+<L0> (entry=0x12012):
+	RSI = zext(MM1_Da)
+
+CVTTSD2SI EAX, XMM0
+<L0> (entry=0x207649):
+	EAX = float2int(XMM0_Qa)
+	RAX = zext(EAX)
+
+MOV EAX,dword ptr [0x0]
+<L0> (entry=0x100000):
+	EAX = ram[0x0:8]
+	RAX = zext(EAX)
+
+PEXTRW R13D, XMM1, 0x1
+<L0> (entry=0x0):
+	$U1:16 = XMM1 >> 0x10:8
+	R13D = zext($U1:2)
+	R13 = zext(R13D)
+
+SYSCALL
+<L0> (entry=0x0):
+	RCX = 0x2:8
+	$U1:1 = NT & 0x1:1
+	$U2:8 = zext($U1:1)
+	$U3:8 = 0x4000:8 * $U2:8
+	$U4:1 = OF & 0x1:1
+	$U5:8 = zext($U4:1)
+	$U6:8 = 0x800:8 * $U5:8
+	$U7:8 = $U3:8 | $U6:8
+	$U8:1 = DF & 0x1:1
+	$U9:8 = zext($U8:1)
+	$U10:8 = 0x400:8 * $U9:8
+	$U11:8 = $U7:8 | $U10:8
+	$U12:1 = IF & 0x1:1
+	$U13:8 = zext($U12:1)
+	$U14:8 = 0x200:8 * $U13:8
+	$U15:8 = $U11:8 | $U14:8
+	$U16:1 = TF & 0x1:1
+	$U17:8 = zext($U16:1)
+	$U18:8 = 0x100:8 * $U17:8
+	$U19:8 = $U15:8 | $U18:8
+	$U20:1 = SF & 0x1:1
+	$U21:8 = zext($U20:1)
+	$U22:8 = 0x80:8 * $U21:8
+	$U23:8 = $U19:8 | $U22:8
+	$U24:1 = ZF & 0x1:1
+	$U25:8 = zext($U24:1)
+	$U26:8 = 0x40:8 * $U25:8
+	$U27:8 = $U23:8 | $U26:8
+	$U28:1 = AF & 0x1:1
+	$U29:8 = zext($U28:1)
+	$U30:8 = 0x10:8 * $U29:8
+	$U31:8 = $U27:8 | $U30:8
+	$U32:1 = PF & 0x1:1
+	$U33:8 = zext($U32:1)
+	$U34:8 = 0x4:8 * $U33:8
+	$U35:8 = $U31:8 | $U34:8
+	$U36:1 = CF & 0x1:1
+	$U37:8 = zext($U36:1)
+	R11 = $U35:8 | $U37:8
+	NEXT_PC = 0x2:8
+	exception(0x101:4, 0x0:4)
+
+CPUID
+<L0> (entry=0x11):
+	$U2:1 = EAX == 0x0:4
+	if $U2:1 jump <L17>
+<L1>:
+	$U3:1 = EAX == 0x1:4
+	if $U3:1 jump <L18>
+<L2>:
+	$U4:1 = EAX == 0x2:4
+	if $U4:1 jump <L19>
+<L3>:
+	$U5:1 = EAX == 0x3:4
+	if $U5:1 jump <L20>
+<L4>:
+	$U6:1 = EAX == 0x4:4
+	if $U6:1 jump <L21>
+<L5>:
+	$U7:1 = EAX == 0x5:4
+	if $U7:1 jump <L22>
+<L6>:
+	$U8:1 = EAX == 0x6:4
+	if $U8:1 jump <L23>
+<L7>:
+	$U9:1 = EAX == 0x7:4
+	if $U9:1 jump <L24>
+<L8>:
+	$U10:1 = EAX == 0x9:4
+	if $U10:1 jump <L25>
+<L9>:
+	$U11:1 = EAX == 0xa:4
+	if $U11:1 jump <L26>
+<L10>:
+	$U12:1 = EAX == 0xb:4
+	if $U12:1 jump <L27>
+<L11>:
+	$U13:1 = EAX == 0xd:4
+	if $U13:1 jump <L28>
+<L12>:
+	$U14:1 = EAX == 0xf:4
+	if $U14:1 jump <L29>
+<L13>:
+	$U15:1 = EAX == 0x80000002:4
+	if $U15:1 jump <L30>
+<L14>:
+	$U16:1 = EAX == 0x80000003:4
+	if $U16:1 jump <L31>
+<L15>:
+	$U17:1 = EAX == 0x80000004:4
+	if $U17:1 jump <L32>
+<L16>:
+	$tmp0 = cpuid(EAX, ECX)
+	jump <L33>
+<L17>:
+	$tmp0 = cpuid_basic_info(EAX, ECX)
+	jump <L33>
+<L18>:
+	$tmp0 = cpuid_Version_info(EAX, ECX)
+	jump <L33>
+<L19>:
+	$tmp0 = cpuid_cache_tlb_info(EAX, ECX)
+	jump <L33>
+<L20>:
+	$tmp0 = cpuid_serial_info(EAX, ECX)
+	jump <L33>
+<L21>:
+	$tmp0 = cpuid_Deterministic_Cache_Parameters_info(EAX, ECX)
+	jump <L33>
+<L22>:
+	$tmp0 = cpuid_MONITOR_MWAIT_Features_info(EAX, ECX)
+	jump <L33>
+<L23>:
+	$tmp0 = cpuid_Thermal_Power_Management_info(EAX, ECX)
+	jump <L33>
+<L24>:
+	$tmp0 = cpuid_Extended_Feature_Enumeration_info(EAX, ECX)
+	jump <L33>
+<L25>:
+	$tmp0 = cpuid_Direct_Cache_Access_info(EAX, ECX)
+	jump <L33>
+<L26>:
+	$tmp0 = cpuid_Architectural_Performance_Monitoring_info(EAX, ECX)
+	jump <L33>
+<L27>:
+	$tmp0 = cpuid_Extended_Topology_info(EAX, ECX)
+	jump <L33>
+<L28>:
+	$tmp0 = cpuid_Processor_Extended_States_info(EAX, ECX)
+	jump <L33>
+<L29>:
+	$tmp0 = cpuid_Quality_of_Service_info(EAX, ECX)
+	jump <L33>
+<L30>:
+	$tmp0 = cpuid_brand_part1_info(EAX, ECX)
+	jump <L33>
+<L31>:
+	$tmp0 = cpuid_brand_part2_info(EAX, ECX)
+	jump <L33>
+<L32>:
+	$tmp0 = cpuid_brand_part3_info(EAX, ECX)
+<L33>:
+	RAX = zext($tmp0:4)
+	RBX = zext($tmp0[4]:4)
+	RDX = zext($tmp0[8]:4)
+	RCX = zext($tmp0[12]:4)
+
+MUL RBX
+<L0> (entry=0x1a):
+	$U2:16 = zext(RAX)
+	$U3:16 = zext(RBX)
+	$U1:16 = $U2:16 * $U3:16
+	RDX = $U1[8]:8
+	RAX = $U1:8
+	CF = RDX != 0x0:8
+	OF = CF
+
+CMP R8D,-0x4
+<L0> (entry=0x0):
+	CF = R8D < 0xfffffffc:4
+	OF = R8D sborrow 0xfffffffc:4
+	$U1:4 = R8D - 0xfffffffc:4
+	SF = $U1:4 s< 0x0:4
+	ZF = $U1:4 == 0x0:4
+	$U2:4 = $U1:4 & 0xff:4
+	$U3:1 = count_ones($U2:4)
+	$U4:1 = $U3:1 & 0x1:1
+	PF = $U4:1 == 0x0:1
+
+MOV RCX,-0x5555555555555555
+<L0> (entry=0x29):
+	RCX = 0xaaaaaaaaaaaaaaab:8
+
+SBB RAX,-0x5e0d9411
+<L0> (entry=0x12000):
+	$U1:8 = zext(CF)
+	CF = RAX < 0xffffffffa1f26bef:8
+	OF = RAX sborrow 0xffffffffa1f26bef:8
+	$U2:8 = RAX - 0xffffffffa1f26bef:8
+	$U3:1 = $U2:8 < $U1:8
+	CF = CF || $U3:1
+	$U4:1 = $U2:8 sborrow $U1:8
+	OF = OF ^^ $U4:1
+	RAX = $U2:8 - $U1:8
+	SF = RAX s< 0x0:8
+	ZF = RAX == 0x0:8
+	$U5:8 = RAX & 0xff:8
+	$U6:1 = count_ones($U5:8)
+	$U7:1 = $U6:1 & 0x1:1
+	PF = $U7:1 == 0x0:1
+
+AND EAX,0x80808080
+<L0> (entry=0x33):
+	CF = 0x0:1
+	OF = 0x0:1
+	EAX = EAX & 0x80808080:4
+	RAX = zext(EAX)
+	SF = EAX s< 0x0:4
+	ZF = EAX == 0x0:4
+	$U1:4 = EAX & 0xff:4
+	$U2:1 = count_ones($U1:4)
+	$U3:1 = $U2:1 & 0x1:1
+	PF = $U3:1 == 0x0:1
+
+SHL RDX,0x20
+<L0> (entry=0x38):
+	$U2:8 = RDX
+	RDX = RDX << 0x20:8
+	$U6:8 = $U2:8 << 0x1f:8
+	$U4:1 = $U6:8 s< 0x0:8
+	CF = $U4:1
+	$U12:1 = RDX s< 0x0:8
+	$U14:1 = 0x1:1 && OF
+	OF = $U14:1
+	SF = $U12:1
+	$U21:1 = RDX == 0x0:8
+	ZF = $U21:1
+	PF = 0x1:1
+
+SHR EDX,CL
+<L0> (entry=0x0):
+	$U1:1 = CL & 0x1f:1
+	$U2:4 = EDX
+	EDX = EDX >> $U1:1
+	RDX = zext(EDX)
+	$U3:1 = $U1:1 != 0x0:1
+	$U5:1 = $U1:1 - 0x1:1
+	$U6:4 = $U2:4 >> $U5:1
+	$U7:4 = $U6:4 & 0x1:4
+	$U4:1 = $U7:4 != 0x0:4
+	$U8:1 = !$U3:1
+	$U9:1 = $U8:1 && CF
+	$U10:1 = $U3:1 && $U4:1
+	CF = $U9:1 || $U10:1
+	$U11:1 = $U1:1 == 0x1:1
+	$U12:1 = $U2:4 s< 0x0:4
+	$U13:1 = !$U11:1
+	$U14:1 = $U13:1 && OF
+	$U15:1 = $U11:1 && $U12:1
+	OF = $U14:1 || $U15:1
+	$U16:1 = $U1:1 != 0x0:1
+	$U17:1 = EDX s< 0x0:4
+	$U18:1 = !$U16:1
+	$U19:1 = $U18:1 && SF
+	$U20:1 = $U16:1 && $U17:1
+	SF = $U19:1 || $U20:1
+	$U21:1 = EDX == 0x0:4
+	$U23:1 = $U18:1 && ZF
+	$U24:1 = $U16:1 && $U21:1
+	ZF = $U23:1 || $U24:1
+	$U26:4 = EDX & 0xff:4
+	$U27:1 = count_ones($U26:4)
+	$U28:1 = $U27:1 & 0x1:1
+	$U25:1 = $U28:1 == 0x0:1
+	$U30:1 = $U18:1 && PF
+	$U31:1 = $U16:1 && $U25:1
+	PF = $U30:1 || $U31:1
+
+SAR ECX,0x1
+<L0> (entry=0x0):
+	$U1:4 = ECX & 0x1:4
+	CF = $U1:4 != 0x0:4
+	OF = 0x0:1
+	ECX = ECX s>> 0x1:8
+	RCX = zext(ECX)
+	SF = ECX s< 0x0:4
+	ZF = ECX == 0x0:4
+	$U2:4 = ECX & 0xff:4
+	$U3:1 = count_ones($U2:4)
+	$U4:1 = $U3:1 & 0x1:1
+	PF = $U4:1 == 0x0:1
+
+SUB CH,DL
+<L0> (entry=0x3c):
+	CF = CH < DL
+	OF = CH sborrow DL
+	CH = CH - DL
+	SF = CH s< 0x0:1
+	ZF = CH == 0x0:1
+	$U2:1 = count_ones(CH)
+	$U3:1 = $U2:1 & 0x1:1
+	PF = $U3:1 == 0x0:1
+
+CMP RAX,-0x1000
+<L0> (entry=0x47):
+	CF = RAX < 0xfffffffffffff000:8
+	OF = RAX sborrow 0xfffffffffffff000:8
+	$U1:8 = RAX - 0xfffffffffffff000:8
+	SF = $U1:8 s< 0x0:8
+	ZF = $U1:8 == 0x0:8
+	$U2:8 = $U1:8 & 0xff:8
+	$U3:1 = count_ones($U2:8)
+	$U4:1 = $U3:1 & 0x1:1
+	PF = $U4:1 == 0x0:1
+
+ADD RAX,qword ptr FS:[0x0]
+<L0> (entry=0x50):
+	$U5:8 = ram[FS_OFFSET]
+	CF = RAX carry $U5:8
+	$U6:8 = ram[FS_OFFSET]
+	OF = RAX scarry $U6:8
+	$U7:8 = ram[FS_OFFSET]
+	RAX = RAX + $U7:8
+	SF = RAX s< 0x0:8
+	ZF = RAX == 0x0:8
+	$U1:8 = RAX & 0xff:8
+	$U2:1 = count_ones($U1:8)
+	$U3:1 = $U2:1 & 0x1:1
+	PF = $U3:1 == 0x0:1
+
+IMUL RDX
+<L0> (entry=0x62):
+	$U2:16 = sext(RAX)
+	$U3:16 = sext(RDX)
+	$U1:16 = $U2:16 * $U3:16
+	RAX = RAX * RDX
+	RDX = $U1[8]:8
+	$U4:16 = sext(RAX)
+	CF = $U4:16 != $U1:16
+	OF = CF
+
+PCMPEQB MM2, MM6
+<L0> (entry=0x87):
+	$U1:1 = MM2_Ba == MM6_Ba
+	MM2_Ba = $U1:1 * 0xff:1
+	$U2:1 = MM2_Bb == MM6_Bb
+	MM2_Bb = $U2:1 * 0xff:1
+	$U3:1 = MM2_Bc == MM6_Bc
+	MM2_Bc = $U3:1 * 0xff:1
+	$U4:1 = MM2_Bd == MM6_Bd
+	MM2_Bd = $U4:1 * 0xff:1
+	$U5:1 = MM2_Be == MM6_Be
+	MM2_Be = $U5:1 * 0xff:1
+	$U6:1 = MM2_Bf == MM6_Bf
+	MM2_Bf = $U6:1 * 0xff:1
+	$U7:1 = MM2_Bg == MM6_Bg
+	MM2_Bg = $U7:1 * 0xff:1
+	$U8:1 = MM2_Bh == MM6_Bh
+	MM2_Bh = $U8:1 * 0xff:1
+
+PCMPEQB XMM4, XMM0
+<L0> (entry=0x13):
+	$U1:1 = XMM4_Ba == XMM0_Ba
+	XMM4_Ba = $U1:1 * 0xff:1
+	$U2:1 = XMM4_Bb == XMM0_Bb
+	XMM4_Bb = $U2:1 * 0xff:1
+	$U3:1 = XMM4_Bc == XMM0_Bc
+	XMM4_Bc = $U3:1 * 0xff:1
+	$U4:1 = XMM4_Bd == XMM0_Bd
+	XMM4_Bd = $U4:1 * 0xff:1
+	$U5:1 = XMM4_Be == XMM0_Be
+	XMM4_Be = $U5:1 * 0xff:1
+	$U6:1 = XMM4_Bf == XMM0_Bf
+	XMM4_Bf = $U6:1 * 0xff:1
+	$U7:1 = XMM4_Bg == XMM0_Bg
+	XMM4_Bg = $U7:1 * 0xff:1
+	$U8:1 = XMM4_Bh == XMM0_Bh
+	XMM4_Bh = $U8:1 * 0xff:1
+	$U9:1 = XMM4_Bi == XMM0_Bi
+	XMM4_Bi = $U9:1 * 0xff:1
+	$U10:1 = XMM4_Bj == XMM0_Bj
+	XMM4_Bj = $U10:1 * 0xff:1
+	$U11:1 = XMM4_Bk == XMM0_Bk
+	XMM4_Bk = $U11:1 * 0xff:1
+	$U12:1 = XMM4_Bl == XMM0_Bl
+	XMM4_Bl = $U12:1 * 0xff:1
+	$U13:1 = XMM4_Bm == XMM0_Bm
+	XMM4_Bm = $U13:1 * 0xff:1
+	$U14:1 = XMM4_Bn == XMM0_Bn
+	XMM4_Bn = $U14:1 * 0xff:1
+	$U15:1 = XMM4_Bo == XMM0_Bo
+	XMM4_Bo = $U15:1 * 0xff:1
+	$U16:1 = XMM4_Bp == XMM0_Bp
+	XMM4_Bp = $U16:1 * 0xff:1
+
+CMOVZ EAX,EBX
+<L0> (entry=0x0):
+	RAX = zext(EAX)
+	$U2:1 = !ZF
+	if $U2:1 jump 0x3:8
+<L1>:
+	EAX = EBX
+
+CMOVZ ECX,dword ptr [RSI + -0x61b9d73e]
+<L0> (entry=0x8a):
+	$U3:8 = RSI + 0xffffffff9e4628c2:8
+	$U1:4 = ram[$U3:8]
+	RCX = zext(ECX)
+	$U2:1 = !ZF
+	if $U2:1 jump 0x91:8
+<L1>:
+	ECX = $U1:4
+
+SHL EAX,0x1
+<L0> (entry=0x12000):
+	CF = EAX s< 0x0:4
+	EAX = EAX << 0x1:8
+	$U1:1 = EAX s< 0x0:4
+	OF = CF ^^ $U1:1
+	RAX = zext(EAX)
+	SF = EAX s< 0x0:4
+	ZF = EAX == 0x0:4
+	$U2:4 = EAX & 0xff:4
+	$U3:1 = count_ones($U2:4)
+	$U4:1 = $U3:1 & 0x1:1
+	PF = $U4:1 == 0x0:1
+
+NOP
+<L0> (entry=0x6d):
+
+XCHG EAX,R8D
+<L0> (entry=0x70):
+	$U1:4 = EAX
+	RAX = zext(R8D)
+	R8D = $U1:4
+	R8 = zext(R8D)
+
+TEST ECX,0x62d08561
+<L0> (entry=0x10000):
+	CF = 0x0:1
+	OF = 0x0:1
+	$U1:4 = ECX & 0x62d08561:4
+	SF = 0x0:1
+	ZF = $U1:4 == 0x0:4
+	$U2:4 = $U1:4 & 0xff:4
+	$U3:1 = count_ones($U2:4)
+	$U4:1 = $U3:1 & 0x1:1
+	PF = $U4:1 == 0x0:1
+
+JGE 0x10013
+<L0> (entry=0x10000):
+	$U1:1 = OF == SF
+	if $U1:1 jump 0x10013:8
+
+JLE 0x10004
+<L0> (entry=0x10000):
+	$U2:1 = OF != SF
+	$U1:1 = ZF || $U2:1
+	if $U1:1 jump 0x10004:8
+
+JLE 0x10003
+<L0> (entry=0x10000):
+	$U2:1 = OF != SF
+	$U1:1 = ZF || $U2:1
+	if $U1:1 jump 0x10003:8
+
+CALL 0xa01ea0
+<L0> (entry=0xa01093):
+	RSP = RSP - 0x8:8
+	ram[RSP] = 0xa01098:8
+	call 0xa01ea0:8
+
+JP 0x11002
+<L0> (entry=0x11000):
+	if PF jump 0x11002:8
+
+JL 0x11002
+<L0> (entry=0x11000):
+	$U1:1 = OF != SF
+	if $U1:1 jump 0x11002:8
+
+
+PMOVMSKB EBP, MM2
+<L0> (entry=0x12000):
+	$U2:8 = MM2 >> 0x7:8
+	$U2:8 = $U2:8 & 0x1:8
+	$U4:1 = $U2:1
+	$U5:8 = MM2 >> 0xf:8
+	$U5:8 = $U5:8 & 0x1:8
+	$U7:1 = $U5:1
+	$U7:1 = $U7:1 << 0x1:8
+	$U1:1 = $U4:1 | $U7:1
+	$U8:8 = MM2 >> 0x17:8
+	$U8:8 = $U8:8 & 0x1:8
+	$U10:1 = $U8:1
+	$U10:1 = $U10:1 << 0x2:8
+	$U1:1 = $U1:1 | $U10:1
+	$U11:8 = MM2 >> 0x1f:8
+	$U11:8 = $U11:8 & 0x1:8
+	$U13:1 = $U11:1
+	$U13:1 = $U13:1 << 0x3:8
+	$U1:1 = $U1:1 | $U13:1
+	$U14:8 = MM2 >> 0x27:8
+	$U14:8 = $U14:8 & 0x1:8
+	$U16:1 = $U14:1
+	$U16:1 = $U16:1 << 0x4:8
+	$U1:1 = $U1:1 | $U16:1
+	$U17:8 = MM2 >> 0x2f:8
+	$U17:8 = $U17:8 & 0x1:8
+	$U19:1 = $U17:1
+	$U19:1 = $U19:1 << 0x5:8
+	$U1:1 = $U1:1 | $U19:1
+	$U20:8 = MM2 >> 0x37:8
+	$U20:8 = $U20:8 & 0x1:8
+	$U22:1 = $U20:1
+	$U22:1 = $U22:1 << 0x6:8
+	$U1:1 = $U1:1 | $U22:1
+	$U23:8 = MM2 >> 0x3f:8
+	$U25:1 = $U23:1
+	$U25:1 = $U25:1 << 0x7:8
+	$U1:1 = $U1:1 | $U25:1
+	EBP = zext($U1:1)
+	RBP = zext(EBP)
+
+PMOVMSKB EBP, XMM2
+<L0> (entry=0x12000):
+	$U2:16 = XMM2 >> 0x7:8
+	$U2:16 = $U2:16 & 0x1:16
+	$U4:2 = zext($U2:1)
+	$U5:16 = XMM2 >> 0xf:8
+	$U5:16 = $U5:16 & 0x1:16
+	$U7:2 = zext($U5:1)
+	$U7:2 = $U7:2 << 0x1:8
+	$U1:2 = $U4:2 | $U7:2
+	$U8:16 = XMM2 >> 0x17:8
+	$U8:16 = $U8:16 & 0x1:16
+	$U10:2 = zext($U8:1)
+	$U10:2 = $U10:2 << 0x2:8
+	$U1:2 = $U1:2 | $U10:2
+	$U11:16 = XMM2 >> 0x1f:8
+	$U11:16 = $U11:16 & 0x1:16
+	$U13:2 = zext($U11:1)
+	$U13:2 = $U13:2 << 0x3:8
+	$U1:2 = $U1:2 | $U13:2
+	$U14:16 = XMM2 >> 0x27:8
+	$U14:16 = $U14:16 & 0x1:16
+	$U16:2 = zext($U14:1)
+	$U16:2 = $U16:2 << 0x4:8
+	$U1:2 = $U1:2 | $U16:2
+	$U17:16 = XMM2 >> 0x2f:8
+	$U17:16 = $U17:16 & 0x1:16
+	$U19:2 = zext($U17:1)
+	$U19:2 = $U19:2 << 0x5:8
+	$U1:2 = $U1:2 | $U19:2
+	$U20:16 = XMM2 >> 0x37:8
+	$U20:16 = $U20:16 & 0x1:16
+	$U22:2 = zext($U20:1)
+	$U22:2 = $U22:2 << 0x6:8
+	$U1:2 = $U1:2 | $U22:2
+	$U23:16 = XMM2 >> 0x3f:8
+	$U23:16 = $U23:16 & 0x1:16
+	$U25:2 = zext($U23:1)
+	$U25:2 = $U25:2 << 0x7:8
+	$U1:2 = $U1:2 | $U25:2
+	$U26:16 = XMM2 >> 0x47:8
+	$U26:16 = $U26:16 & 0x1:16
+	$U28:2 = zext($U26:1)
+	$U28:2 = $U28:2 << 0x8:8
+	$U1:2 = $U1:2 | $U28:2
+	$U29:16 = XMM2 >> 0x4f:8
+	$U29:16 = $U29:16 & 0x1:16
+	$U31:2 = zext($U29:1)
+	$U31:2 = $U31:2 << 0x9:8
+	$U1:2 = $U1:2 | $U31:2
+	$U32:16 = XMM2 >> 0x57:8
+	$U32:16 = $U32:16 & 0x1:16
+	$U34:2 = zext($U32:1)
+	$U34:2 = $U34:2 << 0xa:8
+	$U1:2 = $U1:2 | $U34:2
+	$U35:16 = XMM2 >> 0x5f:8
+	$U35:16 = $U35:16 & 0x1:16
+	$U37:2 = zext($U35:1)
+	$U37:2 = $U37:2 << 0xb:8
+	$U1:2 = $U1:2 | $U37:2
+	$U38:16 = XMM2 >> 0x67:8
+	$U38:16 = $U38:16 & 0x1:16
+	$U40:2 = zext($U38:1)
+	$U40:2 = $U40:2 << 0xc:8
+	$U1:2 = $U1:2 | $U40:2
+	$U41:16 = XMM2 >> 0x6f:8
+	$U41:16 = $U41:16 & 0x1:16
+	$U43:2 = zext($U41:1)
+	$U43:2 = $U43:2 << 0xd:8
+	$U1:2 = $U1:2 | $U43:2
+	$U44:16 = XMM2 >> 0x77:8
+	$U44:16 = $U44:16 & 0x1:16
+	$U46:2 = zext($U44:1)
+	$U46:2 = $U46:2 << 0xe:8
+	$U1:2 = $U1:2 | $U46:2
+	$U47:16 = XMM2 >> 0x7f:8
+	$U49:2 = zext($U47:1)
+	$U49:2 = $U49:2 << 0xf:8
+	$U1:2 = $U1:2 | $U49:2
+	EBP = zext($U1:2)
+	RBP = zext(EBP)
+
+PMOVMSKB R13D, MM2
+<L0> (entry=0x12000):
+	$U2:8 = MM2 >> 0x7:8
+	$U2:8 = $U2:8 & 0x1:8
+	$U4:1 = $U2:1
+	$U5:8 = MM2 >> 0xf:8
+	$U5:8 = $U5:8 & 0x1:8
+	$U7:1 = $U5:1
+	$U7:1 = $U7:1 << 0x1:8
+	$U1:1 = $U4:1 | $U7:1
+	$U8:8 = MM2 >> 0x17:8
+	$U8:8 = $U8:8 & 0x1:8
+	$U10:1 = $U8:1
+	$U10:1 = $U10:1 << 0x2:8
+	$U1:1 = $U1:1 | $U10:1
+	$U11:8 = MM2 >> 0x1f:8
+	$U11:8 = $U11:8 & 0x1:8
+	$U13:1 = $U11:1
+	$U13:1 = $U13:1 << 0x3:8
+	$U1:1 = $U1:1 | $U13:1
+	$U14:8 = MM2 >> 0x27:8
+	$U14:8 = $U14:8 & 0x1:8
+	$U16:1 = $U14:1
+	$U16:1 = $U16:1 << 0x4:8
+	$U1:1 = $U1:1 | $U16:1
+	$U17:8 = MM2 >> 0x2f:8
+	$U17:8 = $U17:8 & 0x1:8
+	$U19:1 = $U17:1
+	$U19:1 = $U19:1 << 0x5:8
+	$U1:1 = $U1:1 | $U19:1
+	$U20:8 = MM2 >> 0x37:8
+	$U20:8 = $U20:8 & 0x1:8
+	$U22:1 = $U20:1
+	$U22:1 = $U22:1 << 0x6:8
+	$U1:1 = $U1:1 | $U22:1
+	$U23:8 = MM2 >> 0x3f:8
+	$U25:1 = $U23:1
+	$U25:1 = $U25:1 << 0x7:8
+	$U1:1 = $U1:1 | $U25:1
+	R13D = zext($U1:1)
+	R13 = zext(R13D)
+
+
+
+
+
+
+
+
+
+
+MOV word ptr [RCX],CS
+<L0> (entry=0x12000):
+	ram[RCX] = CS
+
+
+
+
+
+
+
+
+
+
+
+
+MOVSXD EDI,EDX
+<L0> (entry=0x0):
+	RDI = zext(EDX)
+
+MOVSXD EDI,EDX
+<L0> (entry=0x0):
+	RDI = zext(EDX)
+
+MOVSXD EDX,dword ptr [RAX]
+<L0> (entry=0x0):
+	EDX = ram[RAX]
+	RDX = zext(EDX)
+
+
+BTC [RCX + 0x25],ESI
+<L0> (entry=0x12000):
+	$U11:8 = RCX + 0x25:8
+	$U2:8 = sext(ESI)
+	$U3:8 = $U2:8 s>> 0x3:8
+	$U1:8 = $U11:8 + $U3:8
+	$U4:4 = ESI & 0x7:4
+	$U6:1 = ram[$U1:8]
+	$U7:1 = $U6:1 >> $U4:4
+	$U5:1 = $U7:1 & 0x1:1
+	$U8:1 = ram[$U1:8]
+	$U9:1 = 0x1:1 << $U4:4
+	$U10:1 = $U8:1 ^ $U9:1
+	ram[$U1:8] = $U10:1
+	CF = $U5:1
+
+BTR EBX,0x6
+<L0> (entry=0x12000):
+	$U3:4 = EBX >> 0x6:8
+	$U2:4 = $U3:4 & 0x1:4
+	CF = $U2:4 != 0x0:4
+	EBX = EBX & 0xffffffbf:4
+	RBX = zext(EBX)
+
+MOV byte ptr FS:[-0x1b8],0x1
+<L0> (entry=0x652c40):
+	$U1:8 = FS_OFFSET + 0xfffffffffffffe48:8
+	ram[$U1:8] = 0x1:1
+
+MOV EAX,dword ptr [0xffffffff]
+<L0> (entry=0x660000):
+	EAX = ram[0xffffffff:8]
+	RAX = zext(EAX)
+
+PSHUFD XMM0, XMM0, 0x4e
+<L0> (entry=0x652b47):
+	$U1:16 = XMM0
+	$U2:16 = XMM0 >> 0x40:1
+	XMM0_Da = $U2:4
+	$U2:16 = $U1:16 >> 0x60:1
+	XMM0_Db = $U2:4
+	$U2:16 = $U1:16
+	XMM0_Dc = $U2:4
+	$U2:16 = $U2:16 >> 0x20:1
+	XMM0_Dd = $U2:4
+
+PSHUFLW XMM0, XMM0, 0x1b
+<L0> (entry=0x5e9227):
+	arg0 = 0x1b:8
+	XMM0 = pshuflw(XMM0, XMM0)
+
+MOV qword ptr [RSP + 0x0],RDX
+<L0> (entry=0x0):
+	ram[RSP] = RDX
+
+LAR ECX,EDX
+<L0> (entry=0x0):
+	ECX = EDX & 0xffff00:4
+	RCX = zext(ECX)
+	ZF = 0x1:1
+
+PFMIN MM0, qword ptr [RAX]
+<L0> (entry=0x0):
+	$U1:8 = ram[RAX]
+	MM0 = PackedFloatingMIN(MM0, $U1:8)
+
+
+PUNPCKHDQ MM1, qword ptr [RSI]
+<L0> (entry=0x0):
+	MM1_Da = MM1_Db
+	$U1:8 = RSI + 0x4:8
+	MM1_Db = ram[$U1:8]
+
+BSF EAX,EDX
+<L0> (entry=0x1000):
+	$tmp0:4 = 0x0:4
+	ZF = EDX == 0x0:4
+	if ZF jump <L3>
+<L1>:
+	$U3:4 = EDX >> $tmp0:4
+	$U4:4 = $U3:4 & 0x1:4
+	$U5:1 = $U4:4 != 0x0:4
+	if $U5:1 jump <L3>
+<L2>:
+	$tmp0:4 = $tmp0:4 + 0x1:4
+	jump <L1>
+<L3>:
+	RAX = zext($tmp0:4)
+
+BSR ESP,dword ptr [0x101000]
+<L0> (entry=0x1000):
+	$tmp0:4 = 0x1f:4
+	$U5:4 = ram[0x101000:8]
+	ZF = $U5:4 == 0x0:4
+	if ZF jump <L3>
+<L1>:
+	$U6:4 = ram[0x101000:8]
+	$U3:4 = $U6:4 >> $tmp0:4
+	$U4:1 = $U3:4 != 0x0:4
+	if $U4:1 jump <L3>
+<L2>:
+	$tmp0:4 = $tmp0:4 - 0x1:4
+	jump <L1>
+<L3>:
+	RSP = zext($tmp0:4)
+
+FSUBR dword ptr [0x121100]
+<L0> (entry=0x120000):
+	$U2:4 = ram[0x121100:8]
+	$U1:10 = float2float($U2:4)
+	ST0 = $U1:10 f- ST0
+
+SBB AL,0xce
+<L0> (entry=0x120000):
+	$U1:1 = CF
+	CF = AL < 0xce:1
+	OF = AL sborrow 0xce:1
+	$U2:1 = AL - 0xce:1
+	$U3:1 = $U2:1 < $U1:1
+	CF = CF || $U3:1
+	$U4:1 = $U2:1 sborrow $U1:1
+	OF = OF ^^ $U4:1
+	AL = $U2:1 - $U1:1
+	SF = AL s< 0x0:1
+	ZF = AL == 0x0:1
+	$U6:1 = count_ones(AL)
+	$U7:1 = $U6:1 & 0x1:1
+	PF = $U7:1 == 0x0:1
+
+SBB AL,0xce
+<L0> (entry=0x120000):
+	$U1:1 = CF
+	CF = AL < 0xce:1
+	OF = AL sborrow 0xce:1
+	$U2:1 = AL - 0xce:1
+	$U3:1 = $U2:1 < $U1:1
+	CF = CF || $U3:1
+	$U4:1 = $U2:1 sborrow $U1:1
+	OF = OF ^^ $U4:1
+	AL = $U2:1 - $U1:1
+	SF = AL s< 0x0:1
+	ZF = AL == 0x0:1
+	$U6:1 = count_ones(AL)
+	$U7:1 = $U6:1 & 0x1:1
+	PF = $U7:1 == 0x0:1
+
+SBB EAX,EAX
+<L0> (entry=0x120000):
+	$U1:4 = zext(CF)
+	OF = 0x0:1
+	$U3:1 = 0x0:4 < $U1:4
+	CF = $U3:1
+	EAX = 0x0:4 - $U1:4
+	RAX = zext(EAX)
+	SF = EAX s< 0x0:4
+	ZF = EAX == 0x0:4
+	$U5:4 = EAX & 0xff:4
+	$U6:1 = count_ones($U5:4)
+	$U7:1 = $U6:1 & 0x1:1
+	PF = $U7:1 == 0x0:1
+
+SBB RAX,-0x80000000
+<L0> (entry=0x120000):
+	$U1:8 = zext(CF)
+	CF = RAX < 0xffffffff80000000:8
+	OF = RAX sborrow 0xffffffff80000000:8
+	$U2:8 = RAX - 0xffffffff80000000:8
+	$U3:1 = $U2:8 < $U1:8
+	CF = CF || $U3:1
+	$U4:1 = $U2:8 sborrow $U1:8
+	OF = OF ^^ $U4:1
+	RAX = $U2:8 - $U1:8
+	SF = RAX s< 0x0:8
+	ZF = RAX == 0x0:8
+	$U5:8 = RAX & 0xff:8
+	$U6:1 = count_ones($U5:8)
+	$U7:1 = $U6:1 & 0x1:1
+	PF = $U7:1 == 0x0:1
+
+SHUFPD XMM0, XMM3, 0x2
+<L0> (entry=0x0):
+	arg0 = 0x2:8
+	XMM0 = shufpd(XMM0, XMM3)
+
+MOVZX EBX,word ptr [0x8277b0]
+<L0> (entry=0x61a9c4):
+	$U1:2 = ram[0x8277b0:8]
+	EBX = zext($U1:2)
+	RBX = zext(EBX)
+
+MOVZX EAX,byte ptr [RSI]
+<L0> (entry=0x4003de):
+	$U1:1 = ram[RSI]
+	EAX = zext($U1:1)
+	RAX = zext(EAX)
+
+LEA RAX,[RAX + 0x10]
+<L0> (entry=0x0):
+	$U1:8 = RAX + 0x10:8
+	RAX = $U1:8
+
+ADD R9,R8
+<L0> (entry=0x0):
+	CF = R9 carry R8
+	OF = R9 scarry R8
+	R9 = R9 + R8
+	SF = R9 s< 0x0:8
+	ZF = R9 == 0x0:8
+	$U1:8 = R9 & 0xff:8
+	$U2:1 = count_ones($U1:8)
+	$U3:1 = $U2:1 & 0x1:1
+	PF = $U3:1 == 0x0:1
+
+ADD byte ptr [RAX],AL
+<L0> (entry=0x0):
+	$U4:1 = ram[RAX]
+	CF = $U4:1 carry AL
+	$U5:1 = ram[RAX]
+	OF = $U5:1 scarry AL
+	$U6:1 = ram[RAX]
+	$U7:1 = $U6:1 + AL
+	ram[RAX] = $U7:1
+	$U8:1 = ram[RAX]
+	SF = $U8:1 s< 0x0:1
+	$U9:1 = ram[RAX]
+	ZF = $U9:1 == 0x0:1
+	$U10:1 = ram[RAX]
+	$U2:1 = count_ones($U10:1)
+	$U3:1 = $U2:1 & 0x1:1
+	PF = $U3:1 == 0x0:1
+
+ROL RAX,CL
+<L0> (entry=0x0):
+	$U1:1 = CL & 0x3f:1
+	$U2:8 = RAX << $U1:1
+	$U3:1 = 0x40:1 - $U1:1
+	$U4:8 = RAX >> $U3:1
+	RAX = $U2:8 | $U4:8
+	$U5:1 = $U1:1 != 0x0:1
+	$U7:8 = RAX & 0x1:8
+	$U6:1 = $U7:8 != 0x0:8
+	$U8:1 = !$U5:1
+	$U9:1 = $U8:1 && CF
+	$U10:1 = $U5:1 && $U6:1
+	CF = $U9:1 || $U10:1
+	$U11:1 = $U1:1 == 0x1:1
+	$U13:1 = RAX s< 0x0:8
+	$U12:1 = CF ^^ $U13:1
+	$U14:1 = !$U11:1
+	$U15:1 = $U14:1 && OF
+	$U16:1 = $U11:1 && $U12:1
+	OF = $U15:1 || $U16:1
+
+MUL R14
+<L0> (entry=0x0):
+	$U2:16 = zext(RAX)
+	$U3:16 = zext(R14)
+	$U1:16 = $U2:16 * $U3:16
+	RDX = $U1[8]:8
+	RAX = $U1:8
+	CF = RDX != 0x0:8
+	OF = CF
+
+DIV RCX
+<L0> (entry=0x0):
+	$U1:16 = zext(RCX)
+	$U3:16 = zext(RDX)
+	$U4:16 = $U3:16 << 0x40:8
+	$U5:16 = zext(RAX)
+	$U2:16 = $U4:16 | $U5:16
+	$U6:16 = $U2:16 / $U1:16
+	RAX = $U6:8
+	$U7:16 = $U2:16 % $U1:16
+	RDX = $U7:8
+
+ADD AX,BX
+<L0> (entry=0x0):
+	CF = AX carry BX
+	OF = AX scarry BX
+	AX = AX + BX
+	SF = AX s< 0x0:2
+	ZF = AX == 0x0:2
+	$U1:2 = AX & 0xff:2
+	$U2:1 = count_ones($U1:2)
+	$U3:1 = $U2:1 & 0x1:1
+	PF = $U3:1 == 0x0:1
+
+SUB AX,BX
+<L0> (entry=0x0):
+	CF = AX < BX
+	OF = AX sborrow BX
+	AX = AX - BX
+	SF = AX s< 0x0:2
+	ZF = AX == 0x0:2
+	$U1:2 = AX & 0xff:2
+	$U2:1 = count_ones($U1:2)
+	$U3:1 = $U2:1 & 0x1:1
+	PF = $U3:1 == 0x0:1
+
+CMP AX,BX
+<L0> (entry=0x0):
+	CF = AX < BX
+	OF = AX sborrow BX
+	$U1:2 = AX - BX
+	SF = $U1:2 s< 0x0:2
+	ZF = $U1:2 == 0x0:2
+	$U2:2 = $U1:2 & 0xff:2
+	$U3:1 = count_ones($U2:2)
+	$U4:1 = $U3:1 & 0x1:1
+	PF = $U4:1 == 0x0:1
+
+MUL AX
+<L0> (entry=0x0):
+	$U2:4 = zext(AX)
+	$U1:4 = $U2:4 * $U2:4
+	DX = $U1[2]:2
+	AX = $U1:2
+	CF = DX != 0x0:2
+	OF = CF
+
+XOR AX,0x23ec
+<L0> (entry=0x0):
+	CF = 0x0:1
+	OF = 0x0:1
+	AX = AX ^ 0x23ec:2
+	SF = AX s< 0x0:2
+	ZF = AX == 0x0:2
+	$U1:2 = AX & 0xff:2
+	$U2:1 = count_ones($U1:2)
+	$U3:1 = $U2:1 & 0x1:1
+	PF = $U3:1 == 0x0:1
+
+CMP word ptr [0x100029],0x40
+<L0> (entry=0x21):
+	$U5:2 = ram[0x100029:8]
+	CF = $U5:2 < 0x40:2
+	$U6:2 = ram[0x100029:8]
+	OF = $U6:2 sborrow 0x40:2
+	$U7:2 = ram[0x100029:8]
+	$U1:2 = $U7:2 - 0x40:2
+	SF = $U1:2 s< 0x0:2
+	ZF = $U1:2 == 0x0:2
+	$U2:2 = $U1:2 & 0xff:2
+	$U3:1 = count_ones($U2:2)
+	$U4:1 = $U3:1 & 0x1:1
+	PF = $U4:1 == 0x0:1
+
+PXOR XMM0, XMM0
+<L0> (entry=0x0):
+	XMM0 = XMM0 ^ XMM0
+
+PSUBB XMM2, XMM0
+<L0> (entry=0x0):
+	XMM2_Ba = XMM2_Ba - XMM0_Ba
+	XMM2_Bb = XMM2_Bb - XMM0_Bb
+	XMM2_Bc = XMM2_Bc - XMM0_Bc
+	XMM2_Bd = XMM2_Bd - XMM0_Bd
+	XMM2_Be = XMM2_Be - XMM0_Be
+	XMM2_Bf = XMM2_Bf - XMM0_Bf
+	XMM2_Bg = XMM2_Bg - XMM0_Bg
+	XMM2_Bh = XMM2_Bh - XMM0_Bh
+	XMM2_Bi = XMM2_Bi - XMM0_Bi
+	XMM2_Bj = XMM2_Bj - XMM0_Bj
+	XMM2_Bk = XMM2_Bk - XMM0_Bk
+	XMM2_Bl = XMM2_Bl - XMM0_Bl
+	XMM2_Bm = XMM2_Bm - XMM0_Bm
+	XMM2_Bn = XMM2_Bn - XMM0_Bn
+	XMM2_Bo = XMM2_Bo - XMM0_Bo
+	XMM2_Bp = XMM2_Bp - XMM0_Bp
+
+MOVAPS XMM0, xmmword ptr [0x1100]
+<L0> (entry=0x0):
+	$U1:16 = ram[0x1100:8]
+	XMM0_Da = $U1:4
+	XMM0_Db = $U1[4]:4
+	XMM0_Dc = $U1[8]:4
+	XMM0_Dd = $U1[12]:4
+
+MOVAPS xmmword ptr [0x1100], XMM0
+<L0> (entry=0x0):
+	ram[0x1100:8] = XMM0
+
+MOVD dword ptr [RSP + 0x100], XMM3
+<L0> (entry=0x0):
+	$U1:8 = 0x100:8 + RSP
+	ram[$U1:8] = XMM3_Da
+
+CVTSS2SD XMM2, XMM0
+<L0> (entry=0x0):
+	XMM2_Qa = float2float(XMM0_Da)
+
+PINSRW XMM0, R13D, 0x1
+<L0> (entry=0x0):
+	arg0 = 0x1:8
+	XMM0 = pinsrw(XMM0, R13D)
+
+UCOMISD XMM0, XMM1
+<L0> (entry=0x0):
+	$U1:1 = isnan(XMM0_Qa)
+	$U2:1 = isnan(XMM1_Qa)
+	PF = $U1:1 || $U2:1
+	$U3:1 = XMM0_Qa f== XMM1_Qa
+	ZF = PF | $U3:1
+	$U4:1 = XMM0_Qa f< XMM1_Qa
+	CF = PF | $U4:1
+	OF = 0x0:1
+	AF = 0x0:1
+	SF = 0x0:1
+
+MOVDQA XMM1, xmmword ptr [RSP + 0x10]
+<L0> (entry=0x0):
+	$U1:8 = 0x10:8 + RSP
+	XMM1 = ram[$U1:8]
+
+MOVMSKPD EBX, XMM0
+<L0> (entry=0x0):
+	EBX = movmskpd(EBX, XMM0)
+
+PMADDWD XMM0, XMM1
+<L0> (entry=0x0):
+	XMM0 = pmaddwd(XMM0, XMM1)
+
+PACKSSDW XMM0, XMM1
+<L0> (entry=0x0):
+	$U1:16 = XMM0
+	$U2:16 = XMM1
+	$U3:1 = $U1:4 s< 0xffff8000:4
+	$U4:1 = 0x7fff:4 s< $U1:4
+	$U6:1 = $U3:1 || $U4:1
+	$U5:1 = !$U6:1
+	$U7:2 = zext($U5:1)
+	$U8:2 = $U1:2 * $U7:2
+	$U9:2 = zext($U3:1)
+	$U10:2 = 0x8000:2 * $U9:2
+	$U11:2 = $U8:2 + $U10:2
+	$U12:2 = zext($U4:1)
+	$U13:2 = 0x7fff:2 * $U12:2
+	XMM0_Wa = $U11:2 + $U13:2
+	$U14:1 = $U1[4]:4 s< 0xffff8000:4
+	$U15:1 = 0x7fff:4 s< $U1[4]:4
+	$U17:1 = $U14:1 || $U15:1
+	$U16:1 = !$U17:1
+	$U18:2 = zext($U16:1)
+	$U19:2 = $U1[4]:2 * $U18:2
+	$U20:2 = zext($U14:1)
+	$U21:2 = 0x8000:2 * $U20:2
+	$U22:2 = $U19:2 + $U21:2
+	$U23:2 = zext($U15:1)
+	$U24:2 = 0x7fff:2 * $U23:2
+	XMM0_Wb = $U22:2 + $U24:2
+	$U25:1 = $U1[8]:4 s< 0xffff8000:4
+	$U26:1 = 0x7fff:4 s< $U1[8]:4
+	$U28:1 = $U25:1 || $U26:1
+	$U27:1 = !$U28:1
+	$U29:2 = zext($U27:1)
+	$U30:2 = $U1[8]:2 * $U29:2
+	$U31:2 = zext($U25:1)
+	$U32:2 = 0x8000:2 * $U31:2
+	$U33:2 = $U30:2 + $U32:2
+	$U34:2 = zext($U26:1)
+	$U35:2 = 0x7fff:2 * $U34:2
+	XMM0_Wc = $U33:2 + $U35:2
+	$U36:1 = $U1[12]:4 s< 0xffff8000:4
+	$U37:1 = 0x7fff:4 s< $U1[12]:4
+	$U39:1 = $U36:1 || $U37:1
+	$U38:1 = !$U39:1
+	$U40:2 = zext($U38:1)
+	$U41:2 = $U1[12]:2 * $U40:2
+	$U42:2 = zext($U36:1)
+	$U43:2 = 0x8000:2 * $U42:2
+	$U44:2 = $U41:2 + $U43:2
+	$U45:2 = zext($U37:1)
+	$U46:2 = 0x7fff:2 * $U45:2
+	XMM0_Wd = $U44:2 + $U46:2
+	$U47:1 = $U2:4 s< 0xffff8000:4
+	$U48:1 = 0x7fff:4 s< $U2:4
+	$U50:1 = $U47:1 || $U48:1
+	$U49:1 = !$U50:1
+	$U51:2 = zext($U49:1)
+	$U52:2 = $U2:2 * $U51:2
+	$U53:2 = zext($U47:1)
+	$U54:2 = 0x8000:2 * $U53:2
+	$U55:2 = $U52:2 + $U54:2
+	$U56:2 = zext($U48:1)
+	$U57:2 = 0x7fff:2 * $U56:2
+	XMM0_We = $U55:2 + $U57:2
+	$U58:1 = $U2[4]:4 s< 0xffff8000:4
+	$U59:1 = 0x7fff:4 s< $U2[4]:4
+	$U61:1 = $U58:1 || $U59:1
+	$U60:1 = !$U61:1
+	$U62:2 = zext($U60:1)
+	$U63:2 = $U2[4]:2 * $U62:2
+	$U64:2 = zext($U58:1)
+	$U65:2 = 0x8000:2 * $U64:2
+	$U66:2 = $U63:2 + $U65:2
+	$U67:2 = zext($U59:1)
+	$U68:2 = 0x7fff:2 * $U67:2
+	XMM0_Wf = $U66:2 + $U68:2
+	$U69:1 = $U2[8]:4 s< 0xffff8000:4
+	$U70:1 = 0x7fff:4 s< $U2[8]:4
+	$U72:1 = $U69:1 || $U70:1
+	$U71:1 = !$U72:1
+	$U73:2 = zext($U71:1)
+	$U74:2 = $U2[8]:2 * $U73:2
+	$U75:2 = zext($U69:1)
+	$U76:2 = 0x8000:2 * $U75:2
+	$U77:2 = $U74:2 + $U76:2
+	$U78:2 = zext($U70:1)
+	$U79:2 = 0x7fff:2 * $U78:2
+	XMM0_Wg = $U77:2 + $U79:2
+	$U80:1 = $U2[12]:4 s< 0xffff8000:4
+	$U81:1 = 0x7fff:4 s< $U2[12]:4
+	$U83:1 = $U80:1 || $U81:1
+	$U82:1 = !$U83:1
+	$U84:2 = zext($U82:1)
+	$U85:2 = $U2[12]:2 * $U84:2
+	$U86:2 = zext($U80:1)
+	$U87:2 = 0x8000:2 * $U86:2
+	$U88:2 = $U85:2 + $U87:2
+	$U89:2 = zext($U81:1)
+	$U90:2 = 0x7fff:2 * $U89:2
+	XMM0_Wh = $U88:2 + $U90:2
+
+PACKSSWB XMM1, XMM1
+<L0> (entry=0x0):
+	$U1:16 = XMM1
+	$U2:16 = XMM1
+	$U3:1 = $U1:2 s< 0xff80:2
+	$U4:1 = 0x7f:2 s< $U1:2
+	$U6:1 = $U3:1 || $U4:1
+	$U5:1 = !$U6:1
+	$U7:1 = $U1:1 * $U5:1
+	$U8:1 = 0x80:1 * $U3:1
+	$U9:1 = $U7:1 + $U8:1
+	$U10:1 = 0x7f:1 * $U4:1
+	XMM1_Ba = $U9:1 + $U10:1
+	$U11:1 = $U1[2]:2 s< 0xff80:2
+	$U12:1 = 0x7f:2 s< $U1[2]:2
+	$U14:1 = $U11:1 || $U12:1
+	$U13:1 = !$U14:1
+	$U15:1 = $U1[2]:1 * $U13:1
+	$U16:1 = 0x80:1 * $U11:1
+	$U17:1 = $U15:1 + $U16:1
+	$U18:1 = 0x7f:1 * $U12:1
+	XMM1_Bb = $U17:1 + $U18:1
+	$U19:1 = $U1[4]:2 s< 0xff80:2
+	$U20:1 = 0x7f:2 s< $U1[4]:2
+	$U22:1 = $U19:1 || $U20:1
+	$U21:1 = !$U22:1
+	$U23:1 = $U1[4]:1 * $U21:1
+	$U24:1 = 0x80:1 * $U19:1
+	$U25:1 = $U23:1 + $U24:1
+	$U26:1 = 0x7f:1 * $U20:1
+	XMM1_Bc = $U25:1 + $U26:1
+	$U27:1 = $U1[6]:2 s< 0xff80:2
+	$U28:1 = 0x7f:2 s< $U1[6]:2
+	$U30:1 = $U27:1 || $U28:1
+	$U29:1 = !$U30:1
+	$U31:1 = $U1[6]:1 * $U29:1
+	$U32:1 = 0x80:1 * $U27:1
+	$U33:1 = $U31:1 + $U32:1
+	$U34:1 = 0x7f:1 * $U28:1
+	XMM1_Bd = $U33:1 + $U34:1
+	$U35:1 = $U1[8]:2 s< 0xff80:2
+	$U36:1 = 0x7f:2 s< $U1[8]:2
+	$U38:1 = $U35:1 || $U36:1
+	$U37:1 = !$U38:1
+	$U39:1 = $U1[8]:1 * $U37:1
+	$U40:1 = 0x80:1 * $U35:1
+	$U41:1 = $U39:1 + $U40:1
+	$U42:1 = 0x7f:1 * $U36:1
+	XMM1_Be = $U41:1 + $U42:1
+	$U43:1 = $U1[10]:2 s< 0xff80:2
+	$U44:1 = 0x7f:2 s< $U1[10]:2
+	$U46:1 = $U43:1 || $U44:1
+	$U45:1 = !$U46:1
+	$U47:1 = $U1[10]:1 * $U45:1
+	$U48:1 = 0x80:1 * $U43:1
+	$U49:1 = $U47:1 + $U48:1
+	$U50:1 = 0x7f:1 * $U44:1
+	XMM1_Bf = $U49:1 + $U50:1
+	$U51:1 = $U1[12]:2 s< 0xff80:2
+	$U52:1 = 0x7f:2 s< $U1[12]:2
+	$U54:1 = $U51:1 || $U52:1
+	$U53:1 = !$U54:1
+	$U55:1 = $U1[12]:1 * $U53:1
+	$U56:1 = 0x80:1 * $U51:1
+	$U57:1 = $U55:1 + $U56:1
+	$U58:1 = 0x7f:1 * $U52:1
+	XMM1_Bg = $U57:1 + $U58:1
+	$U59:1 = $U1[14]:2 s< 0xff80:2
+	$U60:1 = 0x7f:2 s< $U1[14]:2
+	$U62:1 = $U59:1 || $U60:1
+	$U61:1 = !$U62:1
+	$U63:1 = $U1[14]:1 * $U61:1
+	$U64:1 = 0x80:1 * $U59:1
+	$U65:1 = $U63:1 + $U64:1
+	$U66:1 = 0x7f:1 * $U60:1
+	XMM1_Bh = $U65:1 + $U66:1
+	$U67:1 = $U2:2 s< 0xff80:2
+	$U68:1 = 0x7f:2 s< $U2:2
+	$U70:1 = $U67:1 || $U68:1
+	$U69:1 = !$U70:1
+	$U71:1 = $U2:1 * $U69:1
+	$U72:1 = 0x80:1 * $U67:1
+	$U73:1 = $U71:1 + $U72:1
+	$U74:1 = 0x7f:1 * $U68:1
+	XMM1_Bi = $U73:1 + $U74:1
+	$U75:1 = $U2[2]:2 s< 0xff80:2
+	$U76:1 = 0x7f:2 s< $U2[2]:2
+	$U78:1 = $U75:1 || $U76:1
+	$U77:1 = !$U78:1
+	$U79:1 = $U2[2]:1 * $U77:1
+	$U80:1 = 0x80:1 * $U75:1
+	$U81:1 = $U79:1 + $U80:1
+	$U82:1 = 0x7f:1 * $U76:1
+	XMM1_Bj = $U81:1 + $U82:1
+	$U83:1 = $U2[4]:2 s< 0xff80:2
+	$U84:1 = 0x7f:2 s< $U2[4]:2
+	$U86:1 = $U83:1 || $U84:1
+	$U85:1 = !$U86:1
+	$U87:1 = $U2[4]:1 * $U85:1
+	$U88:1 = 0x80:1 * $U83:1
+	$U89:1 = $U87:1 + $U88:1
+	$U90:1 = 0x7f:1 * $U84:1
+	XMM1_Bk = $U89:1 + $U90:1
+	$U91:1 = $U2[6]:2 s< 0xff80:2
+	$U92:1 = 0x7f:2 s< $U2[6]:2
+	$U94:1 = $U91:1 || $U92:1
+	$U93:1 = !$U94:1
+	$U95:1 = $U2[6]:1 * $U93:1
+	$U96:1 = 0x80:1 * $U91:1
+	$U97:1 = $U95:1 + $U96:1
+	$U98:1 = 0x7f:1 * $U92:1
+	XMM1_Bl = $U97:1 + $U98:1
+	$U99:1 = $U2[8]:2 s< 0xff80:2
+	$U100:1 = 0x7f:2 s< $U2[8]:2
+	$U102:1 = $U99:1 || $U100:1
+	$U101:1 = !$U102:1
+	$U103:1 = $U2[8]:1 * $U101:1
+	$U104:1 = 0x80:1 * $U99:1
+	$U105:1 = $U103:1 + $U104:1
+	$U106:1 = 0x7f:1 * $U100:1
+	XMM1_Bm = $U105:1 + $U106:1
+	$U107:1 = $U2[10]:2 s< 0xff80:2
+	$U108:1 = 0x7f:2 s< $U2[10]:2
+	$U110:1 = $U107:1 || $U108:1
+	$U109:1 = !$U110:1
+	$U111:1 = $U2[10]:1 * $U109:1
+	$U112:1 = 0x80:1 * $U107:1
+	$U113:1 = $U111:1 + $U112:1
+	$U114:1 = 0x7f:1 * $U108:1
+	XMM1_Bn = $U113:1 + $U114:1
+	$U115:1 = $U2[12]:2 s< 0xff80:2
+	$U116:1 = 0x7f:2 s< $U2[12]:2
+	$U118:1 = $U115:1 || $U116:1
+	$U117:1 = !$U118:1
+	$U119:1 = $U2[12]:1 * $U117:1
+	$U120:1 = 0x80:1 * $U115:1
+	$U121:1 = $U119:1 + $U120:1
+	$U122:1 = 0x7f:1 * $U116:1
+	XMM1_Bo = $U121:1 + $U122:1
+	$U123:1 = $U2[14]:2 s< 0xff80:2
+	$U124:1 = 0x7f:2 s< $U2[14]:2
+	$U126:1 = $U123:1 || $U124:1
+	$U125:1 = !$U126:1
+	$U127:1 = $U2[14]:1 * $U125:1
+	$U128:1 = 0x80:1 * $U123:1
+	$U129:1 = $U127:1 + $U128:1
+	$U130:1 = 0x7f:1 * $U124:1
+	XMM1_Bp = $U129:1 + $U130:1
+
+PACKUSWB XMM3, XMM3
+<L0> (entry=0x0):
+	$U1:16 = XMM3
+	$U2:16 = XMM3
+	$U4:1 = 0xff:2 s< $U1:2
+	$U3:1 = $U4:1 * 0xff:1
+	$U5:1 = 0x0:2 s< $U1:2
+	$U6:1 = $U1:2 s<= 0xff:2
+	$U7:1 = $U5:1 * $U6:1
+	$U8:1 = $U7:1 * $U1:1
+	$U3:1 = $U3:1 + $U8:1
+	XMM3_Ba = $U3:1
+	$U9:1 = 0xff:2 s< $U1[2]:2
+	$U3:1 = $U9:1 * 0xff:1
+	$U10:1 = 0x0:2 s< $U1[2]:2
+	$U11:1 = $U1[2]:2 s<= 0xff:2
+	$U12:1 = $U10:1 * $U11:1
+	$U13:1 = $U12:1 * $U1[2]:1
+	$U3:1 = $U3:1 + $U13:1
+	XMM3_Bb = $U3:1
+	$U14:1 = 0xff:2 s< $U1[4]:2
+	$U3:1 = $U14:1 * 0xff:1
+	$U15:1 = 0x0:2 s< $U1[4]:2
+	$U16:1 = $U1[4]:2 s<= 0xff:2
+	$U17:1 = $U15:1 * $U16:1
+	$U18:1 = $U17:1 * $U1[4]:1
+	$U3:1 = $U3:1 + $U18:1
+	XMM3_Bc = $U3:1
+	$U19:1 = 0xff:2 s< $U1[6]:2
+	$U3:1 = $U19:1 * 0xff:1
+	$U20:1 = 0x0:2 s< $U1[6]:2
+	$U21:1 = $U1[6]:2 s<= 0xff:2
+	$U22:1 = $U20:1 * $U21:1
+	$U23:1 = $U22:1 * $U1[6]:1
+	$U3:1 = $U3:1 + $U23:1
+	XMM3_Bd = $U3:1
+	$U24:1 = 0xff:2 s< $U1[8]:2
+	$U3:1 = $U24:1 * 0xff:1
+	$U25:1 = 0x0:2 s< $U1[8]:2
+	$U26:1 = $U1[8]:2 s<= 0xff:2
+	$U27:1 = $U25:1 * $U26:1
+	$U28:1 = $U27:1 * $U1[8]:1
+	$U3:1 = $U3:1 + $U28:1
+	XMM3_Be = $U3:1
+	$U29:1 = 0xff:2 s< $U1[10]:2
+	$U3:1 = $U29:1 * 0xff:1
+	$U30:1 = 0x0:2 s< $U1[10]:2
+	$U31:1 = $U1[10]:2 s<= 0xff:2
+	$U32:1 = $U30:1 * $U31:1
+	$U33:1 = $U32:1 * $U1[10]:1
+	$U3:1 = $U3:1 + $U33:1
+	XMM3_Bf = $U3:1
+	$U34:1 = 0xff:2 s< $U1[12]:2
+	$U3:1 = $U34:1 * 0xff:1
+	$U35:1 = 0x0:2 s< $U1[12]:2
+	$U36:1 = $U1[12]:2 s<= 0xff:2
+	$U37:1 = $U35:1 * $U36:1
+	$U38:1 = $U37:1 * $U1[12]:1
+	$U3:1 = $U3:1 + $U38:1
+	XMM3_Bg = $U3:1
+	$U39:1 = 0xff:2 s< $U1[14]:2
+	$U3:1 = $U39:1 * 0xff:1
+	$U40:1 = 0x0:2 s< $U1[14]:2
+	$U41:1 = $U1[14]:2 s<= 0xff:2
+	$U42:1 = $U40:1 * $U41:1
+	$U43:1 = $U42:1 * $U1[14]:1
+	$U3:1 = $U3:1 + $U43:1
+	XMM3_Bh = $U3:1
+	$U44:1 = 0xff:2 s< $U2:2
+	$U3:1 = $U44:1 * 0xff:1
+	$U45:1 = 0x0:2 s< $U2:2
+	$U46:1 = $U2:2 s<= 0xff:2
+	$U47:1 = $U45:1 * $U46:1
+	$U48:1 = $U47:1 * $U2:1
+	$U3:1 = $U3:1 + $U48:1
+	XMM3_Bi = $U3:1
+	$U49:1 = 0xff:2 s< $U2[2]:2
+	$U3:1 = $U49:1 * 0xff:1
+	$U50:1 = 0x0:2 s< $U2[2]:2
+	$U51:1 = $U2[2]:2 s<= 0xff:2
+	$U52:1 = $U50:1 * $U51:1
+	$U53:1 = $U52:1 * $U2[2]:1
+	$U3:1 = $U3:1 + $U53:1
+	XMM3_Bj = $U3:1
+	$U54:1 = 0xff:2 s< $U2[4]:2
+	$U3:1 = $U54:1 * 0xff:1
+	$U55:1 = 0x0:2 s< $U2[4]:2
+	$U56:1 = $U2[4]:2 s<= 0xff:2
+	$U57:1 = $U55:1 * $U56:1
+	$U58:1 = $U57:1 * $U2[4]:1
+	$U3:1 = $U3:1 + $U58:1
+	XMM3_Bk = $U3:1
+	$U59:1 = 0xff:2 s< $U2[6]:2
+	$U3:1 = $U59:1 * 0xff:1
+	$U60:1 = 0x0:2 s< $U2[6]:2
+	$U61:1 = $U2[6]:2 s<= 0xff:2
+	$U62:1 = $U60:1 * $U61:1
+	$U63:1 = $U62:1 * $U2[6]:1
+	$U3:1 = $U3:1 + $U63:1
+	XMM3_Bl = $U3:1
+	$U64:1 = 0xff:2 s< $U2[8]:2
+	$U3:1 = $U64:1 * 0xff:1
+	$U65:1 = 0x0:2 s< $U2[8]:2
+	$U66:1 = $U2[8]:2 s<= 0xff:2
+	$U67:1 = $U65:1 * $U66:1
+	$U68:1 = $U67:1 * $U2[8]:1
+	$U3:1 = $U3:1 + $U68:1
+	XMM3_Bm = $U3:1
+	$U69:1 = 0xff:2 s< $U2[10]:2
+	$U3:1 = $U69:1 * 0xff:1
+	$U70:1 = 0x0:2 s< $U2[10]:2
+	$U71:1 = $U2[10]:2 s<= 0xff:2
+	$U72:1 = $U70:1 * $U71:1
+	$U73:1 = $U72:1 * $U2[10]:1
+	$U3:1 = $U3:1 + $U73:1
+	XMM3_Bn = $U3:1
+	$U74:1 = 0xff:2 s< $U2[12]:2
+	$U3:1 = $U74:1 * 0xff:1
+	$U75:1 = 0x0:2 s< $U2[12]:2
+	$U76:1 = $U2[12]:2 s<= 0xff:2
+	$U77:1 = $U75:1 * $U76:1
+	$U78:1 = $U77:1 * $U2[12]:1
+	$U3:1 = $U3:1 + $U78:1
+	XMM3_Bo = $U3:1
+	$U79:1 = 0xff:2 s< $U2[14]:2
+	$U3:1 = $U79:1 * 0xff:1
+	$U80:1 = 0x0:2 s< $U2[14]:2
+	$U81:1 = $U2[14]:2 s<= 0xff:2
+	$U82:1 = $U80:1 * $U81:1
+	$U83:1 = $U82:1 * $U2[14]:1
+	$U3:1 = $U3:1 + $U83:1
+	XMM3_Bp = $U3:1
+
+PSLLDQ XMM0, 0x5
+<L0> (entry=0x0):
+	$U2:8 = XMM0_Qa
+	XMM0_Qa = XMM0_Qa << 0x28:1
+	$U6:8 = XMM0_Qb << 0x28:1
+	$U9:8 = $U2:8 >> 0x18:1
+	XMM0_Qb = $U6:8 | $U9:8
+
+PSLLW XMM0, 0x8
+<L0> (entry=0x0):
+	XMM0_Wa = XMM0_Wa << 0x8:8
+	XMM0_Wb = XMM0_Wb << 0x8:8
+	XMM0_Wc = XMM0_Wc << 0x8:8
+	XMM0_Wd = XMM0_Wd << 0x8:8
+	XMM0_We = XMM0_We << 0x8:8
+	XMM0_Wf = XMM0_Wf << 0x8:8
+	XMM0_Wg = XMM0_Wg << 0x8:8
+	XMM0_Wh = XMM0_Wh << 0x8:8
+
+PMULHW XMM0, XMM1
+<L0> (entry=0x0):
+	$U2:8 = sext(XMM0_Wa)
+	$U3:8 = sext(XMM1_Wa)
+	$U1:8 = $U2:8 * $U3:8
+	XMM0_Wa = $U1[2]:2
+	$U5:8 = sext(XMM0_Wb)
+	$U6:8 = sext(XMM1_Wb)
+	$U4:8 = $U5:8 * $U6:8
+	XMM0_Wb = $U4[2]:2
+	$U8:8 = sext(XMM0_Wc)
+	$U9:8 = sext(XMM1_Wc)
+	$U7:8 = $U8:8 * $U9:8
+	XMM0_Wc = $U7[2]:2
+	$U11:8 = sext(XMM0_Wd)
+	$U12:8 = sext(XMM1_Wd)
+	$U10:8 = $U11:8 * $U12:8
+	XMM0_Wd = $U10[2]:2
+	$U14:8 = sext(XMM0_We)
+	$U15:8 = sext(XMM1_We)
+	$U13:8 = $U14:8 * $U15:8
+	XMM0_We = $U13[2]:2
+	$U17:8 = sext(XMM0_Wf)
+	$U18:8 = sext(XMM1_Wf)
+	$U16:8 = $U17:8 * $U18:8
+	XMM0_Wf = $U16[2]:2
+	$U20:8 = sext(XMM0_Wg)
+	$U21:8 = sext(XMM1_Wg)
+	$U19:8 = $U20:8 * $U21:8
+	XMM0_Wg = $U19[2]:2
+	$U23:8 = sext(XMM0_Wh)
+	$U24:8 = sext(XMM1_Wh)
+	$U22:8 = $U23:8 * $U24:8
+	XMM0_Wh = $U22[2]:2
+
+PSRAW XMM0, XMM1
+<L0> (entry=0x0):
+	XMM0_Wa = XMM0_Wa s>> XMM1_Qa
+	XMM0_Wb = XMM0_Wb s>> XMM1_Qa
+	XMM0_Wc = XMM0_Wc s>> XMM1_Qa
+	XMM0_Wd = XMM0_Wd s>> XMM1_Qa
+	XMM0_We = XMM0_We s>> XMM1_Qa
+	XMM0_Wf = XMM0_Wf s>> XMM1_Qa
+	XMM0_Wg = XMM0_Wg s>> XMM1_Qa
+	XMM0_Wh = XMM0_Wh s>> XMM1_Qa
+
+PSRAW XMM0, xmmword ptr [RAX]
+<L0> (entry=0x0):
+	$U1:8 = ram[RAX]
+	XMM0_Wa = XMM0_Wa s>> $U1:8
+	XMM0_Wb = XMM0_Wb s>> $U1:8
+	XMM0_Wc = XMM0_Wc s>> $U1:8
+	XMM0_Wd = XMM0_Wd s>> $U1:8
+	XMM0_We = XMM0_We s>> $U1:8
+	XMM0_Wf = XMM0_Wf s>> $U1:8
+	XMM0_Wg = XMM0_Wg s>> $U1:8
+	XMM0_Wh = XMM0_Wh s>> $U1:8
+
+STOSD.REP RDI
+<L0> (entry=0x0):
+	$U1:1 = RCX == 0x0:8
+	if $U1:1 jump 0x2:8
+<L1>:
+	$U2:8 = RDI
+	$U3:8 = RDI + 0x4:8
+	$U4:8 = zext(DF)
+	$U5:8 = 0x8:8 * $U4:8
+	RDI = $U3:8 - $U5:8
+	ram[$U2:8] = EAX
+	RCX = RCX - 0x1:8
+	jump 0x0:8
+
+LODSD RSI
+<L0> (entry=0x82):
+	$U1:8 = RSI
+	$U2:8 = RSI + 0x4:8
+	$U3:8 = zext(DF)
+	$U4:8 = 0x8:8 * $U3:8
+	RSI = $U2:8 - $U4:8
+	EAX = ram[$U1:8]
+
+LODSD.REP RSI
+<L0> (entry=0x83):
+	$U1:1 = RCX == 0x0:8
+	if $U1:1 jump 0x85:8
+<L1>:
+	$U2:8 = RSI
+	$U3:8 = RSI + 0x4:8
+	$U4:8 = zext(DF)
+	$U5:8 = 0x8:8 * $U4:8
+	RSI = $U3:8 - $U5:8
+	EAX = ram[$U2:8]
+	RCX = RCX - 0x1:8
+	jump 0x83:8
+
+LODSD.REPNE RSI
+<L0> (entry=0x85):
+	$U1:1 = RCX == 0x0:8
+	if $U1:1 jump 0x87:8
+<L1>:
+	$U2:8 = RSI
+	$U3:8 = RSI + 0x4:8
+	$U4:8 = zext(DF)
+	$U5:8 = 0x8:8 * $U4:8
+	RSI = $U3:8 - $U5:8
+	EAX = ram[$U2:8]
+	RCX = RCX - 0x1:8
+	jump 0x85:8
+
+MOVSD.REPNE RDI,RSI
+<L0> (entry=0x80):
+	$U1:1 = RCX == 0x0:8
+	if $U1:1 jump 0x82:8
+<L1>:
+	$U2:8 = RDI
+	$U3:8 = RDI + 0x4:8
+	$U4:8 = zext(DF)
+	$U5:8 = 0x8:8 * $U4:8
+	RDI = $U3:8 - $U5:8
+	$U6:8 = RSI
+	$U7:8 = RSI + 0x4:8
+	RSI = $U7:8 - $U5:8
+	$U10:4 = ram[$U6:8]
+	ram[$U2:8] = $U10:4
+	RCX = RCX - 0x1:8
+	jump 0x80:8
+
+FXSAVE [RSP + 0x0]
+<L0> (entry=0x0):
+	ram[RSP] = FPUControlWord
+	$U1:8 = RSP + 0x2:8
+	ram[$U1:8] = FPUStatusWord
+	$U2:8 = RSP + 0x4:8
+	ram[$U2:8] = FPUTagWord
+	$U3:8 = RSP + 0x6:8
+	ram[$U3:8] = FPULastInstructionOpcode
+	$U4:8 = RSP + 0x8:8
+	ram[$U4:8] = FPUInstructionPointer:4
+	$U5:8 = RSP + 0xc:8
+	ram[$U5:8] = FPUPointerSelector
+	$U6:8 = RSP + 0x10:8
+	ram[$U6:8] = FPUDataPointer:4
+	$U7:8 = RSP + 0x14:8
+	ram[$U7:8] = FPUDataSelector
+	$U8:8 = RSP + 0x18:8
+	ram[$U8:8] = MXCSR
+	$U9:8 = RSP + 0x20:8
+	ram[$U9:8] = ST0
+	$U10:8 = RSP + 0x30:8
+	ram[$U10:8] = ST1
+	$U11:8 = RSP + 0x40:8
+	ram[$U11:8] = ST2
+	$U12:8 = RSP + 0x50:8
+	ram[$U12:8] = ST3
+	$U13:8 = RSP + 0x60:8
+	ram[$U13:8] = ST4
+	$U14:8 = RSP + 0x70:8
+	ram[$U14:8] = ST5
+	$U15:8 = RSP + 0x80:8
+	ram[$U15:8] = ST6
+	$U16:8 = RSP + 0x90:8
+	ram[$U16:8] = ST7
+	$U17:8 = RSP + 0xa0:8
+	ram[$U17:8] = XMM0
+	$U18:8 = RSP + 0xb0:8
+	ram[$U18:8] = XMM1
+	$U19:8 = RSP + 0xc0:8
+	ram[$U19:8] = XMM2
+	$U20:8 = RSP + 0xd0:8
+	ram[$U20:8] = XMM3
+	$U21:8 = RSP + 0xe0:8
+	ram[$U21:8] = XMM4
+	$U22:8 = RSP + 0xf0:8
+	ram[$U22:8] = XMM5
+	$U23:8 = RSP + 0x100:8
+	ram[$U23:8] = XMM6
+	$U24:8 = RSP + 0x110:8
+	ram[$U24:8] = XMM7
+	$U25:8 = RSP + 0x120:8
+	ram[$U25:8] = XMM8
+	$U26:8 = RSP + 0x130:8
+	ram[$U26:8] = XMM9
+	$U27:8 = RSP + 0x140:8
+	ram[$U27:8] = XMM10
+	$U28:8 = RSP + 0x150:8
+	ram[$U28:8] = XMM11
+	$U29:8 = RSP + 0x160:8
+	ram[$U29:8] = XMM12
+	$U30:8 = RSP + 0x170:8
+	ram[$U30:8] = XMM13
+	$U31:8 = RSP + 0x180:8
+	ram[$U31:8] = XMM14
+	$U32:8 = RSP + 0x190:8
+	ram[$U32:8] = XMM15
+
+FILD qword ptr [RBP + -0x10]
+<L0> (entry=0x0):
+	$U2:8 = RBP + 0xfffffffffffffff0:8
+	ST7 = ST6
+	ST6 = ST5
+	ST5 = ST4
+	ST4 = ST3
+	ST3 = ST2
+	ST2 = ST1
+	ST1 = ST0
+	$U3:8 = ram[$U2:8]
+	ST0 = int2float($U3:8)
+
+FLD qword ptr [ESP]
+<L0> (entry=0x0):
+	$U2:8 = sext(ESP)
+	ST7 = ST6
+	ST6 = ST5
+	ST5 = ST4
+	ST4 = ST3
+	ST3 = ST2
+	ST2 = ST1
+	ST1 = ST0
+	$U3:8 = ram[$U2:8]
+	ST0 = float2float($U3:8)
+
+FLD tword ptr [RBP + -0x80]
+<L0> (entry=0x0):
+	$U1:8 = RBP + 0xffffffffffffff80:8
+	ST7 = ST6
+	ST6 = ST5
+	ST5 = ST4
+	ST4 = ST3
+	ST3 = ST2
+	ST2 = ST1
+	ST1 = ST0
+	ST0 = ram[$U1:8]
+
+FLDZ
+<L0> (entry=0x0):
+	$U2:10 = int2float(0x0:4)
+	ST7 = ST6
+	ST6 = ST5
+	ST5 = ST4
+	ST4 = ST3
+	ST3 = ST2
+	ST2 = ST1
+	ST1 = ST0
+	ST0 = $U2:10
+
+FISTTP word ptr [RAX]
+<L0> (entry=0x0):
+	$U1:2 = float2int(ST0)
+	ram[RAX] = $U1:2
+	ST0 = ST1
+	ST1 = ST2
+	ST2 = ST3
+	ST3 = ST4
+	ST4 = ST5
+	ST5 = ST6
+	ST6 = ST7
+
+FUCOMIP ST0, ST1
+<L0> (entry=0x0):
+	$U1:1 = isnan(ST0)
+	$U2:1 = isnan(ST1)
+	PF = $U1:1 || $U2:1
+	$U3:1 = ST0 f== ST1
+	ZF = PF | $U3:1
+	$U4:1 = ST0 f< ST1
+	CF = PF | $U4:1
+	OF = 0x0:1
+	AF = 0x0:1
+	SF = 0x0:1
+	FPUStatusWord = FPUStatusWord & 0xfdff:2
+	C1 = 0x0:1
+	ST0 = ST1
+	ST1 = ST2
+	ST2 = ST3
+	ST3 = ST4
+	ST4 = ST5
+	ST5 = ST6
+	ST6 = ST7
+
+FSIN
+<L0> (entry=0x0):
+	ST0 = fsin(ST0)
+
+FNSTSW AX
+<L0> (entry=0x0):
+	AX = FPUStatusWord
+
+FRNDINT
+<L0> (entry=0x0):
+	$U1:10 = round(ST0)
+	ST0 = $U1:10
+
+FSUB ST1,ST0
+<L0> (entry=0x0):
+	ST1 = ST1 f- ST0
+
+FXCH
+<L0> (entry=0x0):
+	$U1:10 = ST0
+	ST0 = ST1
+	ST1 = $U1:10
+
+F2XM1
+<L0> (entry=0x0):
+	ST0 = f2xm1(ST0)
+
+FADDP
+<L0> (entry=0x0):
+	ST1 = ST0 f+ ST1
+	ST0 = ST1
+	ST1 = ST2
+	ST2 = ST3
+	ST3 = ST4
+	ST4 = ST5
+	ST5 = ST6
+	ST6 = ST7
+
+FSCALE
+<L0> (entry=0x0):
+	ST0 = fscale(ST0, ST1)
+
+FPATAN
+<L0> (entry=0x0):
+	ST1 = fpatan(ST1, ST0)
+	ST0 = ST1
+	ST1 = ST2
+	ST2 = ST3
+	ST3 = ST4
+	ST4 = ST5
+	ST5 = ST6
+	ST6 = ST7
+
+FBLD tword ptr [RBP + 0x1000]
+<L0> (entry=0x0):
+	$U1:8 = RBP + 0x1000:8
+	ram[$U1:8] = ST0
+	ST0 = ST1
+	ST1 = ST2
+	ST2 = ST3
+	ST3 = ST4
+	ST4 = ST5
+	ST5 = ST6
+	ST6 = ST7
+
+FBSTP tword ptr [RBP + 0x1000]
+<L0> (entry=0x0):
+	$U1:8 = RBP + 0x1000:8
+	ram[$U1:8] = ST0
+	ST0 = ST1
+	ST1 = ST2
+	ST2 = ST3
+	ST3 = ST4
+	ST4 = ST5
+	ST5 = ST6
+	ST6 = ST7
+
+CVTTSD2SI EAX, XMM0
+<L0> (entry=0x0):
+	EAX = float2int(XMM0_Qa)
+	RAX = zext(EAX)
+
+CVTSI2SD XMM6, dword ptr [RBP + 0x20]
+<L0> (entry=0x0):
+	$U1:8 = RBP + 0x20:8
+	$U2:4 = ram[$U1:8]
+	XMM6_Qa = int2float($U2:4)
+
+CMPXCHG8B qword ptr [RDX + -0x3ea0fba4]
+<L0> (entry=0x12026):
+	$tmp0:8 = RDX + 0xffffffffc15f045c:8
+	$U1:8 = zext(EDX)
+	$U2:8 = $U1:8 << 0x20:8
+	$U3:8 = zext(EAX)
+	$U4:8 = $U2:8 | $U3:8
+	$U10:8 = ram[$tmp0:8]
+	ZF = $U4:8 == $U10:8
+	if ZF jump <L2>
+<L1>:
+	$U11:8 = $tmp0:8 + 0x4:8
+	EDX = ram[$U11:8]
+	EAX = ram[$tmp0:8]
+	jump 0x1202d:8
+<L2>:
+	$U6:8 = zext(ECX)
+	$U7:8 = $U6:8 << 0x20:8
+	$U8:8 = zext(EBX)
+	$U12:8 = $U7:8 | $U8:8
+	ram[$tmp0:8] = $U12:8
+
+CMPXCHG8B qword ptr [RAX]
+<L0> (entry=0x65):
+	$U1:8 = zext(EDX)
+	$U2:8 = $U1:8 << 0x20:8
+	$U3:8 = zext(EAX)
+	$U4:8 = $U2:8 | $U3:8
+	$U9:8 = ram[RAX]
+	ZF = $U4:8 == $U9:8
+	if ZF jump <L2>
+<L1>:
+	$U10:8 = RAX + 0x4:8
+	EDX = ram[$U10:8]
+	EAX = ram[RAX]
+	jump 0x68:8
+<L2>:
+	$U6:8 = zext(ECX)
+	$U7:8 = $U6:8 << 0x20:8
+	$U8:8 = zext(EBX)
+	$U11:8 = $U7:8 | $U8:8
+	ram[RAX] = $U11:8
+
+CMPXCHG dword ptr [0x1010],ESI
+<L0> (entry=0x0):
+	$U6:4 = ram[0x1010:8]
+	CF = EAX < $U6:4
+	$U7:4 = ram[0x1010:8]
+	OF = EAX sborrow $U7:4
+	$U8:4 = ram[0x1010:8]
+	$U1:4 = EAX - $U8:4
+	SF = $U1:4 s< 0x0:4
+	ZF = $U1:4 == 0x0:4
+	$U2:4 = $U1:4 & 0xff:4
+	$U3:1 = count_ones($U2:4)
+	$U4:1 = $U3:1 & 0x1:1
+	PF = $U4:1 == 0x0:1
+	if ZF jump <L2>
+<L1>:
+	EAX = ram[0x1010:8]
+	RAX = zext(EAX)
+	jump 0x7:8
+<L2>:
+	ram[0x1010:8] = ESI
+
+XADD dword ptr [0x1000],ECX
+<L0> (entry=0x0):
+	$U5:4 = ram[0x1000:8]
+	CF = $U5:4 carry ECX
+	$U6:4 = ram[0x1000:8]
+	OF = $U6:4 scarry ECX
+	$U7:4 = ram[0x1000:8]
+	$U1:4 = $U7:4 + ECX
+	ECX = ram[0x1000:8]
+	ram[0x1000:8] = $U1:4
+	RCX = zext(ECX)
+	SF = $U1:4 s< 0x0:4
+	ZF = $U1:4 == 0x0:4
+	$U2:4 = $U1:4 & 0xff:4
+	$U3:1 = count_ones($U2:4)
+	$U4:1 = $U3:1 & 0x1:1
+	PF = $U4:1 == 0x0:1
+
+POP RSP
+<L0> (entry=0x0):
+	$U1:8 = ram[RSP]
+	RSP = $U1:8
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+POPFQ
+<L0> (entry=0x0):
+	$U1:8 = ram[RSP]
+	RSP = RSP + 0x8:8
+	rflags = $U1:8
+	$U2:8 = $U1:8 & 0x4000:8
+	NT = $U2:8 != 0x0:8
+	$U3:8 = $U1:8 & 0x800:8
+	OF = $U3:8 != 0x0:8
+	$U4:8 = $U1:8 & 0x400:8
+	DF = $U4:8 != 0x0:8
+	$U5:8 = $U1:8 & 0x200:8
+	IF = $U5:8 != 0x0:8
+	$U6:8 = $U1:8 & 0x100:8
+	TF = $U6:8 != 0x0:8
+	$U7:8 = $U1:8 & 0x80:8
+	SF = $U7:8 != 0x0:8
+	$U8:8 = $U1:8 & 0x40:8
+	ZF = $U8:8 != 0x0:8
+	$U9:8 = $U1:8 & 0x10:8
+	AF = $U9:8 != 0x0:8
+	$U10:8 = $U1:8 & 0x4:8
+	PF = $U10:8 != 0x0:8
+	$U11:8 = $U1:8 & 0x1:8
+	CF = $U11:8 != 0x0:8
+	$U12:8 = $U1:8 & 0x200000:8
+	ID = $U12:8 != 0x0:8
+	$U13:8 = $U1:8 & 0x40000:8
+	AC = $U13:8 != 0x0:8
+	VIP = 0x0:1
+	VIF = 0x0:1
+
+POPF
+<L0> (entry=0x0):
+	$U1:2 = ram[RSP]
+	RSP = RSP + 0x2:8
+	flags = $U1:2
+	$U2:2 = $U1:2 & 0x4000:2
+	NT = $U2:2 != 0x0:2
+	$U3:2 = $U1:2 & 0x800:2
+	OF = $U3:2 != 0x0:2
+	$U4:2 = $U1:2 & 0x400:2
+	DF = $U4:2 != 0x0:2
+	$U5:2 = $U1:2 & 0x200:2
+	IF = $U5:2 != 0x0:2
+	$U6:2 = $U1:2 & 0x100:2
+	TF = $U6:2 != 0x0:2
+	$U7:2 = $U1:2 & 0x80:2
+	SF = $U7:2 != 0x0:2
+	$U8:2 = $U1:2 & 0x40:2
+	ZF = $U8:2 != 0x0:2
+	$U9:2 = $U1:2 & 0x10:2
+	AF = $U9:2 != 0x0:2
+	$U10:2 = $U1:2 & 0x4:2
+	PF = $U10:2 != 0x0:2
+	$U11:2 = $U1:2 & 0x1:2
+	CF = $U11:2 != 0x0:2
+
+PUSHFQ
+<L0> (entry=0x0):
+	$U1:1 = NT & 0x1:1
+	$U2:8 = zext($U1:1)
+	$U3:8 = 0x4000:8 * $U2:8
+	$U4:1 = OF & 0x1:1
+	$U5:8 = zext($U4:1)
+	$U6:8 = 0x800:8 * $U5:8
+	$U7:8 = $U3:8 | $U6:8
+	$U8:1 = DF & 0x1:1
+	$U9:8 = zext($U8:1)
+	$U10:8 = 0x400:8 * $U9:8
+	$U11:8 = $U7:8 | $U10:8
+	$U12:1 = IF & 0x1:1
+	$U13:8 = zext($U12:1)
+	$U14:8 = 0x200:8 * $U13:8
+	$U15:8 = $U11:8 | $U14:8
+	$U16:1 = TF & 0x1:1
+	$U17:8 = zext($U16:1)
+	$U18:8 = 0x100:8 * $U17:8
+	$U19:8 = $U15:8 | $U18:8
+	$U20:1 = SF & 0x1:1
+	$U21:8 = zext($U20:1)
+	$U22:8 = 0x80:8 * $U21:8
+	$U23:8 = $U19:8 | $U22:8
+	$U24:1 = ZF & 0x1:1
+	$U25:8 = zext($U24:1)
+	$U26:8 = 0x40:8 * $U25:8
+	$U27:8 = $U23:8 | $U26:8
+	$U28:1 = AF & 0x1:1
+	$U29:8 = zext($U28:1)
+	$U30:8 = 0x10:8 * $U29:8
+	$U31:8 = $U27:8 | $U30:8
+	$U32:1 = PF & 0x1:1
+	$U33:8 = zext($U32:1)
+	$U34:8 = 0x4:8 * $U33:8
+	$U35:8 = $U31:8 | $U34:8
+	$U36:1 = CF & 0x1:1
+	$U37:8 = zext($U36:1)
+	rflags = $U35:8 | $U37:8
+	$U39:1 = ID & 0x1:1
+	$U40:8 = zext($U39:1)
+	$U41:8 = 0x200000:8 * $U40:8
+	$U42:8 = rflags | $U41:8
+	$U43:1 = VIP & 0x1:1
+	$U44:8 = zext($U43:1)
+	$U45:8 = 0x100000:8 * $U44:8
+	$U46:8 = $U42:8 | $U45:8
+	$U47:1 = VIF & 0x1:1
+	$U48:8 = zext($U47:1)
+	$U49:8 = 0x80000:8 * $U48:8
+	$U50:8 = $U46:8 | $U49:8
+	$U51:1 = AC & 0x1:1
+	$U52:8 = zext($U51:1)
+	$U53:8 = 0x40000:8 * $U52:8
+	rflags = $U50:8 | $U53:8
+	RSP = RSP - 0x8:8
+	ram[RSP] = rflags
+
+PUSHF
+<L0> (entry=0x0):
+	$U1:1 = NT & 0x1:1
+	$U2:2 = zext($U1:1)
+	$U3:2 = 0x4000:2 * $U2:2
+	$U4:1 = OF & 0x1:1
+	$U5:2 = zext($U4:1)
+	$U6:2 = 0x800:2 * $U5:2
+	$U7:2 = $U3:2 | $U6:2
+	$U8:1 = DF & 0x1:1
+	$U9:2 = zext($U8:1)
+	$U10:2 = 0x400:2 * $U9:2
+	$U11:2 = $U7:2 | $U10:2
+	$U12:1 = IF & 0x1:1
+	$U13:2 = zext($U12:1)
+	$U14:2 = 0x200:2 * $U13:2
+	$U15:2 = $U11:2 | $U14:2
+	$U16:1 = TF & 0x1:1
+	$U17:2 = zext($U16:1)
+	$U18:2 = 0x100:2 * $U17:2
+	$U19:2 = $U15:2 | $U18:2
+	$U20:1 = SF & 0x1:1
+	$U21:2 = zext($U20:1)
+	$U22:2 = 0x80:2 * $U21:2
+	$U23:2 = $U19:2 | $U22:2
+	$U24:1 = ZF & 0x1:1
+	$U25:2 = zext($U24:1)
+	$U26:2 = 0x40:2 * $U25:2
+	$U27:2 = $U23:2 | $U26:2
+	$U28:1 = AF & 0x1:1
+	$U29:2 = zext($U28:1)
+	$U30:2 = 0x10:2 * $U29:2
+	$U31:2 = $U27:2 | $U30:2
+	$U32:1 = PF & 0x1:1
+	$U33:2 = zext($U32:1)
+	$U34:2 = 0x4:2 * $U33:2
+	$U35:2 = $U31:2 | $U34:2
+	$U36:1 = CF & 0x1:1
+	$U37:2 = zext($U36:1)
+	flags = $U35:2 | $U37:2
+	RSP = RSP - 0x2:8
+	ram[RSP] = flags
+
+LEAVE
+<L0> (entry=0x0):
+	RSP = RBP
+	RBP = ram[RBP]
+	RSP = RSP + 0x8:8
+
+MOV RSP, DR6
+<L0> (entry=0x11000):
+	RSP = DR6
+
+MOV byte ptr [R11],0x0
+<L0> (entry=0x0):
+	ram[R11] = 0x0:1
+
+NOP dword ptr CS:[RAX + RAX*0x1]
+<L0> (entry=0x0):
+
+VPUNPCKLDQ XMM10, XMM7, xmmword ptr [RCX + -0x40]
+<L0> (entry=0x68):
+	$U2:8 = RCX + 0xffffffffffffffc0:8
+	$U3:16 = ram[$U2:8]
+	$U1:16 = vpunpckldq_avx(XMM7, $U3:16)
+	XMM10 = $U1:16
+	YMM10_H = 0x0:16
+
+INT1
+<L0> (entry=0x0):
+	NEXT_PC = 0x1:8
+	exception(0x101:4, 0x1:1)
+	call $U2:8
+<L1>:
+	return 0x0:1
+
+TEST byte ptr [RSI],0x0
+<L0> (entry=0x11000):
+	CF = 0x0:1
+	OF = 0x0:1
+	$U5:1 = ram[RSI]
+	SF = 0x0:1
+	ZF = 0x1:1
+	PF = 0x1:1
+
+LAHF
+<L0> (entry=0x0):
+	$U1:1 = SF << 0x7:8
+	$U2:1 = ZF << 0x6:8
+	$U3:1 = $U1:1 | $U2:1
+	$U4:1 = AF << 0x4:8
+	$U5:1 = $U3:1 | $U4:1
+	$U6:1 = PF << 0x2:8
+	$U7:1 = $U5:1 | $U6:1
+	$U8:1 = $U7:1 | 0x2:1
+	AH = $U8:1 | CF
+

@@ -1,0 +1,748 @@
+MOV.W #0x0, R14
+<L0> (entry=0x0):
+	R14 = 0x0:4
+
+CALL #0x4000
+<L0> (entry=0x1000):
+	SP = SP - 0x2:4
+	ram[SP] = 0x1004:2
+	call 0x4000:4
+
+TST.W R12
+<L0> (entry=0x0):
+	$U1:4 = SR & 0xfffffffe:4
+	SR = $U1:4 | 0x1:4
+	$U3:4 = SR & 0xfffffeff:4
+	$U5:1 = R12_16 s< 0x0:2
+	$U6:4 = $U3:4 & 0xfffffffb:4
+	$U7:4 = zext($U5:1)
+	$U7:4 = $U7:4 << 0x2:4
+	SR = $U6:4 | $U7:4
+	$U8:1 = R12_16 == 0x0:2
+	$U9:4 = SR & 0xfffffffd:4
+	$U10:4 = zext($U8:1)
+	$U10:4 = $U10:4 << 0x1:4
+	SR = $U9:4 | $U10:4
+
+SUB.W R14, R15
+<L0> (entry=0x0):
+	$U1:1 = R14_16 <= R15_16
+	$U2:4 = SR & 0xfffffffe:4
+	$U3:4 = zext($U1:1)
+	SR = $U2:4 | $U3:4
+	$U4:1 = R15_16 sborrow R14_16
+	$U5:4 = SR & 0xfffffeff:4
+	$U6:4 = zext($U4:1)
+	$U6:4 = $U6:4 << 0x8:4
+	SR = $U5:4 | $U6:4
+	R15_16 = R15_16 - R14_16
+	$U13:2 = R15_16
+	R15 = 0x0:4
+	R15_16 = $U13:2
+	$U7:1 = R15_16 s< 0x0:2
+	$U8:4 = SR & 0xfffffffb:4
+	$U9:4 = zext($U7:1)
+	$U9:4 = $U9:4 << 0x2:4
+	SR = $U8:4 | $U9:4
+	$U10:1 = R15_16 == 0x0:2
+	$U11:4 = SR & 0xfffffffd:4
+	$U12:4 = zext($U10:1)
+	$U12:4 = $U12:4 << 0x1:4
+	SR = $U11:4 | $U12:4
+
+DEC.W R15
+<L0> (entry=0x0):
+	$U1:1 = 0x1:2 <= R15_16
+	$U2:4 = SR & 0xfffffffe:4
+	$U3:4 = zext($U1:1)
+	SR = $U2:4 | $U3:4
+	$U4:1 = 0x8000:2 == R15_16
+	$U5:4 = SR & 0xfffffeff:4
+	$U6:4 = zext($U4:1)
+	$U6:4 = $U6:4 << 0x8:4
+	SR = $U5:4 | $U6:4
+	R15_16 = R15_16 - 0x1:2
+	$U13:2 = R15_16
+	R15 = 0x0:4
+	R15_16 = $U13:2
+	$U7:1 = R15_16 s< 0x0:2
+	$U8:4 = SR & 0xfffffffb:4
+	$U9:4 = zext($U7:1)
+	$U9:4 = $U9:4 << 0x2:4
+	SR = $U8:4 | $U9:4
+	$U10:1 = R15_16 == 0x0:2
+	$U11:4 = SR & 0xfffffffd:4
+	$U12:4 = zext($U10:1)
+	$U12:4 = $U12:4 << 0x1:4
+	SR = $U11:4 | $U12:4
+
+SUBC.W #1, R14
+<L0> (entry=0x0):
+	$U2:4 = SR & 0x1:4
+	$U3:2 = zext($U2:1)
+	$U1:2 = 0x1:2 - $U3:2
+	$U4:2 = $U1:2 + 0x1:2
+	$U5:1 = $U4:2 <= R14_16
+	$U6:4 = SR & 0xfffffffe:4
+	$U7:4 = zext($U5:1)
+	SR = $U6:4 | $U7:4
+	$U9:1 = R14_16 sborrow $U4:2
+	$U10:4 = SR & 0xfffffeff:4
+	$U11:4 = zext($U9:1)
+	$U11:4 = $U11:4 << 0x8:4
+	SR = $U10:4 | $U11:4
+	$U12:2 = R14_16 - 0x1:2
+	R14_16 = $U12:2 - $U1:2
+	$U19:2 = R14_16
+	R14 = 0x0:4
+	R14_16 = $U19:2
+	$U13:1 = R14_16 s< 0x0:2
+	$U14:4 = SR & 0xfffffffb:4
+	$U15:4 = zext($U13:1)
+	$U15:4 = $U15:4 << 0x2:4
+	SR = $U14:4 | $U15:4
+	$U16:1 = R14_16 == 0x0:2
+	$U17:4 = SR & 0xfffffffd:4
+	$U18:4 = zext($U16:1)
+	$U18:4 = $U18:4 << 0x1:4
+	SR = $U17:4 | $U18:4
+
+SBC.W R14
+<L0> (entry=0x0):
+	$U2:4 = SR & 0x1:4
+	$U3:2 = zext($U2:1)
+	$U1:2 = 0x1:2 - $U3:2
+	$U4:1 = $U1:2 <= R14_16
+	$U5:4 = SR & 0xfffffffe:4
+	$U6:4 = zext($U4:1)
+	SR = $U5:4 | $U6:4
+	$U7:1 = R14_16 sborrow $U1:2
+	$U8:4 = SR & 0xfffffeff:4
+	$U9:4 = zext($U7:1)
+	$U9:4 = $U9:4 << 0x8:4
+	SR = $U8:4 | $U9:4
+	R14_16 = R14_16 - $U1:2
+	$U16:2 = R14_16
+	R14 = 0x0:4
+	R14_16 = $U16:2
+	$U10:1 = R14_16 s< 0x0:2
+	$U11:4 = SR & 0xfffffffb:4
+	$U12:4 = zext($U10:1)
+	$U12:4 = $U12:4 << 0x2:4
+	SR = $U11:4 | $U12:4
+	$U13:1 = R14_16 == 0x0:2
+	$U14:4 = SR & 0xfffffffd:4
+	$U15:4 = zext($U13:1)
+	$U15:4 = $U15:4 << 0x1:4
+	SR = $U14:4 | $U15:4
+
+RETI
+<L0> (entry=0x0):
+	$U8:4 = SR
+	$U2:2 = ram[SP]
+	$U1:4 = zext($U2:2)
+	$U3:4 = $U1:4 & 0xfff:4
+	SR = zext($U3:2)
+	SP = SP + 0x2:4
+	$U4:2 = ram[SP]
+	$U5:4 = zext($U4:2)
+	$U6:4 = $U1:4 & 0xf000:4
+	$U7:4 = $U6:4 << 0x4:4
+	TMP_PC = $U5:4 | $U7:4
+	SP = SP + 0x2:4
+	check_sr_control_bits_async($U8:4, $U3:4)
+	return TMP_PC
+
+RRC.B @R12
+<L0> (entry=0x0):
+	$U20:1 = ram[R12]
+	$U1:1 = $U20:1 != 0x0:1
+	$U2:4 = SR & 0x1:4
+	$U3:1 = $U2:1
+	$U4:1 = $U1:1 && $U3:1
+	$U5:4 = SR & 0xfffffeff:4
+	$U6:4 = zext($U4:1)
+	$U6:4 = $U6:4 << 0x8:4
+	SR = $U5:4 | $U6:4
+	$U21:1 = ram[R12]
+	$U9:1 = $U21:1 & 0x1:1
+	$U10:4 = SR & 0xfffffffe:4
+	$U11:4 = zext($U9:1)
+	SR = $U10:4 | $U11:4
+	$U12:1 = $U3:1 << 0x7:4
+	$U22:1 = ram[R12]
+	$U13:1 = $U22:1 >> 0x1:4
+	$U23:1 = $U12:1 | $U13:1
+	ram[R12] = $U23:1
+	$U24:1 = ram[R12]
+	$U14:1 = $U24:1 s< 0x0:1
+	$U15:4 = SR & 0xfffffffb:4
+	$U16:4 = zext($U14:1)
+	$U16:4 = $U16:4 << 0x2:4
+	SR = $U15:4 | $U16:4
+	$U25:1 = ram[R12]
+	$U17:1 = $U25:1 == 0x0:1
+	$U18:4 = SR & 0xfffffffd:4
+	$U19:4 = zext($U17:1)
+	$U19:4 = $U19:4 << 0x1:4
+	SR = $U18:4 | $U19:4
+
+
+
+CMP.W #0xc, &0x2d6
+<L0> (entry=0xee1e):
+	$U14:2 = ram[0x2d6:4]
+	$U1:1 = 0xc:2 <= $U14:2
+	$U2:4 = SR & 0xfffffffe:4
+	$U3:4 = zext($U1:1)
+	SR = $U2:4 | $U3:4
+	$U15:2 = ram[0x2d6:4]
+	$U4:1 = $U15:2 sborrow 0xc:2
+	$U5:4 = SR & 0xfffffeff:4
+	$U6:4 = zext($U4:1)
+	$U6:4 = $U6:4 << 0x8:4
+	SR = $U5:4 | $U6:4
+	$U16:2 = ram[0x2d6:4]
+	$U7:2 = $U16:2 - 0xc:2
+	$U8:1 = $U7:2 s< 0x0:2
+	$U9:4 = SR & 0xfffffffb:4
+	$U10:4 = zext($U8:1)
+	$U10:4 = $U10:4 << 0x2:4
+	SR = $U9:4 | $U10:4
+	$U11:1 = $U7:2 == 0x0:2
+	$U12:4 = SR & 0xfffffffd:4
+	$U13:4 = zext($U11:1)
+	$U13:4 = $U13:4 << 0x1:4
+	SR = $U12:4 | $U13:4
+
+BIS.W #0xd8, SR
+<L0> (entry=0x0):
+	$U2:4 = SR
+	SR_16 = 0xd8:2 | SR_16
+	$U1:2 = SR_16
+	SR = 0x0:4
+	SR_16 = $U1:2
+	check_sr_control_bits($U2:4, SR)
+
+MOV.W &0x1c00, R12
+MOV.W 0x2(R12), R13
+TST.W R13
+JEQ 0x9a98
+<L0> (entry=0x9a88):
+	instruction(0x9a88)
+	R12_16 = ram[0x1c00:4]
+	$U1:2 = R12_16
+	R12 = 0x0:4
+	R12_16 = $U1:2
+	instruction(0x9a8c)
+	$U3:4 = 0x0:4
+	$U2:1 = 0x0:1
+	$U5:4 = 0x0:4
+	$U6:4 = 0x0:4
+	$U4:4 = 0xffff:4
+	$U7:4 = R12 + 0x2:4
+	$U1:4 = $U7:4 & 0xffff:4
+	R13_16 = ram[$U1:4]
+	$U8:2 = R13_16
+	R13 = 0x0:4
+	R13_16 = $U8:2
+	instruction(0x9a90)
+	$U1:4 = SR & 0xfffffffe:4
+	SR = $U1:4 | 0x1:4
+	$U3:4 = SR & 0xfffffeff:4
+	$U5:1 = R13_16 s< 0x0:2
+	$U6:4 = $U3:4 & 0xfffffffb:4
+	$U7:4 = zext($U5:1)
+	$U7:4 = $U7:4 << 0x2:4
+	SR = $U6:4 | $U7:4
+	$U8:1 = R13_16 == 0x0:2
+	$U9:4 = SR & 0xfffffffd:4
+	$U10:4 = zext($U8:1)
+	$U10:4 = $U10:4 << 0x1:4
+	SR = $U9:4 | $U10:4
+	instruction(0x9a92)
+	$U2:4 = SR >> 0x1:4
+	$U2:4 = $U2:4 & 0x1:4
+	$U1:1 = $U8:1
+	if $U1:1 jump 0x9a98:4
+
+MOVA #0x4400, SP
+<L0> (entry=0x0):
+	SP = 0x4400:4
+
+CALLA #0x11e92
+<L0> (entry=0x4000):
+	SP = SP - 0x4:4
+	ram[SP] = 0x4004:4
+	call 0x11e92:4
+
+CALLA &0x24ec
+<L0> (entry=0x4000):
+	SP = SP - 0x4:4
+	ram[SP] = 0x4004:4
+	TMP_PC = ram[0x24ec:4]
+	$U2:4 = TMP_PC & 0xfffff:4
+	call $U2:4
+
+RETA @SP+
+<L0> (entry=0x0):
+	TMP_PC = ram[SP]
+	$U1:4 = TMP_PC & 0xfffff:4
+	SP = SP + 0x4:4
+	return $U1:4
+
+JMP 0x1150a
+<L0> (entry=0x114f0):
+	jump 0x1150a:4
+
+PUSHM.W 0x2,R10
+<L0> (entry=0x0):
+	SP = SP - 0x2:4
+	ram[SP] = R10_16
+	SP = SP - 0x2:4
+	ram[SP] = R9_16
+
+POPM.W 0x6,R15
+<L0> (entry=0x0):
+	$U1:2 = ram[SP]
+	R10 = zext($U1:2)
+	SP = SP + 0x2:4
+	$U2:2 = ram[SP]
+	R11 = zext($U2:2)
+	SP = SP + 0x2:4
+	$U3:2 = ram[SP]
+	R12 = zext($U3:2)
+	SP = SP + 0x2:4
+	$U4:2 = ram[SP]
+	R13 = zext($U4:2)
+	SP = SP + 0x2:4
+	$U5:2 = ram[SP]
+	R14 = zext($U5:2)
+	SP = SP + 0x2:4
+	$U6:2 = ram[SP]
+	R15 = zext($U6:2)
+	SP = SP + 0x2:4
+
+POPM.A 0x1,R10
+<L0> (entry=0x0):
+	R10 = ram[SP]
+	$U1:4 = R10 & 0xfffff:4
+	R10 = sext($U1:3)
+	SP = SP + 0x4:4
+
+MOVA @R9, R12
+<L0> (entry=0x0):
+	R12 = ram[R9]
+	$U1:4 = R12 & 0xfffff:4
+	R12 = sext($U1:3)
+
+ADDA #0x4, R9
+<L0> (entry=0x0):
+	$U1:4 = R9
+	$U3:4 = R9 + 0x4:4
+	$U4:4 = $U3:4 & 0xfffff:4
+	R9 = sext($U4:3)
+	$U8:4 = $U1:4
+	$U8:4 = $U8:4 & 0xfffff:4
+	$U5:4 = 0x4:4 + $U8:4
+	$U9:1 = 0xfffff:4 < $U5:4
+	$U10:4 = SR & 0xfffffffe:4
+	$U11:4 = zext($U9:1)
+	SR = $U10:4 | $U11:4
+	$U23:4 = SR & 0xfffffeff:4
+	$U26:4 = $U23:4 & 0xfffffffb:4
+	$U28:1 = $U4:4 == 0x0:4
+	$U29:4 = $U26:4 & 0xfffffffd:4
+	$U30:4 = zext($U28:1)
+	$U30:4 = $U30:4 << 0x1:4
+	SR = $U29:4 | $U30:4
+
+ADDA R14, R15
+<L0> (entry=0x0):
+	$U1:4 = R15
+	$U2:4 = R14 + R15
+	$U3:4 = $U2:4 & 0xfffff:4
+	R15 = sext($U3:3)
+	$U5:4 = R14 & 0xfffff:4
+	$U7:4 = $U1:4
+	$U7:4 = $U7:4 & 0xfffff:4
+	$U4:4 = $U5:4 + $U7:4
+	$U8:1 = 0xfffff:4 < $U4:4
+	$U9:4 = SR & 0xfffffffe:4
+	$U10:4 = zext($U8:1)
+	SR = $U9:4 | $U10:4
+	$U16:1 = R14 s< 0x0:4
+	$U17:1 = $U1:4 s< 0x0:4
+	$U18:1 = $U16:1 && $U17:1
+	$U19:1 = 0x0:4 s<= $U3:4
+	$U20:1 = $U18:1 && $U19:1
+	$U22:4 = SR & 0xfffffeff:4
+	$U23:4 = zext($U20:1)
+	$U23:4 = $U23:4 << 0x8:4
+	SR = $U22:4 | $U23:4
+	$U25:4 = SR & 0xfffffffb:4
+	$U27:1 = $U3:4 == 0x0:4
+	$U28:4 = $U25:4 & 0xfffffffd:4
+	$U29:4 = zext($U27:1)
+	$U29:4 = $U29:4 << 0x1:4
+	SR = $U28:4 | $U29:4
+
+CMPA R5, R3
+<L0> (entry=0x0):
+	$U1:4 = R3 - R5
+	$U3:4 = $U1:4 & 0xfffff:4
+	$U5:4 = R5 & 0xfffff:4
+	$U7:4 = R3 & 0xfffff:4
+	$U8:1 = $U5:4 <= $U7:4
+	$U9:4 = SR & 0xfffffffe:4
+	$U10:4 = zext($U8:1)
+	SR = $U9:4 | $U10:4
+	$U16:1 = 0x0:4 s<= R5
+	$U17:1 = R3 s< 0x0:4
+	$U18:1 = $U16:1 && $U17:1
+	$U19:1 = 0x0:4 s<= $U3:4
+	$U20:1 = $U18:1 && $U19:1
+	$U22:4 = SR & 0xfffffeff:4
+	$U23:4 = zext($U20:1)
+	$U23:4 = $U23:4 << 0x8:4
+	SR = $U22:4 | $U23:4
+	$U25:4 = SR & 0xfffffffb:4
+	$U27:1 = $U3:4 == 0x0:4
+	$U28:4 = $U25:4 & 0xfffffffd:4
+	$U29:4 = zext($U27:1)
+	$U29:4 = $U29:4 << 0x1:4
+	SR = $U28:4 | $U29:4
+
+MOVA SR, SP
+<L0> (entry=0x0):
+	SP = SR
+
+ADDA #4, SP
+<L0> (entry=0x0):
+	$U1:4 = SP
+	$U2:4 = 0x4:4 + SP
+	$U3:4 = $U2:4 & 0xfffff:4
+	SP = sext($U3:3)
+	$U7:4 = $U1:4
+	$U7:4 = $U7:4 & 0xfffff:4
+	$U4:4 = 0x4:4 + $U7:4
+	$U8:1 = 0xfffff:4 < $U4:4
+	$U9:4 = SR & 0xfffffffe:4
+	$U10:4 = zext($U8:1)
+	SR = $U9:4 | $U10:4
+	$U22:4 = SR & 0xfffffeff:4
+	$U25:4 = $U22:4 & 0xfffffffb:4
+	$U27:1 = $U3:4 == 0x0:4
+	$U28:4 = $U25:4 & 0xfffffffd:4
+	$U29:4 = zext($U27:1)
+	$U29:4 = $U29:4 << 0x1:4
+	SR = $U28:4 | $U29:4
+
+SUBA #4, SP
+<L0> (entry=0x0):
+	$U1:4 = SP
+	$U2:4 = SP - 0x4:4
+	$U3:4 = $U2:4 & 0xfffff:4
+	SP = sext($U3:3)
+	$U7:4 = $U1:4
+	$U7:4 = $U7:4 & 0xfffff:4
+	$U8:1 = 0x4:4 <= $U7:4
+	$U9:4 = SR & 0xfffffffe:4
+	$U10:4 = zext($U8:1)
+	SR = $U9:4 | $U10:4
+	$U17:1 = $U1:4 s< 0x0:4
+	$U19:1 = 0x0:4 s<= $U3:4
+	$U20:1 = $U17:1 && $U19:1
+	$U22:4 = SR & 0xfffffeff:4
+	$U23:4 = zext($U20:1)
+	$U23:4 = $U23:4 << 0x8:4
+	SR = $U22:4 | $U23:4
+	$U25:4 = SR & 0xfffffffb:4
+	$U27:1 = $U3:4 == 0x0:4
+	$U28:4 = $U25:4 & 0xfffffffd:4
+	$U29:4 = zext($U27:1)
+	$U29:4 = $U29:4 << 0x1:4
+	SR = $U28:4 | $U29:4
+
+CLRA SP
+<L0> (entry=0x0):
+	SP = 0x0:4
+
+INCDA SP
+<L0> (entry=0x0):
+	$U1:4 = SP
+	$U2:4 = 0x2:4 + SP
+	$U3:4 = $U2:4 & 0xfffff:4
+	SP = sext($U3:3)
+	$U7:4 = $U1:4
+	$U7:4 = $U7:4 & 0xfffff:4
+	$U4:4 = 0x2:4 + $U7:4
+	$U8:1 = 0xfffff:4 < $U4:4
+	$U9:4 = SR & 0xfffffffe:4
+	$U10:4 = zext($U8:1)
+	SR = $U9:4 | $U10:4
+	$U22:4 = SR & 0xfffffeff:4
+	$U25:4 = $U22:4 & 0xfffffffb:4
+	$U27:1 = $U3:4 == 0x0:4
+	$U28:4 = $U25:4 & 0xfffffffd:4
+	$U29:4 = zext($U27:1)
+	$U29:4 = $U29:4 << 0x1:4
+	SR = $U28:4 | $U29:4
+
+DECDA SP
+<L0> (entry=0x0):
+	$U1:4 = SP
+	$U2:4 = SP - 0x2:4
+	$U3:4 = $U2:4 & 0xfffff:4
+	SP = sext($U3:3)
+	$U7:4 = $U1:4
+	$U7:4 = $U7:4 & 0xfffff:4
+	$U8:1 = 0x2:4 <= $U7:4
+	$U9:4 = SR & 0xfffffffe:4
+	$U10:4 = zext($U8:1)
+	SR = $U9:4 | $U10:4
+	$U17:1 = $U1:4 s< 0x0:4
+	$U19:1 = 0x0:4 s<= $U3:4
+	$U20:1 = $U17:1 && $U19:1
+	$U22:4 = SR & 0xfffffeff:4
+	$U23:4 = zext($U20:1)
+	$U23:4 = $U23:4 << 0x8:4
+	SR = $U22:4 | $U23:4
+	$U25:4 = SR & 0xfffffffb:4
+	$U27:1 = $U3:4 == 0x0:4
+	$U28:4 = $U25:4 & 0xfffffffd:4
+	$U29:4 = zext($U27:1)
+	$U29:4 = $U29:4 << 0x1:4
+	SR = $U28:4 | $U29:4
+
+TSTA SP
+<L0> (entry=0x0):
+	$U1:4 = SR & 0xfffffffe:4
+	SR = $U1:4 | 0x1:4
+	$U3:4 = SR & 0xfffffeff:4
+	$U5:1 = SP s< 0x0:4
+	$U6:4 = $U3:4 & 0xfffffffb:4
+	$U7:4 = zext($U5:1)
+	$U7:4 = $U7:4 << 0x2:4
+	SR = $U6:4 | $U7:4
+	$U8:1 = SP == 0x0:4
+	$U9:4 = SR & 0xfffffffd:4
+	$U10:4 = zext($U8:1)
+	$U10:4 = $U10:4 << 0x1:4
+	SR = $U9:4 | $U10:4
+
+MOV.B -0x1f2b(R12), &0x2063
+<L0> (entry=0x4000):
+	$U3:4 = R12 & 0xf0000:4
+	$U2:1 = $U3:4 != 0x0:4
+	$U5:4 = zext($U2:1)
+	$U6:4 = $U5:4 * 0xf0000:4
+	$U4:4 = 0xffff:4 | $U6:4
+	$U7:4 = R12 + 0xffffe0d5:4
+	$U1:4 = $U7:4 & $U4:4
+	$U8:1 = ram[$U1:4]
+	ram[0x2063:4] = $U8:1
+
+TST.W -0x76c2(R13)
+<L0> (entry=0x4000):
+	$U13:4 = R13 & 0xf0000:4
+	$U12:1 = $U13:4 != 0x0:4
+	$U15:4 = zext($U12:1)
+	$U16:4 = $U15:4 * 0xf0000:4
+	$U14:4 = 0xffff:4 | $U16:4
+	$U17:4 = R13 + 0xffff893e:4
+	$U11:4 = $U17:4 & $U14:4
+	$U1:4 = SR & 0xfffffffe:4
+	SR = $U1:4 | 0x1:4
+	$U3:4 = SR & 0xfffffeff:4
+	$U18:2 = ram[$U11:4]
+	$U5:1 = $U18:2 s< 0x0:2
+	$U6:4 = $U3:4 & 0xfffffffb:4
+	$U7:4 = zext($U5:1)
+	$U7:4 = $U7:4 << 0x2:4
+	SR = $U6:4 | $U7:4
+	$U19:2 = ram[$U11:4]
+	$U8:1 = $U19:2 == 0x0:2
+	$U9:4 = SR & 0xfffffffd:4
+	$U10:4 = zext($U8:1)
+	$U10:4 = $U10:4 << 0x1:4
+	SR = $U9:4 | $U10:4
+
+MOV.B #0, R13
+TST.W -0x1000(R13)
+<L0> (entry=0x4000):
+	instruction(0x4000)
+	R13 = 0x0:4
+	instruction(0x4002)
+	$U13:4 = 0x0:4
+	$U12:1 = 0x0:1
+	$U15:4 = 0x0:4
+	$U16:4 = 0x0:4
+	$U14:4 = 0xffff:4
+	$U17:4 = 0xfffff000:4
+	$U11:4 = 0xf000:4
+	$U1:4 = SR & 0xfffffffe:4
+	SR = $U1:4 | 0x1:4
+	$U3:4 = SR & 0xfffffeff:4
+	$U18:2 = ram[0xf000:4]
+	$U5:1 = $U18:2 s< 0x0:2
+	$U6:4 = $U3:4 & 0xfffffffb:4
+	$U7:4 = zext($U5:1)
+	$U7:4 = $U7:4 << 0x2:4
+	SR = $U6:4 | $U7:4
+	$U19:2 = ram[0xf000:4]
+	$U8:1 = $U19:2 == 0x0:2
+	$U9:4 = SR & 0xfffffffd:4
+	$U10:4 = zext($U8:1)
+	$U10:4 = $U10:4 << 0x1:4
+	SR = $U9:4 | $U10:4
+
+MOVX.W R12, 0x20000(R14)
+<L0> (entry=0x8036):
+	$U6:4 = R14 + 0x20000:4
+	ram[$U6:4] = R12_16
+
+MOVX.A #-1, &0x81f19
+<L0> (entry=0x0):
+	$U4:4 = SR & 0xfffffffe:4
+	SR = $U4:4
+	ram[0x81f19:4] = 0xffffffff:4
+
+MOVX.W &0x15c, R10
+<L0> (entry=0x1000):
+	R10_16 = ram[0x15c:4]
+	$U6:2 = R10_16
+	R10 = 0x0:4
+	R10_16 = $U6:2
+
+MOVX.A 0x47e8(R15), R15
+<L0> (entry=0x0):
+	$U6:4 = R15 + 0x47e8:4
+	R15 = ram[$U6:4]
+
+RPT #0x7 { RLAX.W R10
+<L0> (entry=0x0):
+	CNT = 0x6:1
+<L1>:
+	$U6:1 = R10_16 carry R10_16
+	$U7:4 = SR & 0xfffffffe:4
+	$U8:4 = zext($U6:1)
+	SR = $U7:4 | $U8:4
+	$U9:1 = R10_16 scarry R10_16
+	$U10:4 = SR & 0xfffffeff:4
+	$U11:4 = zext($U9:1)
+	$U11:4 = $U11:4 << 0x8:4
+	SR = $U10:4 | $U11:4
+	R10_16 = R10_16 + R10_16
+	$U12:2 = R10_16
+	R10 = 0x0:4
+	R10_16 = $U12:2
+	$U13:1 = R10_16 s< 0x0:2
+	$U14:4 = SR & 0xfffffffb:4
+	$U15:4 = zext($U13:1)
+	$U15:4 = $U15:4 << 0x2:4
+	SR = $U14:4 | $U15:4
+	$U16:1 = R10_16 == 0x0:2
+	$U17:4 = SR & 0xfffffffd:4
+	$U18:4 = zext($U16:1)
+	$U18:4 = $U18:4 << 0x1:4
+	SR = $U17:4 | $U18:4
+	$U19:1 = CNT == 0x0:1
+	if $U19:1 jump 0x4:8
+<L2>:
+	CNT = CNT - 0x1:1
+	jump <L1>
+
+RPT #0xf { RRCX.W R13
+<L0> (entry=0x0):
+	CNT = 0xe:1
+	$U27:2 = R13_16
+	R13 = 0x0:4
+	R13_16 = $U27:2
+<L1>:
+	$U6:1 = R13_16 != 0x0:2
+	$U7:4 = SR & 0x1:4
+	$U8:1 = $U7:1
+	$U9:1 = $U6:1 && $U8:1
+	$U10:4 = SR & 0xfffffeff:4
+	$U11:4 = zext($U9:1)
+	$U11:4 = $U11:4 << 0x8:4
+	SR = $U10:4 | $U11:4
+	$U14:2 = R13_16 & 0x1:2
+	$U15:4 = SR & 0xfffffffe:4
+	$U16:4 = zext($U14:1)
+	SR = $U15:4 | $U16:4
+	$U17:2 = zext($U8:1)
+	$U18:2 = $U17:2 << 0xf:4
+	$U19:2 = R13_16 >> 0x1:4
+	R13_16 = $U18:2 | $U19:2
+	$U21:4 = SR & 0xfffffffb:4
+	$U22:4 = $U7:4 << 0x2:4
+	SR = $U21:4 | $U22:4
+	$U23:1 = R13_16 == 0x0:2
+	$U24:4 = SR & 0xfffffffd:4
+	$U25:4 = zext($U23:1)
+	$U25:4 = $U25:4 << 0x1:4
+	SR = $U24:4 | $U25:4
+	$U26:1 = CNT == 0x0:1
+	if $U26:1 jump 0x4:8
+<L2>:
+	CNT = CNT - 0x1:1
+	jump <L1>
+
+RPT #0xf { RRUX.W R13
+<L0> (entry=0x0):
+	$U4:4 = SR & 0xfffffffe:4
+	CNT = 0xe:1
+	$U18:2 = R13_16
+	R13 = 0x0:4
+	R13_16 = $U18:2
+	$U6:4 = $U4:4 & 0xfffffeff:4
+	SR = $U6:4
+<L1>:
+	$U8:2 = R13_16 & 0x1:2
+	$U9:4 = SR & 0xfffffffe:4
+	$U10:4 = zext($U8:1)
+	SR = $U9:4 | $U10:4
+	R13_16 = R13_16 >> 0x1:4
+	$U12:4 = SR & 0xfffffffb:4
+	$U14:1 = R13_16 == 0x0:2
+	$U15:4 = $U12:4 & 0xfffffffd:4
+	$U16:4 = zext($U14:1)
+	$U16:4 = $U16:4 << 0x1:4
+	SR = $U15:4 | $U16:4
+	$U17:1 = CNT == 0x0:1
+	if $U17:1 jump 0x4:8
+<L2>:
+	CNT = CNT - 0x1:1
+	jump <L1>
+
+RRUM.W 0x1, R13
+<L0> (entry=0x0):
+	$U2:2 = R13_16 & 0x1:2
+	$U4:2 = R13_16 >> 0x1:1
+	R13 = zext($U4:2)
+	$U5:1 = $U2:2 != 0x0:2
+	$U6:4 = SR & 0xfffffffe:4
+	$U7:4 = zext($U5:1)
+	SR = $U6:4 | $U7:4
+	$U8:4 = SR & 0xfffffeff:4
+	$U10:4 = $U8:4 & 0xfffffffb:4
+	$U12:1 = R13 == 0x0:4
+	$U13:4 = $U10:4 & 0xfffffffd:4
+	$U14:4 = zext($U12:1)
+	$U14:4 = $U14:4 << 0x1:4
+	SR = $U13:4 | $U14:4
+
+MOVA @PC, R12
+<L0> (entry=0x4000):
+	R12 = ram[0x4000:4]
+	$U1:4 = R12 & 0xfffff:4
+	R12 = sext($U1:3)
+
+MOVA @PC+, R12
+<L0> (entry=0x4000):
+	R12 = ram[0x4000:4]
+	$U1:4 = R12 & 0xfffff:4
+	R12 = sext($U1:3)
+

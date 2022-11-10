@@ -1,0 +1,246 @@
+0x000000 [3e 40 00 00]      "MOV.W #0x0,R14"
+    R14 = 0x05_0403_0201 => R14 = 0;
+
+0x001000 [b0 12 00 40]      "CALL #0x4000"
+    SP = 0x2002, mem[0x2000]:WRITE = [00 00] => SP = 0x2000, mem[0x2000] = [04 10], PC = 0x4000;
+
+0x000000 [0c 93]            "TST.W R12"
+    R12 = 0x0, SR = 0x0 => SR = 0x3;
+
+0x000000 [0f 8e]            "SUB.W R14, R15"
+{
+    R14 = 0x5, R15 = 0x6 => R15 = 0x1, SR = 0x1;
+    R14 = 0x5, R15 = 0x5 => R15 = 0x0, SR = 0x3;
+    R14 = 0x6, R15 = 0x5 => R15 = 0xffff, SR = 0x4;
+}
+
+0x000000 [1f 83]            "DEC.W R15"
+{
+    R15 = 0x8, SR = 0x0 => SR = 0x1, R15 = 0x7;
+    R15 = 0x0, SR = 0x0 => SR = 0x4, R15 = 0xffff;
+}
+
+0x000000 [1e 73]            "SUBC.W #1, R14"
+{
+    R14 = 0x5, SR = 0x1 => SR = 0x1, R14 = 0x4;
+    R14 = 0x5, SR = 0x0 => SR = 0x1, R14 = 0x3;
+    R14 = 0x1, SR = 0x0 => SR = 0x4, R14 = 0xffff;
+    R14 = 0x0, SR = 0x1 => SR = 0x4, R14 = 0xffff;
+}
+
+0x000000 [0e 73]            "SBC.W R14"
+{
+    R14 = 0x5, SR = 0x1 => SR = 0x1, R14 = 0x5;
+    R14 = 0x5, SR = 0x0 => SR = 0x1, R14 = 0x4;
+}
+
+0x000000 [00 13]            "RETI";
+
+0x000000 [6c 10]            "RRC.B @R12"
+{
+    R12 = 0x1123, mem[0x1123]:READ_WRITE = [02] => mem[0x1123] = [01], R12 = 0x1123;
+}
+
+// @fixme? This is an invalid instruction, the semantics are correct but the diassembly process
+// thinks it is valid.
+0x000000 [73 97]             "invalid_instruction"; // CMP.B @R7+, R3
+
+// Previously this invalid instruction was not handled correctly, due to incorrect handling of
+// invalid varnodes.
+0x000000 [93 93 27 59]       "invalid_instruction";
+
+0x00ee1e [b2 90 0c 00 d6 02] "CMP.W #0xc, &0x2d6"
+{
+    SR = 0, mem[0x2d6]:READ = [05 00] => SR = 0x4;
+}
+
+// Enter enable interrupts and enter low-power mode level 3
+0x00000 [32 d0 d8 00]       "BIS.W #0xd8,SR";
+
+0x09a88 {
+    [1c 42 00 1c]           "MOV.W &0x1c00, R12"
+    [1d 4c 02 00]           "MOV.W 0x2(R12), R13"
+    [0d 93]                 "TST.W R13"
+    [02 24]                 "JEQ 0x9a98"
+};
+
+///
+/// 20-bit instruction handling (MSP430X)
+///
+
+0x000000 [81 00 00 44]      "MOVA #0x4400,SP"
+    SP = 0xf_ffff => SP = 0x00_4400;
+
+0x004000 [b1 13 92 1e]      "CALLA #0x11e92"
+{
+    SP = 0x2004, mem[0x2000]:WRITE = [aa aa aa aa] =>
+    SP = 0x2000, mem[0x2000]       = [04 40 00 00], PC = 0x11e92;
+}
+
+0x004000 [80 13 ec 24]       "CALLA &0x24ec"
+    SP = 0x8004, mem[0x8000]:WRITE = [aa aa aa aa], mem[0x24ec]:READ = [f2 12 01 00] =>
+    SP = 0x8000, mem[0x8000]       = [04 40 00 00], PC = 0x112f2;
+
+0x000000 [10 01]            "RETA @SP+"
+{
+    SP = 0x2000, mem[0x2000]:READ = [04 40 01 aa] =>
+    SP = 0x2004, PC = 0x14004;
+}
+
+0x0114f0 [0c 3c]            "JMP 0x1150a"
+{
+    PC = 0x0114f0 => PC = 0x01150a;
+}
+
+0x000000 [1a 15]            "PUSHM.W 0x2,R10"
+{
+    R9 = 0x0909, R10 = 0x1010, SP = 0x2004, mem[0x2000]:WRITE = [00 00 00 00] =>
+                               SP = 0x2000, mem[0x2000]       = [09 09 10 10];
+}
+0x000000 [5a 17]           "POPM.W 0x6,R15"
+{
+    SP = 0x2000, mem[0x2000]:READ = [10 10 11 11 12 12 13 13 14 14 15 15] =>
+    SP = 0x200c, R10 = 0x1010, R11 = 0x1111, R12 = 0x1212, R13 = 0x1313, R14 = 0x1414, R15 = 0x1515;
+}
+
+// Decoding this instruction requires handling subtables that consume zero tokens without using
+// an `...` expression.
+0x000000 [0a 16]            "POPM.A 0x1, R10"
+    SP = 0x2000, R10 = 0x0, mem[0x2000]:READ = [11 22 ff aa] => R10 = 0xf2211, SP = 0x2004;
+
+0x000000 [0c 09]            "MOVA @R9, R12"
+    R9 = 0x1_0000, mem[0x1_0000]:READ = [01 02] => R12 = 0x0201;
+
+
+0x000000 [a9 00 04 00]      "ADDA #0x4, R9"
+    R9 = 0x1_0000 => R9 = 0x1_0004;
+
+
+0x000000 [ef 0e]             "ADDA R14, R15"
+{
+    R14 = 0x1_0000, R15 = 0x1_0000 => R15 = 0x2_0000;
+    R14 = 0x1_0000, R15 = 0xf_0001 => R15 = 0x0_0001, SR = 0x1;
+}
+
+0x000000 [d3 05]             "CMPA R5,R3"
+{
+    R5 = 0xf_0000, R3 = 0x0_0000 => SR = 0x0;
+    R5 = 0xf_0000, R3 = 0xf_0000 => SR = 0x3;
+}
+
+0x000000 [c1 02]             "MOVA SR, SP"
+    SP = 0x2400, SR = 0x4 => SP = 0x4, SR = 0x4;
+
+// ADDA SR, SP
+0x000000 [e1 02]             "ADDA #4, SP"
+    SP = 0x2400, SR = 0x1 => SP = 0x2404, SR = 0x0;
+
+// SUBA SR, SP
+0x000000 [f1 02]             "SUBA #4, SP"
+    SP = 0x2404, SR = 0x1 => SP = 0x2400, SR = 0x1;
+
+// MOVA R3, SP
+0x000000 [c1 03]             "CLRA SP"
+    SP = 0x2400 => SP = 0x0;
+
+// ADDA R3, SP
+0x000000 [e1 03]             "INCDA SP"
+    SP = 0x2400 => SP = 0x2402, SR = 0x0;
+
+// SUBA R3, SP
+0x000000 [f1 03]             "DECDA SP"
+{
+    SP = 0x2402 => SP = 0x2400, SR = 0x1;
+    // SP = 0x1 => SP = 0xf_ffff, SR = 0x4; // @fixme: SXT is broken for 20-bit values
+}
+
+// CMPA R3, SP  -- R3 treated as zero
+0x000000 [d1 03]             "TSTA SP"
+{
+    SP = 0x0 => SR = 0x3;
+    SP = 0x1 => SR = 0x1;
+}
+
+
+//
+// Index handling
+//
+
+0x004000 [d2 4c d5 e0 63 20]         "MOV.B -0x1f2b(R12),&0x2063"
+{
+    R12 = 0x2f2b, mem[0x1000]:READ = [88], mem[0x2063]:WRITE = [00] => mem[0x2063] = [88];
+
+    // If base address is in low memory, then address is computed using 16-bit addition
+    R12 = 0x000c, mem[0xe0e1]:READ = [99], mem[0x2063]:WRITE = [00] => mem[0x2063] = [99];
+
+    // If base address is in high memory, then addition is treated as 20-bit
+    R12 = 0x12f2b, mem[0x11000]:READ = [aa], mem[0x2063]:WRITE = [00] => mem[0x2063] = [aa];
+}
+
+0x004000 [8d 93 3e 89]               "TST.W -0x76c2(R13)"
+{
+    R13 = 0x86c2, mem[0x1000]:READ = [00 00 00 00] => SR = 0x3;
+    R13 = 0x86c2, mem[0x1000]:READ = [01 00 00 00] => SR = 0x1;
+
+    // If base address is in low memory, then address is computed using 16-bit addition
+    R13 = 0x0, mem[0x893e]:READ = [00 00 00 00] => SR = 0x3;
+    R13 = 0x0, mem[0x893e]:READ = [01 00 00 00] => SR = 0x1;
+}
+
+
+// Ensure that const propagation can avoid overhead for constant indices
+0x004000 {
+    [4d 43]                         "MOV.B #0,R13"
+    [8d 93 00 f0]                   "TST.W -0x1000(R13)"
+}
+{
+    mem[0xf000]:READ = [00 00 00 00] => SR = 0x3;
+    mem[0xf000]:READ = [01 00 00 00] => SR = 0x1;
+}
+
+//
+// MSP430X extended instructions
+//
+
+// Ensure that large offsets can be used for index instructions.
+0x008036 [42 18 8e 4c 00 00]        "MOVX.W R12, 0x20000(R14)"
+    R12 = 0x1234, R14 = 0xfffe_1000, mem[0x1000]:WRITE = [00 00] => mem[0x1000] = [34 12];
+
+
+// This instruction was previously broken due to an issue with constructor ordering.
+0x000000 [18 1f f2 43 19 1f]        "MOVX.A #-1, &0x81f19";
+
+0x001000 [40 18 1a 42 5c 01]        "MOVX.W &0x15c, R10"
+    R10 = 0xf_ffff, mem[0x015c]:READ = [01 02] => R10 = 0x0201;
+
+0x000000 [00 18 5f 4f e8 47]        "MOVX.A 0x47e8(R15), R15"
+    R15 = 0x818, mem[0x5000]:READ = [00 00 01 00] => R15 = 0x1_0000;
+
+0x000000 [46 18 0a 5a]              "RPT #0x7 { RLAX.W R10"
+    R10 = 0x1 => R10 = 0x80;
+
+// if ZC = 0: RRCX.W, if ZC = 1: RRUX.W
+0x000000 [4e 18 0d 10]              "RPT #0xf { RRCX.W R13"
+{
+    SR = 0x0, R13 = 0xf_ffff => R13 = 0xfffd;
+    SR = 0x1, R13 = 0xf_ffff => R13 = 0xffff;
+}
+0x000000 [4e 19 0d 10]              "RPT #0xf { RRUX.W R13"
+{
+    SR = 0x0, R13 = 0xf_ffff => R13 = 0x1;
+    SR = 0x1, R13 = 0xf_ffff => R13 = 0x1;
+}
+
+0x00000 [5d 03]                     "RRUM.W 0x1, R13"
+    R13 = 0xc800 => R13 = 0x6400;
+
+
+
+//
+// Unusual instructions
+//
+
+// @todo: verify whether these are valid instructions
+0x004000 [0c 00 00 00 00]=2        "MOVA @PC, R12"
+    R12 = 0 => R12 = 0x0000_000c;
+0x004000 [1c 00]                   "MOVA @PC+, R12";
