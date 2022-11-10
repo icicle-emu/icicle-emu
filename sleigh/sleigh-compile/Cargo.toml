@@ -1,0 +1,9 @@
+[package]
+name = "sleigh-compile"
+version = "0.3.0"
+edition = "2021"
+
+[dependencies]
+sleigh-parse = { path = "../sleigh-parse" }
+sleigh-runtime = { path = "../sleigh-runtime" }
+pcode = { path = "../pcode" }

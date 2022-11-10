@@ -1,0 +1,799 @@
+// Basic zeroing test
+0x000000 [48 31 ed]                         "XOR RBP,RBP"
+    RBP = 0x1234, ZF = 0 => RBP = 0x0, ZF = 1;
+
+// Ensure that zero extension is correct
+0x000000 [31 c0]                            "XOR EAX,EAX"
+    RAX = 0xffff_ffff_ffff_ffff, ZF = 0 => RAX = 0x0, ZF = 1;
+0x000003 [ba 30 01 00 00]                   "MOV EDX,0x130"         // zxt on mov
+    RDX = 0xffff_ffff_ffff_ffff => RDX = 0x130;
+0x000041 [41 b8 ff ff ff 6f]                "MOV R8D,0x6fffffff"    // zxt on rex register
+    R8D = 0xffff_ffff_ffff_ffff => R8D = 0x6fffffff;
+0x000008 [31 f6]                            "XOR ESI,ESI"           // zxt on arithmetic op
+    RSI = 0xffff_ffff_ffff_ffff => RSI = 0x0;
+0x000060 [f7 d8]                            "NEG EAX"               // zxt on negation
+    RAX = 0xffff_ffff_0000_0001 => RAX = 0x0000_0000_ffff_ffff;
+0x000091 [8c d1]                            "MOV CX,SS"             // zxt for 16-bit segment registers
+    RCX = 0xffff_ffff_ffff_ffff, SS = 0x12 => RCX = 0x12;
+0x00001d [66 0f 6e c6]                      "MOVD XMM0, ESI"        // zxt on mov to 64-bit registers
+    XMM0 = 0x7777_6666_5555_4444_3333_2222_1111_0000, ESI  = 0x1234 => XMM0 = 0x1234;
+0x012012 [0f 7e ce]                         "MOVD ESI, MM1"         // zxt with float registers
+    MM1 = 0, ESI = 0x12345 => ESI = 0;
+0x207649 [f2 0f 2c c0]                      "CVTTSD2SI EAX, XMM0"   // zxt with float to int conversion
+    RAX = 0xffff_ffff_ffff_ffff, XMM0 = 0x410e848000000000 => RAX = 250000;
+0x100000 [8b 04 25 00 00 00 00]             "MOV EAX,dword ptr [0x0]" // zxt on memory operand
+    RAX = 0xffff_ffff_ffff_ffff, mem[0x0]:READ = [03 02 01 00] => RAX = 0x00010203;
+0x000000 [66 44 0f c5 e9 01]                "PEXTRW R13D, XMM1, 0x1" // zxt on SSE instruction
+    R13 = 0xffff_ffff_ffff_ffff, XMM1 = 0xaaaa_bbbb => R13 = 0xaaaa;
+
+0x000000 [0f 05]                            "SYSCALL";
+0x000011 [0f a2]                            "CPUID"
+{
+    // CPUID Basic Info:
+    RAX = 0x0 => RAX = 0x0, RBX = 0x756e6547, RDX = 0x49656e69, RCX = 0x6c65746e;
+}
+0x00001a [48 f7 e3]                         "MUL RBX"
+{
+    RAX = 0x4, RBX = 0x10 => RAX = 0x40, RDX = 0;
+}
+
+0x000000 [41 83 f8 fc]                      "CMP R8D,-0x4"
+{
+    R8D = 0x0 => ZF = 0;
+    R8D = -0x4 => ZF = 1;
+    R8D = 0x4 => ZF = 0;
+}
+
+// Test correct sign-extension
+0x000029 [48 b9 ab aa aa aa aa aa aa aa]    "MOV RCX,-0x5555555555555555"
+    RCX = 0x0 => RCX = -0x5555555555555555;
+0x012000 [4f 1d ef 6b f2 a1]                "SBB RAX,-0x5e0d9411"
+    RAX = 0x0 => RAX = 0x5e0d9411;
+
+0x000033 [25 80 80 80 80]                   "AND EAX,0x80808080"
+    EAX = 0x826e_e6a5 => EAX = 0x80008080, ZF = 0, SF = 1;
+
+0x000038 [48 c1 e2 20]                      "SHL RDX,0x20"
+    RDX = 0x0000_0000_ffff => RDX = 0xffff_0000_0000;
+0x000000 [d3 ea]                            "SHR EDX,CL"
+{
+    RDX = 0x0000_ffff, CL = 0x8 => RDX = 0xff, CF = 1, PF = 1;
+    RDX = 0xf000_0000, CL = 0x8 => RDX = 0x00f0_0000;
+}
+0x000000 [d1 f9]                            "SAR ECX,0x1"
+    RCX = 0xf000_0000 => RCX = 0xf800_0000;
+
+
+0x00003c [f3 65 36 28 d5]                   "SUB CH,DL"
+{
+    CH = 0, DL = 0 => CH = 0, CF = 0, ZF = 1;
+    CH = 0, DL = 1 => CH = 0xff, CF = 1, ZF = 0;
+    CH = 1, DL = 0 => CH = 1, CF = 0, ZF = 0;
+}
+0x000047 [48 3d 00 f0 ff ff]                "CMP RAX,-0x1000"
+{
+    RAX = 0x1000                => CF = 1, PF = 1, ZF = 0, SF = 0, OF = 0;
+    RAX = -0x1000               => CF = 0, PF = 1, ZF = 1, SF = 0, OF = 0;
+    RAX = 0x7fff_ffff_ffff_ffff => CF = 1, PF = 1, ZF = 0, SF = 1, OF = 1;
+    RAX = -0x1                  => CF = 0, PF = 1, ZF = 0, SF = 0, OF = 0;
+    RAX = -0x1001               => CF = 1, PF = 1, ZF = 0, SF = 1, OF = 0;
+}
+0x000050 [64 48 03 04 25 00 00 00 00]       "ADD RAX,qword ptr FS:[0x0]"
+    FS_OFFSET = 0x10000, mem[0x10000]:READ = [07 06 05 04 03 02 01 00] => RAX = 0x0001020304050607;
+
+0x000062 [48 f7 ea]                         "IMUL RDX"
+    RAX = 2, RDX = 2 => RAX = 4, RDX = 0;
+0x000087 [0f 74 d6]                         "PCMPEQB MM2, MM6"
+    MM2 = 0x0100_2201, MM6 = 0x2200 => MM2 = 0xffff_ffff_00ff_ff00;
+0x000013 [66 0f 74 e0]                      "PCMPEQB XMM4, XMM0"
+    XMM4 = 0x0100_2201, XMM0 = 0x1111_0000_0000_0000_2200 => XMM4 = 0xffff_ffff_ffff_0000_ffff_ffff_00ff_ff00;
+
+0x000000 [0f 44 c3]                         "CMOVZ EAX,EBX"
+{
+    EAX = 0x10, EBX = 0x20, ZF = 1  => EAX = 0x20;
+    EAX = 0x10, EBX = 0x20, ZF = 0  => EAX = 0x10;
+}
+0x00008a [0f 44 8e c2 28 46 9e]             "CMOVZ ECX,dword ptr [RSI + -0x61b9d73e]"
+{
+    ECX = 0, RSI = 0x62b9d73e, mem[0x1000000]:READ = [01 00 00 00], ZF = 1 => ECX = 1;
+    ECX = 0, RSI = 0x62b9d73e, mem[0x1000000]:READ = [01 00 00 00], ZF = 0 => ECX = 0;
+}
+
+0x012000 [d1 e0]                            "SHL EAX,0x1"
+    RAX = 0x1234_08c6_ab49 => RAX = 0x118d_5692;
+
+0x00006d [90]                               "NOP";
+// Using a REX prefix on a NOP operation (i.e. XCHG EAX,EAX) should not be decoded as a nop
+0x000070 [43 90]                            "XCHG EAX,R8D"
+    EAX = 0x1234, R8D = 0x4321  => EAX = 0x4321, R8D = 0x1234;
+// If the REX prefix is does nothing, it should still be treated as a NOP
+@skip // (@fixme: needs sleigh spec fix)
+0x000070 [40 90]                            "NOP";
+
+// (rex.rxb repnz)  mov ebx, edi
+// REX prefix should be ignored because it is out of order
+@skip // (@fixme: needs sleigh spec fix)
+0x00006e [47 f2 8b df]                      "MOV EBX,EDI"
+    EBX = 0xaa, EDI = 0x1234 => EBX = 0x1234;
+
+// When there are multiple REX prefixes, the last should be used
+@skip // (@fixme: needs sleigh spec fix)
+0x010000 [42 44 bc 78 56 34 12]             "MOV ESP,0x12345678"
+    ESP = 0x0 => ESP = 0x12345678;
+
+// `ECX` is represented with a non-canonical (but valid) encoding
+0x010000 [f7 c9 61 85 d0 62]                "TEST ECX, 0x62d08561"
+    ECX = 0x9d2f7a9e, ZF = 0 => ZF = 1;
+
+// In 64-bit mode `data16` prefix is effectively ignored
+0x010000 [66 7d 10]                         "JGE 0x10013"
+{
+    SF = 1, OF = 1, RIP = 0x010000 => RIP = 0x10013;
+    SF = 0, OF = 1, RIP = 0x010000 => RIP = 0x10003;
+    SF = 1, OF = 0, RIP = 0x010000 => RIP = 0x10003;
+}
+0x010000 [66 7e 01]                         "JLE 0x10004"
+{
+    ZF = 1, RIP = 0x010000 => RIP = 0x10004;
+    ZF = 0, RIP = 0x010000 => RIP = 0x10003;
+}
+0x010000 [7e 01]                            "JLE 0x10003"
+{
+    ZF = 1, RIP = 0x010000 => RIP = 0x10003;
+    ZF = 0, RIP = 0x010000 => RIP = 0x10002;
+}
+
+0xa01093 [e8 08 0e 00 00]                   "CALL 0xa01ea0"
+{
+    RIP = 0xa01093, RSP = 0x10008, mem[0x10000]:WRITE = [00 00 00 00 00 00 00 00] =>
+    RIP = 0xa01ea0, RSP = 0x10000, mem[0x10000]       = [98 10 a0 00 00 00 00 00];
+}
+
+// A branch to the same address as a fallthrough has some specialized behaviour in the emulator.
+0x011000 [7a 00] "JP 0x11002"
+{
+    PF = 0 => RIP = 0x11002;
+    PF = 1 => RIP = 0x11002;
+}
+
+0x011000 [7c 00] "JL 0x11002"
+{
+    SF = 0 => RIP = 0x11002;
+    SF = 1 => RIP = 0x11002;
+}
+
+// Invalid instruction that QEMU thinks is valid
+0x010000 [8f 8c 91 00 00 00 00]             "invalid_instruction";
+
+0x012000 [0f d7 ea]                         "PMOVMSKB EBP,MM2"
+    RBP = 0xffff_ffff_ffff_ffff, MM2 = 0x8000_0080_8000_0080 => RBP = 0x99;
+0x012000 [66 0f d7 ea]                      "PMOVMSKB EBP, XMM2"
+    RBP = 0xffff_ffff_ffff_ffff, XMM2 = 0x8000_0080_8000_0080_8000_0080_8000_0080 => RBP = 0x9999;
+0x012000 [46 0f d7 ea]                      "PMOVMSKB R13D, MM2"
+    R13D = 0xffff_ffff_ffff_ffff, MM2 = 0x8000_0080_8000_0080 => R13D = 0x99;
+
+// Encoding must be "[prefix]:0000 1111:1101 0111:11 r32/64 xmm/mmreg"
+0x012000 [0f d7 6a]                         "invalid_instruction";
+0x012000 [0f d7 aa]                         "invalid_instruction";
+0x012000 [66 0f d7 aa]                      "invalid_instruction";
+0x012000 [46 0f d7 aa]                      "invalid_instruction";
+
+// In 64-bit mode the 0x82 alias is invalid (in legacy modes it maps to 0x80)
+0x012000 [82 c8 d4]                         "invalid_instruction";
+0x012000 [82 e1 83]                         "invalid_instruction";
+0x012000 [82 dc d9]                         "invalid_instruction";
+0x012000 [82 64 9a e0 3e]                   "invalid_instruction";
+0x012000 [82 7e da db]                      "invalid_instruction";
+
+// Can read but not write to CS register with MOV
+@skip
+0x012000 [8e 49 00]                         "invalid_instruction"; // Write to CS (invalid)
+0x012000 [8c 49 00]                         "MOV word ptr [RCX],CS"
+    RCX = 0x1000, mem[0x1000]:READ_WRITE = [01 02], CS = 0x8899 => mem[0x1000] = [99 88];
+
+// JMPF is invalid in 64-bit mode
+0x012000 [ea e9 13 e5 73 b1 1b]             "invalid_instruction";
+0x012000 [ea 01 02 03 04 11 22]             "invalid_instruction";
+
+// Invalid in 64-bit mode even when using data32 prefix
+0x000000 [67 37]                            "invalid_instruction"; // AAA
+0x000000 [67 d5 00]                         "invalid_instruction"; // AAD
+0x000000 [67 d4 00]                         "invalid_instruction"; // AAM
+0x000000 [67 3f]                            "invalid_instruction"; // AAS
+0x000000 [67 62 1c 80]                      "invalid_instruction"; // BOUND EBX,dword ptr [EAX + EAX*0x4]
+0x000000 [67 2f]                            "invalid_instruction"; // DAA
+0x000000 [67 2f]                            "invalid_instruction"; // DAS
+0x000000 [67 ce]                            "invalid_instruction"; // INTO
+0x000000 [67 d6]                            "invalid_instruction"; // SALC
+
+// MOVSXD overlaps with "ARPL DX,DI" (which is invalid in 64-bit mode)
+0x000000 [67 63 fa]                         "MOVSXD EDI,EDX"
+    RDI = 0xffff_ffff_ffff_ffff, EDX = 0xffff_ffff => RDI = 0xffff_ffff;
+0x000000 [63 fa]                            "MOVSXD EDI,EDX"
+    RDI = 0xffff_ffff_ffff_ffff, EDX = 0xffff_ffff => RDI = 0xffff_ffff;
+0x000000 [63 10]                            "MOVSXD EDX,dword ptr [RAX]"
+{
+    RAX = 0x10000, mem[0x10000]:READ = [00 01 02 03] => EDX = 0x03020100;
+}
+
+// Invalid source operand encoding encoding
+0x000000 [8c 35 00 00 00 00]                "invalid_instruction";
+
+// These were previous broken because sleigh attachments were computed incorrectly
+0x012000 [0f bb 71 25]                      "BTC [RCX + 0x25],ESI"
+{
+    RCX = 0xfdb, ESI = 0x0000_0016, mem[0x1000]:READ_WRITE = [11 11 11 11] => CF = 0, mem[0x1000] = [11 11 51 11];
+    RCX = 0xfdb, ESI = 0x0000_0016, mem[0x1000]:READ_WRITE = [11 11 51 11] => CF = 1, mem[0x1000] = [11 11 11 11];
+}
+0x012000 [0f ba f3 06]                      "BTR EBX,0x6"
+{
+    EBX = 0xab0b_1111 => CF = 0;
+    EBX = 0xab0b_1151 => CF = 1;
+}
+
+
+// Memory offset should be sign-extended to 64-bits
+0x652c40 [64 c6 04 25 48 fe ff ff 01]       "MOV byte ptr FS:[-0x1b8],0x1"
+    FS_OFFSET = 0x101b8, mem[0x10000]:READ_WRITE = [aa] => mem[0x10000] = [01];
+
+// Memory offset should be zero-extended to 64-bits due to addr32 prefix
+0x660000 [67 8b 04 25 ff ff ff ff]          "MOV EAX,dword ptr [0xffffffff]";
+
+// PSHUF should behave correctly when source and destination are the same register
+0x652b47 [66 0f 70 c0 4e]                   "PSHUFD XMM0, XMM0, 0x4e"
+{
+    XMM0 = 0x00010203_04050607_08091011_12131415 =>
+    XMM0 = 0x08091011_12131415_00010203_04050607; // 0x4e = 0b01_00_11_10
+}
+0x5e9227 [f2 0f 70 c0 1b]                   "PSHUFLW XMM0, XMM0, 0x1b"
+{
+    XMM0 = 0x0001_0203_0405_0607 =>
+    XMM0 = 0x0607_0405_0203_0001; // 0x1b = 0b00_01_10_11
+}
+
+// Move with displacement of zero
+0x000000 [48 89 54 24 00]                   "MOV qword ptr [RSP + 0x0], RDX"
+    RSP = 0x1000, RDX = 0xffff_ffff_ffff_ffff, mem[0x1000]:WRITE = [00 00 00 00 00 00 00 00] =>
+    mem[0x1000] = [ff ff ff ff ff ff ff ff];
+
+// Load access rights byte
+0x000000 [0f 02 ca]                          "LAR ECX, EDX";
+
+// 3DNow! suffixed instructions
+0x000000 [0f 0f 40 00 94]                    "PFMIN MM0, qword ptr [RAX]";
+0x000000 [0f 0f 40 00 93]                    "invalid_instruction"; // Bad 3DNow suffix suffix
+
+// Unpack and interleave 32-bit integers from the high half of a and b, and store the results in dst.
+// The sleigh specification for this instruction requires a temporary to compute the source value
+0x000000 [0f 6a 4e 00]                       "PUNPCKHDQ MM1, qword ptr [RSI]"
+{
+    MM1 = 0x7766554433221100, RSI = 0x10000, mem[0x10000]:READ = [00 01 02 03 04 05 06 07] =>
+    MM1 = 0x0706050477665544;
+}
+
+0x001000 [0f bc c2]                         "BSF EAX,EDX"
+    EDX = 0x1000 => EAX = 12;
+0x001000 [0f bd 25 f9 ff 0f 00]             "BSR ESP,dword ptr [0x101000]"
+    mem[0x101000]:READ = [12 34 10 00] => ESP = 20;
+0x120000 [d8 2d fa 10 0 00]                 "FSUBR dword ptr [0x121100]"
+    // 0xc1a00000 = -20.0_f32, 0xc034000000000000 = -20.0_f64
+    mem[0x121100]:READ = [00 00 a0 c1], ST0 = 0xc034000000000000 => ST0 = 0x0;
+
+
+// SBB AL, imm with extra byte at the end appears to be broken in unicorn
+0x120000 [1c ce 00]=2                       "SBB AL,0xce"
+    RAX = 0x10ce => RAX = 0x1000;
+0x120000 [1c ce af]=2                       "SBB AL,0xce"; // Unicorn thinks is length = 1
+
+0x120000 [19 c0]                            "SBB EAX,EAX"
+    RAX = 0x000000002239b80e, CF = 1 => RAX =  0x00000000ffffffff;
+0x120000 [4f 1d 00 00 00 80]                "SBB RAX,-0x80000000"
+    RAX = 0xffffffff80000001, CF = 1 => RAX = 0x0, ZF = 1;
+
+0x000000 [66 0f c6 c3 02]                   "SHUFPD XMM0, XMM3, 0x2"
+{
+    XMM0 = 0x0001020304050607_0809101112131415,
+    XMM3 = 0x1617181920212223_2425262728293031 =>
+    XMM0 = 0x1617181920212223_0809101112131415; // 0x2 = 0b10
+}
+
+0x61a9c4 [0f b7 1d e5 cd 20 00]              "MOVZX EBX,word ptr [0x8277b0]"
+{
+    EBX = 0, mem[0x8277b0]:READ_WRITE = [02 01] => RBX = 0x0102;
+}
+0x4003de [0f b6 06]                          "MOVZX EAX,byte ptr [RSI]"
+{
+    EAX = 0xffffffff, RSI = 0x10000, mem[0x10000]:READ = [01 02 03 04] =>
+    RAX = 0x01;
+}
+
+///
+/// Misc arithmetic
+///
+
+0x000000 [48 8d 40 10]                       "LEA RAX,[RAX + 0x10]"
+    RAX = 0x10 => RAX = 0x20;
+
+0x000000 [4d 01 c1]                          "ADD R9, R8"
+{
+    R8 = 0xfefefefefefefeff, R9 = 0x68, CF = 1 => R9 = 0xfefefefefefeff67, CF = 0, OF = 0;
+    R9 = 0xc868d5ccec5dc1f9, R8 = 0x9fb633faf57bc4b1 => R9 = 0x681f09c7e1d986aa, CF = 1, OF = 1;
+}
+
+// Add where destination address uses the same register as the source
+0x000000 [00 00]                             "ADD byte ptr [RAX],AL"
+    RAX = 0x10001, mem[0x10001]:READ_WRITE = [01] => mem[0x10001] = [02];
+
+0x000000 [48 d3 c0]                          "ROL RAX,CL"
+{
+    RAX = 0xfffffffffffffffe, CL = 0 => RAX = 0xfffffffffffffffe;
+    RAX = 0xfffffffffffffffe, CL = 1 => RAX = 0xfffffffffffffffd;
+    RAX = 0x0123456789abcdef, CL = 4 => RAX = 0x123456789abcdef0;
+}
+
+// MUL with redundant prefix (this pattern appears in OpenSSL for padding)
+0x000000 [67 49 f7 e6]                       "MUL R14"
+{
+    RAX = 0x4, R14 = 0x10, RDX = 1 => RAX = 0x40, RDX = 0;
+}
+
+// DIVs are implemented using 128-bit operations
+0x000000 [48 f7 f1]                          "DIV RCX"
+{
+    RAX = 0x0000009876543210, RDX = 0x0000009876543210,  RCX = 0x0000001234567890
+    => RAX = 0x60000004f1a0000b, RDX = 0x54c9d03e0;
+}
+
+
+///
+/// Operand size override tests
+///
+
+0x000000 [66 01 d8]                         "ADD AX, BX"
+    RAX = 0xffff_0000_0000_0001, RBX = 0x1 => RAX = 0xffff_0000_0000_0002;
+
+0x000000 [66 29 d8]                         "SUB AX, BX"
+    RAX = 0xffff_0000_0000_0001, RBX = 0x1 => RAX = 0xffff_0000_0000_0000;
+
+0x000000 [66 39 d8]                         "CMP AX, BX"
+{
+    CF = 1, OF = 1, SF = 1, ZF = 0, RAX = 0xffff_0000_0000_0001, RBX = 0x1 =>
+    CF = 0, OF = 0, SF = 0, ZF = 1;
+
+    CF = 1, OF = 0, SF = 0, ZF = 1, AX = 0x7fff, RBX = -0x1 =>
+    CF = 1, OF = 1, SF = 1, ZF = 0;
+}
+
+0x000000 [66 f7 e0]                         "MUL AX"
+    RAX = 0xffff_0000_0000_0002 => RAX = 0xffff_0000_0000_0004;
+
+0x000000 [66 35 ec 23]                      "XOR AX,0x23ec"
+    RAX = 0xffff_0000_0000_0000 => RAX = 0xffff_0000_0000_23ec;
+
+// The second address size prefix should override the first prefix
+@skip // (@fixme: needs sleigh spec fix)
+0x000000 [66 66 35 ec 23]                   "XOR AX,0x23ec"
+    RAX = 0xffff_0000_0000_0000 => RAX = 0xffff_0000_0000_23ec;
+
+0x000021 [66 83 3d 00 00 10 00 40]          "CMP word ptr [0x100029],0x40"
+    mem[0x100029]:READ = [40 00], ZF = 0 => ZF = 1;
+
+
+///
+/// Various SSE/AVX tests
+///
+
+// Naive const propagation converts this to `XMM0 = 0` however constants are restricted to a maximum
+// of 64-bits
+0x000000 [66 0f ef c0]                      "PXOR XMM0,XMM0"
+    XMM0 = 0x0001020304050607_0809101112131415 => XMM0 = 0;
+
+
+0x000000 [66 0f f8 d0]                      "PSUBB XMM2, XMM0"
+{
+    XMM0 = 0x6c2f343662696c2f0000000000000001, XMM2 = 0x0000000000000000ffffffffffffff00 =>
+    XMM2 = 0x94d1ccca9e9794d1ffffffffffffffff;
+}
+
+0x000000 [0f 28 05 f9 10 00 00]             "MOVAPS XMM0, xmmword ptr [0x1100]"
+{
+    XMM0 = 0x0, mem[0x1100]:READ = [15 14 13 12 11 10 09 08 07 06 05 04 03 02 01 00] =>
+    XMM0 = 0x0001020304050607_0809101112131415;
+}
+
+0x000000  [0f 29 05 f9 10 00 00]            "MOVAPS xmmword ptr [0x1100],XMM0"
+{
+    XMM0 = 0x0001020304050607_0809101112131415,
+    mem[0x1100]:WRITE = [00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00] =>
+    mem[0x1100]       = [15 14 13 12 11 10 09 08 07 06 05 04 03 02 01 00];
+}
+
+0x000000 [66 0f 7e 9c 24 00 01 00 00]       "MOVD dword ptr [RSP + 0x100], XMM3"
+{
+    RSP = 0x1000, XMM3 = 0x00010203,
+    mem[0x1100]:WRITE = [00 00 00 00] =>
+    mem[0x1100]       = [03 02 01 00];
+}
+
+0x000000 [f3 0f 5a d0]                      "CVTSS2SD XMM2,XMM0"
+{
+           // 1234.5678_f32     // 1234.5678_f64
+    XMM0 = 0x449a522b => XMM2 = 0x40934a4560000000;
+}
+
+0x000000 [66 41 0f c4 c5 01]                "PINSRW XMM0, R13D, 0x1"
+{
+    R13 = 0x1234, XMM0 = 0x00000006 => XMM0 = 0x12340006;
+}
+
+0x000000 [66 0f 2e c1]                      "UCOMISD XMM0, XMM1"
+{
+    // 0x3ff0000000000000 = 1.0_f64
+    XMM0 = 0, XMM1 = 0x3ff0000000000000, CF = 0 => CF = 1;
+}
+
+0x000000 [66 0f 6f 4c 24 10]                "MOVDQA XMM1,xmmword ptr [RSP + 0x10]"
+{
+    XMM1 = 0, RSP = 0x1000, mem[0x1010]:READ = [15 14 13 12 11 10 09 08 07 06 05 04 03 02 01 00] =>
+    XMM1 = 0x0001020304050607_0809101112131415;
+}
+
+0x000000 [66 0f 50 d8]                      "MOVMSKPD EBX,XMM0"
+{
+    XMM0 = 0x0000000000000000_0000000000000000 => EBX = 0x0;
+    XMM0 = 0x0000000000000000_8000000000000000 => EBX = 0x1;
+    XMM0 = 0x8000000000000000_0000000000000000 => EBX = 0x2;
+    XMM0 = 0x8000000000000000_8000000000000000, RBX = 0xaaaaaaaaaaaaaaaa => RBX = 0x3;
+}
+
+0x000000 [66 0f f5 c1]                      "PMADDWD XMM0, XMM1"
+{
+    XMM0 = 0x0002_0002_0002_0002_0002_0002_0002_0002,
+    XMM1 = 0x0002_0003_0004_0005_0006_0007_0008_0009
+    =>
+    XMM0 = 0x0000000a_00000012_0000001a_00000022;
+}
+
+0x000000 [66 0f 6b c1]                      "PACKSSDW XMM0, XMM1"
+{
+    XMM0 = 0x00000004_00000003_00000002_00000001,
+    XMM1 = 0xfff80000_00080000_fffffffa_fffffffb
+    =>
+    XMM0 = 0x8000_7fff_fffa_fffb_0004_0003_0002_0001;
+}
+
+0x000000 [66 0f 63 c9]                      "PACKSSWB XMM1, XMM1"
+{
+    XMM1 = 0x7f7f_007f_0000_0300_0000_0000_0003_0000 =>
+    XMM1 = 0x7f_7f_00_7f_00_00_03_00_7f_7f_00_7f_00_00_03_00;
+}
+
+0x000000 [66 0f 67 db]                      "PACKUSWB XMM3, XMM3"
+{
+    XMM3 = 0x0087_0087_0087_0087_0100_00fa_00ff_00e0 =>
+    XMM3 = 0x87_87_87_87_ff_fa_ff_e0_87_87_87_87_ff_fa_ff_e0;
+}
+
+0x00000 [66 0f 73 f8 05]                    "PSLLDQ XMM0, 0x5"
+{
+    XMM0 = 0x0000_0000_0000_0000_ffff_0000_0000_0000 =>
+    XMM0 = 0x0000_00ff_ff00_0000_0000_0000_0000_0000;
+}
+
+0x000000 [66 0f 71 f0 08]                   "PSLLW XMM0,0x8"
+{
+    XMM0 = 0x0001_0203_0405_0607_0809_1011_1213_1415 =>
+    XMM0 = 0x0100_0300_0500_0700_0900_1100_1300_1500;
+}
+
+0x000000 [66 0f e5 c1]                      "PMULHW XMM0,XMM1"
+{
+    XMM0 = 0x0004_0004_3000_3000_2000_2000_0001_0001,
+    XMM1 = 0xffff_0000_fff8_0008_fffa_0006_fffb_0005
+    =>
+    XMM0 = 0xffff_0000_fffe_0001_ffff_0000_ffff_0000;
+}
+
+0x000000 [66 0f e1 c1]                      "PSRAW XMM0,XMM1"
+{
+    XMM0 = 0x0001_0002_0008_0010_0100_1000_7fff_8000, XMM1 = 1 =>
+    XMM0 = 0x0000_0001_0004_0008_0080_0800_3fff_c000;
+}
+0x000000 [66 0f e1 00]                      "PSRAW XMM0,xmmword ptr [RAX]";
+
+///
+/// Repeat prefixed (REP/REPNZ/REPZ) instructions
+/// (@fixme: tester needs to support executing multiple steps so we can write proper tests here).
+
+0x000000 [f3 ab]                            "STOSD.REP RDI";
+
+0x000082 [ad]                               "LODSD RSI";
+0x000083 [f3 ad]                            "LODSD.REP RSI";
+0x000085 [f2 ad]                            "LODSD.REPNE RSI";
+
+0x000080 [f2 a5]                            "MOVSD.REPNE RDI,RSI";
+
+
+///
+/// x87 floating point
+///
+
+0x000000 [0f ae 44 24 00]                   "FXSAVE [RSP + 0x0]"
+{
+    ST0 = 0x1234_1234_1234_1234_1234_1234, XMM7 = 0x0001020304050607_0809101112131415, RSP = 0x10000, mem[0x10000]:WRITE = 0x200
+    =>
+    mem[0x10000] = [
+        00 00                           // Control
+        00 00                           // Status
+        00 00                           // Tag
+        00 00                           // Last Instruction Opcode
+        00 00 00 00                     // Instruction pointer
+        00 00                           // Pointer Selector
+        00 00 00 00                     // Data Pointer
+        00 00                           // Data Selector
+        00 00 00 00                     // MXCSR
+
+        00 00 00 00 00 00 00 00
+
+        34 12 34 12 34 12 34 12 34 12 00 00 00 00 00 00   // ST0
+        00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00   // ST1
+        00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00   // ST2
+        00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00   // ST3
+        00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00   // ST4
+        00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00   // ST5
+        00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00   // ST6
+        00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00   // ST7
+
+        00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 // XMM0
+        00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 // XMM1
+        00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 // XMM2
+        00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 // XMM3
+        00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 // XMM4
+        00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 // XMM5
+        00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 // XMM6
+        15 14 13 12 11 10 09 08 07 06 05 04 03 02 01 00 // XMM7
+
+        00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 // XMM8
+        00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 // XMM9
+        00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 // XMM10
+        00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 // XMM11
+        00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 // XMM12
+        00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 // XMM13
+        00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 // XMM14
+        00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 // XMM15
+    ];
+}
+
+
+0x000000 [df 6d f0]                         "FILD qword ptr [RBP + -0x10]"
+{
+    RBP = 0x10010, mem[0x10000]:READ = [d2 04 00 00 00 00 00 00], ST6 = 0x10 =>
+    // = 1234.0_f64 (Not actually correct since we currently don't support extended precision floats)
+    ST0 = 0x4093480000000000, ST7 = 0x10;
+}
+
+0x000000 [67 dd 44 24 00]                   "FLD qword ptr [ESP]"
+{
+    ESP = 0x10000, mem[0x10000]:READ = [00 01 02 03 04 05 06 07], ST6 = 0x10 =>
+    ST0 = 0x706050403020100, ST7 = 0x10;
+}
+
+0x000000 [db 6d 80]                         "FLD tword ptr [RBP + -0x80]"
+{
+    RBP = 0x10080, mem[0x10000]:READ = [00 01 02 03 04 05 06 07 08 09] =>
+    ST0 = 0x9080706050403020100;
+}
+
+0x000000 [d9 ee]                            "FLDZ"
+{
+    ST0 = 0x9080706050403020100 => ST0 = 0;
+}
+
+0x000000 [df 48 00]                         "FISTTP word ptr [RAX]"
+{
+    // = 1234.0_f64
+    ST0 = 0x4093480000000000, RAX = 0x10000, mem[0x10000]:WRITE = [00 00] =>
+    mem[0x10000] = [d2 04];
+}
+
+0x000000 [df e9]                            "FUCOMIP ST0, ST1"
+{
+    // note: 0x7ff8000000000000 = NaN_f64, 0x0 = 0x0_f64, 0x3ff0000000000000 = 1.0_f64
+
+    // ST0 > ST1
+    ST0 = 0x3ff0000000000000, ST1 = 0, ZF = 1, PF = 1, CF = 1
+        => ZF = 0, PF = 0, CF = 0;
+
+    // ST0 < ST1
+    ST0 = 0, ST1 = 0x3ff0000000000000, ZF = 1, PF = 1, CF = 0
+        => ZF = 0, PF = 0, CF = 1;
+
+    // ST0 = ST1
+    ST0 = 0, ST1 = 0, ZF = 0, PF = 1, CF = 1
+        => ZF = 1, PF = 0, CF = 0;
+
+    // Unordered
+    ST0 = 0x7ff8000000000000, ST1 = 0, ZF = 0, PF = 0, CF = 0
+        => ZF = 1, PF = 1, CF = 1;
+}
+
+
+0x000000 [d9 fe]                   "FSIN"
+{
+    // sin(1.0) = 0.8414709848078965
+    // (note: 80-bit floats are treated as f64)
+    ST0 = 0x3ff0000000000000 => ST0 = 0x3feaed548f090cee;
+}
+
+0x000000 [df e0]                   "FNSTSW AX"
+    AX = 0x0, FPUStatusWord = 0x1 => AX = 0x1;
+
+
+0x000000 [d9 fc]                   "FRNDINT";
+0x000000 [dc e9]                   "FSUB ST1,ST0";
+0x000000 [d9 c9]                   "FXCH";
+0x000000 [d9 f0]                   "F2XM1"
+{
+    // -0.0 -> -0.0
+    // ST0 = 0x8000000000000000 => ST0 = 0x8000000000000000; (returns 0.0 instead of -0.0)
+
+    // 0.0 -> 0.0
+    ST0 = 0x0000000000000000 => ST0 = 0x0000000000000000;
+    // -1.0 -> -0.5
+    ST0 = 0xbff0000000000000 => ST0 = 0xbfe0000000000000;
+    // 1.0 -> 0.0
+    ST0 = 0x0000000000000001 => ST0 = 0x0000000000000000;
+    // -0.5 -> -0.29289321881345254
+    ST0 = 0xbfe0000000000000 => ST0 = 0xbfd2bec333018868;
+}
+0x000000 [de c1]                   "FADDP";
+0x000000 [d9 fd]                   "FSCALE"
+{
+    // 4 * 2^trunc(1) == 8
+    ST0 = 0x4010000000000000, ST1 = 0x3ff0000000000000 => ST0 = 0x4020000000000000;
+    // 4 * 2^trunc(-1) == 2
+    ST0 = 0x4010000000000000, ST1 = 0xbff0000000000000 => ST0 = 0x4000000000000000;
+    // 1 * 2^trunc(4) == 16
+    ST0 = 0x3ff0000000000000, ST1 = 0x4010000000000000 => ST0 = 0x4030000000000000;
+    // 1 * 2^trunc(8.1) == 256
+    ST0 = 0x3ff0000000000000, ST1 = 0x4020333333333333 => ST0 = 0x4070000000000000;
+    // 1 * 2^trunc(-8.1) == 0.00390625
+    ST0 = 0x3ff0000000000000, ST1 = 0xc020333333333333 => ST0 = 0x3f70000000000000;
+}
+
+
+//
+// Currently unimplemented:
+//
+
+0x000000 [d9 f3]                    "FPATAN";
+
+// Semantics in SLEIGH specification are wrong:
+0x000000 [df a5 00 10 00 00]        "FBLD tword ptr [RBP + 0x1000]";
+0x000000 [df b5 00 10 00 00]        "FBSTP tword ptr [RBP + 0x1000]";
+
+//
+// SIMD Floating Point Instructions
+//
+
+// @fixme: work out how we want to handle traps
+0x000000 [f2 0f 2c c0]                  "CVTTSD2SI EAX,XMM0"
+{
+    // 0xc032a087300a89c7 = -18.6270628_f64
+    XMM0 = 0xc032a087300a89c7, EAX = 0 => EAX = -18;
+}
+
+0x000000 [f2 0f 2a 75 20]               "CVTSI2SD XMM6, dword ptr [RBP + 0x20]"
+{
+    // 0xbff0000000000000 = -1.0_f64
+    XMM6 = 0x3ff8000000000000, RBP = 0x1000, mem[0x1020]:READ = [ff ff ff ff] => XMM6 = 0xbff0000000000000;
+}
+
+///
+/// Exchange operations
+///
+
+0x012026 [0f c7 8a 5c 04 5f c1]             "CMPXCHG8B qword ptr [RDX + -0x3ea0fba4]";
+0x000065 [0f c7 08]                         "CMPXCHG8B qword ptr [RAX]";
+
+0x000000 [0f b1 35 09 10 00 00]             "CMPXCHG dword ptr [0x1010],ESI"
+{
+
+    RAX = 0, RSI = 0x99, mem[0x1010]:READ_WRITE = [00 00 00 00] =>
+    RAX = 0,             mem[0x1010]            = [99 00 00 00], ZF = 1;
+
+    RAX = 1, RSI = 0x99, mem[0x1010]:READ_WRITE = [01 00 00 00] =>
+    RAX = 1,             mem[0x1010]            = [99 00 00 00], ZF = 1;
+
+    RAX = 1, RSI = 0x99, mem[0x1010]:READ_WRITE = [02 00 00 00] =>
+    RAX = 2,             mem[0x1010]            = [02 00 00 00], ZF = 0;
+}
+
+0x000000 [0f c1 0d f9 0f 00 00]              "XADD dword ptr [0x1000],ECX"
+{
+    ECX = 2, mem[0x1000]:READ_WRITE = [01 00 00 00] => mem[0x1000] = [03 00 00 00], ECX = 1;
+}
+
+
+///
+/// Stack manipulation
+///
+
+// POP RSP instruction increments the stack pointer (RSP) before data at the old top of stack is
+// written into the destination.
+0x000000 [5c]                               "POP RSP"
+{
+    RSP = 0x1000, mem[0x1000]:READ = [01 02 03 04 05 06 07 08] => RSP = 0x807060504030201;
+}
+
+// Push/pop legacy segment registers invalid in 64-bit mode
+0x012000 [67 17]                            "invalid_instruction";
+0x012000 [67 1f]                            "invalid_instruction";
+0x012000 [67 07]                            "invalid_instruction";
+0x012000 [67 0e]                            "invalid_instruction";
+0x012000 [67 16]                            "invalid_instruction";
+0x012000 [67 1e]                            "invalid_instruction";
+0x012000 [67 06]                            "invalid_instruction";
+
+// pusha/popa invalid in 64-bit mode
+0x012000 [61]                               "invalid_instruction"; // POPAD
+0x012000 [66 61]                            "invalid_instruction"; // POPA
+0x012000 [67 61]                            "invalid_instruction"; // addr32 POPAD
+0x012000 [60]                               "invalid_instruction"; // PUSHAD
+0x012000 [66 60]                            "invalid_instruction"; // PUSHA
+0x012000 [67 60]                            "invalid_instruction"; // addr32 PUSHAD
+
+0x000000 [9d]                               "POPFQ";
+0x000000 [66 9d]                            "POPF";
+
+0x000000 [9c]                               "PUSHFQ";
+0x000000 [66 9c]                            "PUSHF";
+
+0x000000 [c9]                               "LEAVE"
+    RBP = 0x10000, mem[0x10000]:READ = [07 06 05 04 03 02 01 00] => RSP = 0x10008, RBP = 0x0001020304050607;
+
+
+
+///
+/// Misc instructions
+///
+
+0x011000 [0f 21 b4]                         "MOV RSP,DR6";
+
+///
+/// Strange instruction encodings
+///
+
+// rex.wrb MOV byte ptr [r11 + riz*0x4], 0x0
+0x000000 [4d c6 04 a3 00]                   "MOV byte ptr [R11], 0x0";
+
+// Extra large NOP
+0x000000 [66 66 66 66 66 66 2e 0f 1f 84 00 00 00 00 00] "NOP dword ptr CS:[RAX + RAX*0x1]"
+    RAX = 0 => RAX = 0;
+
+
+///
+/// Extended vector instructions (e.g. AVX) mostly unimplemented for now
+///
+
+0x000068 [c5 41 62 51 c0]                   "VPUNPCKLDQ XMM10, XMM7, xmmword ptr [RCX + -0x40]";
+
+///
+/// Issues discovered from side-by-side execution with unicorn.
+///
+
+// Unicorn reports this as an invalid instruction.
+0x000000 [f1]                               "INT1";
+
+// @todo: check on actual processor.
+// Unicorn reports this as an invalid instruction. Non-canonical encoding of RSI.
+0x011000 [f6 0e 00] "TEST byte ptr [RSI],0x0";
+
+// "(rex.WXB) lahf" The prefix should be ignored, Unicorn fails to do so and writes the value to the
+// wrong register
+0x000000 [4b 9f]                            "LAHF"
+{
+    RAX = 0xffff_ffff_ffff_ffff, SF = 0, ZF = 0, AF = 0, PF = 0 => RAX = 0xffff_ffff_ffff_02ff;
+    RAX = 0xffff_ffff_ffff_ffff, SF = 1, ZF = 0, AF = 1, PF = 0 => RAX = 0xffff_ffff_ffff_92ff;
+}
+

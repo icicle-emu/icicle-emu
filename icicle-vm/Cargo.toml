@@ -1,0 +1,16 @@
+[package]
+name = "icicle-vm"
+version = "0.2.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.60"
+icicle-cpu = { path = "../icicle-cpu" }
+icicle-linux = { path = "../icicle-linux" }
+icicle-jit = { path = "../icicle-jit" }
+pcode = { path = "../sleigh/pcode" }
+sleigh-runtime = { path = "../sleigh/sleigh-runtime" }
+sleigh-compile = { path = "../sleigh/sleigh-compile" }
+target-lexicon = "0.12.4"
+tracing = { version = "0.1.36", default-features = false }
+object = { version = "0.29.0", default-features = false, features = ["read_core", "elf"] }

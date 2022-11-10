@@ -1,0 +1,16 @@
+[package]
+name = "afl-icicle-trace"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.57"
+bstr = { version = "0.2.17", default-features = false }
+icicle-vm = { path = "../icicle-vm" }
+icicle-fuzzing = { path = "../icicle-fuzzing" }
+libc = "0.2.126"
+serde_json = "1.0.81"
+target-lexicon = "0.12.4"
+tracing = { version = "0.1.34", default-features = false, features = ["release_max_level_debug"] }
+tracing-subscriber = { version = "0.3.11", default-features = false, features = ["fmt", "env-filter", "ansi"] }
+pcode = { path = "../sleigh/pcode" }

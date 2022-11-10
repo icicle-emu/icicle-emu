@@ -1,0 +1,408 @@
+0      restart_syscall               _
+1      exit                          _
+2      fork                          _
+3      read                          _
+4      write                         _
+5      open                          _
+6      close                         _
+8      creat                         _
+9      link                          _
+10     unlink                        _
+11     execve                        _
+12     chdir                         _
+13     time                          =time32
+14     mknod                         sys::unimplemented(0)       # mknod
+15     chmod                         _
+16     lchown                        =lchown16
+19     lseek                         _
+20     getpid                        _
+21     mount                         _
+22     umount                        sys::unimplemented(0)       # oldumount
+23     setuid                        =setuid16
+24     getuid                        =getuid16
+25     stime                         sys::unimplemented(0)       # stime32
+26     ptrace                        _
+27     alarm                         _
+29     pause                         sys::unimplemented(0)       # pause
+30     utime                         sys::unimplemented(0)       # utime32
+33     access                        _
+34     nice                          sys::unimplemented(0)       # nice
+36     sync                          _
+37     kill                          _
+38     rename                        _
+39     mkdir                         _
+40     rmdir                         _
+41     dup                           _
+42     pipe                          _
+43     times                         _
+45     brk                           _
+46     setgid                        =setgid16
+47     getgid                        =getgid16
+49     geteuid                       =geteuid16
+50     getegid                       =getegid16
+51     acct                          _
+52     umount2                       _
+54     ioctl                         _
+55     fcntl                         _
+57     setpgid                       _
+60     umask                         _
+61     chroot                        _
+62     ustat                         sys::unimplemented(0)       # ustat
+63     dup2                          _
+64     getppid                       _
+65     getpgrp                       _
+66     setsid                        _
+67     sigaction                     sys::unimplemented(0)       # sigaction
+70     setreuid                      =setreuid16
+71     setregid                      =setregid16
+72     sigsuspend                    sys::unimplemented(0)       # sigsuspend
+73     sigpending                    sys::unimplemented(0)       # sigpending
+74     sethostname                   _
+75     setrlimit                     _
+76     getrlimit                     sys::unimplemented(0)       # old_getrlimit
+77     getrusage                     _
+78     gettimeofday                  _
+79     settimeofday                  _
+80     getgroups                     =getgroups16
+81     setgroups                     =setgroups16
+82     select                        sys::unimplemented(0)       # old_select
+83     symlink                       _
+85     readlink                      _
+86     uselib                        sys::unimplemented(0)       # uselib
+87     swapon                        _
+88     reboot                        _
+89     readdir                       sys::unimplemented(0)       # old_readdir
+90     mmap                          sys::unimplemented(0)       # old_mmap
+91     munmap                        _
+92     truncate                      _
+93     ftruncate                     _
+94     fchmod                        _
+95     fchown                        =fchown16
+96     getpriority                   _
+97     setpriority                   _
+99     statfs                        sys::unimplemented(0)       # statfs
+100    fstatfs                       sys::unimplemented(0)       # fstatfs
+102    socketcall                    sys::unimplemented(0)       # socketcall
+103    syslog                        _
+104    setitimer                     _
+105    getitimer                     _
+106    stat                          =newstat
+107    lstat                         =newlstat
+108    fstat                         =newfstat
+111    vhangup                       _
+113    syscall                       sys::unimplemented(0)       # syscall
+114    wait4                         _
+115    swapoff                       _
+116    sysinfo                       _
+117    ipc                           _
+118    fsync                         _
+119    sigreturn                     sys::unimplemented(0)       # sigreturn_wrapper
+120    clone                         _
+121    setdomainname                 _
+122    uname                         _
+124    adjtimex                      sys::unimplemented(0)       # adjtimex_time32
+125    mprotect                      _
+126    sigprocmask                   sys::unimplemented(0)       # sigprocmask
+128    init_module                   _
+129    delete_module                 _
+131    quotactl                      _
+132    getpgid                       _
+133    fchdir                        _
+134    bdflush                       sys::unimplemented(0)       # bdflush
+135    sysfs                         sys::unimplemented(0)       # sysfs
+136    personality                   _
+138    setfsuid                      =setfsuid16
+139    setfsgid                      =setfsgid16
+140    _llseek                       sys::unimplemented(0)       # llseek
+141    getdents                      _
+142    _newselect                    =select
+143    flock                         _
+144    msync                         _
+145    readv                         _
+146    writev                        _
+147    getsid                        _
+148    fdatasync                     _
+149    _sysctl                       sys::unimplemented(0)       # ni_syscall
+150    mlock                         _
+151    munlock                       _
+152    mlockall                      _
+153    munlockall                    _
+154    sched_setparam                _
+155    sched_getparam                _
+156    sched_setscheduler            _
+157    sched_getscheduler            _
+158    sched_yield                   _
+159    sched_get_priority_max        _
+160    sched_get_priority_min        _
+161    sched_rr_get_interval         sys::unimplemented(0)       # sched_rr_get_interval_time32
+162    nanosleep                     =nanosleep_time32
+163    mremap                        _
+164    setresuid                     =setresuid16
+165    getresuid                     =getresuid16
+168    poll                          _
+169    nfsservctl                    sys::unimplemented(0)
+170    setresgid                     =setresgid16
+171    getresgid                     =getresgid16
+172    prctl                         _
+173    rt_sigreturn                  sys::unimplemented(0)       # rt_sigreturn_wrapper
+174    rt_sigaction                  _
+175    rt_sigprocmask                _
+176    rt_sigpending                 _
+177    rt_sigtimedwait               sys::unimplemented(0)       # rt_sigtimedwait_time32
+178    rt_sigqueueinfo               sys::unimplemented(0)       # rt_sigqueueinfo
+179    rt_sigsuspend                 _
+180    pread64                       _
+181    pwrite64                      _
+182    chown                         =chown16
+183    getcwd                        _
+184    capget                        _
+185    capset                        _
+186    sigaltstack                   sys::unimplemented(0)       # sigaltstack
+187    sendfile                      sys::unimplemented(0)       # sendfile
+190    vfork                         _
+191    ugetrlimit                    =getrlimit
+192    mmap2                         _
+193    truncate64                    sys::unimplemented(0)       # truncate64
+194    ftruncate64                   sys::unimplemented(0)       # ftruncate64
+195    stat64                        sys::unimplemented(0)       # stat64
+196    lstat64                       sys::unimplemented(0)       # lstat64
+197    fstat64                       =fstat
+198    lchown32                      =lchown
+199    getuid32                      =getuid
+200    getgid32                      =getgid
+201    geteuid32                     =geteuid
+202    getegid32                     =getegid
+203    setreuid32                    =setreuid
+204    setregid32                    =setregid
+205    getgroups32                   =getgroups
+206    setgroups32                   =setgroups
+207    fchown32                      =fchown
+208    setresuid32                   =setresuid
+209    getresuid32                   =getresuid
+210    setresgid32                   =setresgid
+211    getresgid32                   =getresgid
+212    chown32                       =chown
+213    setuid32                      =setuid
+214    setgid32                      =setgid
+215    setfsuid32                    =setfsuid
+216    setfsgid32                    =setfsgid
+217    getdents64                    _
+218    pivot_root                    _
+219    mincore                       _
+220    madvise                       _
+221    fcntl64                       =fcntl
+224    gettid                        _
+225    readahead                     _
+226    setxattr                      _
+227    lsetxattr                     _
+228    fsetxattr                     _
+229    getxattr                      _
+230    lgetxattr                     _
+231    fgetxattr                     _
+232    listxattr                     _
+233    llistxattr                    _
+234    flistxattr                    _
+235    removexattr                   _
+236    lremovexattr                  _
+237    fremovexattr                  _
+238    tkill                         _
+239    sendfile64                    sys::unimplemented(0)       # sendfile64
+240    futex                         sys::unimplemented(0)       # futex_time32
+241    sched_setaffinity             sys::unimplemented(0)       # sched_setaffinity
+242    sched_getaffinity             sys::unimplemented(0)       # sched_getaffinity
+243    io_setup                      _
+244    io_destroy                    _
+245    io_getevents                  sys::unimplemented(0)       # io_getevents_time32
+246    io_submit                     _
+247    io_cancel                     _
+248    exit_group                    _
+249    lookup_dcookie                _
+250    epoll_create                  sys::unimplemented(0)       # epoll_create
+251    epoll_ctl                     _
+252    epoll_wait                    sys::unimplemented(0)       # epoll_wait
+253    remap_file_pages              _
+256    set_tid_address               _
+257    timer_create                  _
+258    timer_settime                 sys::unimplemented(0)       # timer_settime32
+259    timer_gettime                 sys::unimplemented(0)       # timer_gettime32
+260    timer_getoverrun              _
+261    timer_delete                  _
+262    clock_settime                 =nanosleep_time32
+263    clock_gettime                 =clock_gettime32
+264    clock_getres                  sys::unimplemented(0)       # clock_getres_time32
+265    clock_nanosleep               _
+266    statfs64                      sys::unimplemented(0)       # statfs64_wrapper
+267    fstatfs64                     sys::unimplemented(0)       # fstatfs64_wrapper
+268    tgkill                        _
+269    utimes                        sys::unimplemented(0)       # utimes_time32
+270    arm_fadvise64_64              sys::unimplemented(0)       # arm_fadvise64_64
+271    pciconfig_iobase              sys::unimplemented(0)       # pciconfig_iobase
+272    pciconfig_read                sys::unimplemented(0)       # pciconfig_read
+273    pciconfig_write               sys::unimplemented(0)       # pciconfig_write
+274    mq_open                       _
+275    mq_unlink                     _
+276    mq_timedsend                  sys::unimplemented(0)       # mq_timedsend_time32
+277    mq_timedreceive               _
+278    mq_notify                     _
+279    mq_getsetattr                 _
+280    waitid                        _
+281    socket                        _
+282    bind                          _
+283    connect                       _
+284    listen                        _
+285    accept                        _
+286    getsockname                   _
+287    getpeername                   _
+288    socketpair                    _
+289    send                          sys::unimplemented(0)       # send
+290    sendto                        _
+291    recv                          sys::unimplemented(0)       # recv
+292    recvfrom                      _
+293    shutdown                      _
+294    setsockopt                    _
+295    getsockopt                    _
+296    sendmsg                       _
+297    recvmsg                       _
+298    semop                         _
+299    semget                        _
+300    semctl                        sys::unimplemented(0)       # old_semctl
+301    msgsnd                        _
+302    msgrcv                        _
+303    msgget                        _
+304    msgctl                        sys::unimplemented(0)       # old_msgctl
+305    shmat                         _
+306    shmdt                         _
+307    shmget                        _
+308    shmctl                        sys::unimplemented(0)       # old_shmctl
+309    add_key                       _
+310    request_key                   _
+311    keyctl                        _
+312    semtimedop                    sys::unimplemented(0)       # semtimedop_time32
+313    vserver                       sys::unimplemented(0)
+314    ioprio_set                    _
+315    ioprio_get                    _
+316    inotify_init                  sys::unimplemented(0)       # inotify_init
+317    inotify_add_watch             _
+318    inotify_rm_watch              _
+319    mbind                         _
+320    get_mempolicy                 _
+321    set_mempolicy                 _
+322    openat                        _
+323    mkdirat                       _
+324    mknodat                       _
+325    fchownat                      _
+326    futimesat                     sys::unimplemented(0)       # futimesat_time32
+327    fstatat64                     =fstatat
+328    unlinkat                      _
+329    renameat                      _
+330    linkat                        _
+331    symlinkat                     _
+332    readlinkat                    _
+333    fchmodat                      _
+334    faccessat                     _
+335    pselect6                      sys::unimplemented(0)       # pselect6_time32
+336    ppoll                         sys::unimplemented(0)       # ppoll_time32
+337    unshare                       _
+338    set_robust_list               _
+339    get_robust_list               _
+340    splice                        _
+341    arm_sync_file_range           =sync_file_range2
+342    tee                           _
+343    vmsplice                      _
+344    move_pages                    _
+345    getcpu                        _
+346    epoll_pwait                   _
+347    kexec_load                    _
+348    utimensat                     sys::unimplemented(0)       # utimensat_time32
+349    signalfd                      sys::unimplemented(0)       # signalfd
+350    timerfd_create                _
+351    eventfd                       sys::unimplemented(0)       # eventfd
+352    fallocate                     _
+353    timerfd_settime               _
+354    timerfd_gettime               _
+355    signalfd4                     _
+356    eventfd2                      _
+357    epoll_create1                 _
+358    dup3                          _
+359    pipe2                         _
+360    inotify_init1                 _
+361    preadv                        _
+362    pwritev                       _
+363    rt_tgsigqueueinfo             sys::unimplemented(0)       # rt_tgsigqueueinfo
+364    perf_event_open               _
+365    recvmmsg                      _
+366    accept4                       _
+367    fanotify_init                 _
+368    fanotify_mark                 _
+369    prlimit64                     _
+370    name_to_handle_at             _
+371    open_by_handle_at             _
+372    clock_adjtime                 sys::unimplemented(0)       # clock_adjtime32
+373    syncfs                        _
+374    sendmmsg                      _
+375    setns                         _
+376    process_vm_readv              _
+377    process_vm_writev             _
+378    kcmp                          _
+379    finit_module                  _
+380    sched_setattr                 _
+381    sched_getattr                 _
+382    renameat2                     _
+383    seccomp                       _
+384    getrandom                     _
+385    memfd_create                  _
+386    bpf                           _
+387    execveat                      _
+388    userfaultfd                   _
+389    membarrier                    _
+390    mlock2                        _
+391    copy_file_range               _
+392    preadv2                       _
+393    pwritev2                      _
+394    pkey_mprotect                 _
+395    pkey_alloc                    _
+396    pkey_free                     _
+397    statx                         _
+398    rseq                          _
+399    io_pgetevents                 sys::unimplemented(0)       # io_pgetevents_time32
+400    migrate_pages                 _
+401    kexec_file_load               _
+403    clock_gettime64               _
+404    clock_settime64               _
+405    clock_adjtime64               _
+406    clock_getres_time64           _
+407    clock_nanosleep_time64        _
+408    timer_gettime64               _
+409    timer_settime64               _
+410    timerfd_gettime64             _
+411    timerfd_settime64             _
+412    utimensat_time64              _
+413    pselect6_time64               =pselect6
+414    ppoll_time64                  =ppoll
+416    io_pgetevents_time64          _
+417    recvmmsg_time64               sys::unimplemented(0)       # recvmmsg
+418    mq_timedsend_time64           _
+419    mq_timedreceive_time64        _
+420    semtimedop_time64             _
+421    rt_sigtimedwait_time64        sys::unimplemented(0)       # rt_sigtimedwait
+422    futex_time64                  =futex
+423    sched_rr_get_interval_time64  _
+424    pidfd_send_signal             _
+425    io_uring_setup                _
+426    io_uring_enter                _
+427    io_uring_register             _
+428    open_tree                     _
+429    move_mount                    _
+430    fsopen                        _
+431    fsconfig                      _
+432    fsmount                       _
+433    fspick                        _
+434    pidfd_open                    _
+435    clone3                        _
+436    close_range                   _
+437    openat2                       _
+438    pidfd_getfd                   _
+439    faccessat2                    _
+440    process_madvise               _
+441    epoll_pwait2                  _
+442    mount_setattr                 _

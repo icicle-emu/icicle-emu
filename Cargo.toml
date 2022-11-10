@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = [
+    "icicle-cpu",
+    "icicle-fuzzing",
+    "icicle-gdb",
+    "icicle-jit",
+    "icicle-linux",
+    "icicle-mem",
+    "icicle-test",
+    "icicle-vm",
+    "afl-icicle-trace",
+]
+default-members = ["afl-icicle-trace"]
+
+[profile.release]
+debug = 1

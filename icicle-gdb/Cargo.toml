@@ -1,0 +1,15 @@
+[package]
+name = "icicle-gdb"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.60"
+gdbstub = "0.6.2"
+gdbstub_arch = "0.2.3"
+icicle-vm = { path = "../icicle-vm" }
+num-traits = "0.2.15"
+pcode = { path = "../sleigh/pcode" }
+target-lexicon = "0.12.4"
+tracing = { version = "0.1.36", default-features = false }
+tracing-subscriber = { version = "0.3.15", default-features = false, features = ["fmt", "tracing-log", "env-filter", "ansi"] }

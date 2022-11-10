@@ -1,0 +1,17 @@
+// Big-endian MIPS -- most of the spec is shared with LE variant so we mostly on BE specific
+// differences in these tests
+
+0x000000 [3c 1c 00 02]  "lui gp,0x2"
+    gp = 0x0 => gp = 0x20000;
+
+0x000018 [af b0 00 50]  "sw s0, 0x50(sp)"
+    sp = 0xfb0, s0 = 0x0001_0203, mem[0x1000]:WRITE = [00 00 00 00] =>
+                                  mem[0x1000]       = [00 01 02 03];
+0x000028 [8e 19 80 40]  "lw t9, -0x7fc0(s0)"
+    t9 = 0x0, s0 = 0x8fc0, mem[0x1000]:READ = [00 01 02 03] => t9 = 0x0001_0203;
+
+0x100b0c [8f 84 80 18]  "lw a0,-0x7fe8(gp)"
+    a0 = 0x0, gp = 0x0011d010, mem[0x115028]:READ = [00 01 01 0c] => a0 = 0x1010c;
+
+0x000054 [a8 82 00 03]   "swl v0, 0x3(a0)";
+0x000058 [b8 82 00 00]   "swr v0, 0x0(a0)";
