@@ -1,14 +1,78 @@
 # Icicle
 
-An experimental emulator for fuzzing.
+Icicle is an experimental fuzzing-specific, multi-architecture emulation framework.
 
 ## Usage
 
-The emulator is primarily designed to be used as a library for a fuzzer, however `afl-icicle-trace` implements an AFL/AFL++ compatible interface for direct usage. e.g.
+Icicle must be built before any examples will run:
+
+```
+cargo build --release
+```
+
+### Fuzzing using AFL++
+
+The `afl-icicle-trace` binary implements an AFL++ compatible interface that can be used to fuzz arbitary binaries using AFL++'s `AFL_QEMU_CUSTOM_BIN` support.
+
+As an example, to fuzz the `base64` binary from the LAVA-M dataset for x86-64 we can run:
 
 ```bash
-cargo build --release
-
-mkdir workdir
 ICICLE_SYSROOT=../sysroots/x86_64 ICICLE_ARCH=x86_64-linux AFL_QEMU_CUSTOM_BIN=1 ../AFLplusplus/afl-fuzz -t 10000 -Q -i ../inputs/generic -o workdir -- ./target/release/afl-icicle-trace /bin/lava/base64 -d
+```
+
+* `ICICLE_SYSROOT`: controls the path configured for the virtual file system (VFS) implemented by the Linux emulator.
+* `ICICLE_ARCH`: specifies the target triple that the fuzzing harness should configure the emulator for running. Other examples include `aarch64-linux`, `mipsel-linux`, `msp430-none`.
+
+
+For MSP430 fuzzing, the path to a MCU configuration file needs to be provided to the fuzzer:
+
+```bash
+MSP430_MCU=../msp430-mcu/cc430f6137.ron ICICLE_ARCH=msp430-none AFL_QEMU_CUSTOM_BIN=1 ../AFLplusplus/afl-fuzz -t 10000 -Q -i ../inputs/generic -o workdir -- ./target/release/afl-icicle-trace ../sysroots/msp430/goodwatch.elf
+```
+
+
+### Replaying inputs
+
+The `afl-icicle-trace` binary also supports running the emulator with a specific input, e.g.:
+
+```bash
+ICICLE_SYSROOT=../sysroots/x86_64 ICICLE_ARCH=x86_64-linux ./target/release/afl-icicle-trace /bin/lava/base64 < README.md
+```
+
+Icicle also implements several utilities for analysing fuzzing results. Including:
+
+* A stack based crash resolver that can be run over all the crashes discovered during a fuzzing session:
+    ```
+    ICICLE_RESOLVE_CRASHES=workdir/default/crashes/ ICICLE_SYSROOT=../sysroots/x86_64 ICICLE_ARCH=x86_64-linux ./target/release/afl-icicle-trace /bin/lava/base64 | jq
+    ```
+
+* And block coverage resolver:
+    ```
+    ICICLE_RESOLVE_CRASHES=workdir/default/crashes/ ICICLE_SYSROOT=../sysroots/x86_64 ICICLE_ARCH=x86_64-linux ./target/release/afl-icicle-trace /bin/lava/base64 | jq
+    ```
+
+### Using Icicle as a library
+
+Icicle can also be used as a library, in a similar to Unicorn:
+
+```rust
+fn main() {
+    // Setup the CPU state for the target triple
+    let cpu_config = icicle_vm::cpu::Config::from_triple("target-triple").unwrap();
+    let mut vm = icicle_vm::build(&cpu_config).unwrap()
+
+    // Setup an environment to run inside of.
+    let mut env = icicle_vm::env::build_auto(&mut vm).unwrap();
+    // Load a binary into the environment.
+    env.load(&mut vm.cpu, "path/to/binary").unwrap();
+    vm.env = Box::new(env);
+
+    // Add instrumentation
+    let storage = vm.cpu.trace.register_store(...);
+    vm.add_injector(...);
+
+    // Run until the VM exits.
+    let exit = vm.run().unwrap();
+    println!("{exit:?}");
+}
 ```
