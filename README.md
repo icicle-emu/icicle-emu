@@ -2,6 +2,19 @@
 
 Icicle is an experimental fuzzing-specific, multi-architecture emulation framework.
 
+
+* [afl-icicle-trace](./afl-icicle-trace) - A wrapper binary to allow running Icicle under AFL++ and replaying inputs.
+* [icicle-cpu](./icicle-cpu) - Core CPU state, SLEIGH management, and interface trait definitions.
+* [icicle-fuzzing](./icicle-fuzzing) - Fuzzing instrumentation and harnessing.
+* [icicle-gdb](./icicle-gdb) - GDB integration.
+* [icicle-jit](./icicle-jit) - JIT backend for IL.
+* [icicle-linux](./icicle-linux) - Linux userspace emulator
+* [icicle-mem](./icicle-mem) - Software virtual memory and address translation implementation.
+* [icicle-test](./icicle-test) - Unit tests for instruction semantics.
+* [icicle-vm](./icicle-vm) - P-code interpreter and state management.
+* [sleigh](./sleigh) - A custom SLEIGH runtime that handles parsing, compiling, and using SLEIGH specifications.
+
+
 ## Usage
 
 Icicle must be built before any examples will run:
