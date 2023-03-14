@@ -207,7 +207,31 @@ impl Parser {
 
     /// Create a new error message at the current location
     pub(crate) fn error(&self, msg: impl Into<String>) -> Error {
-        Error { message: msg.into(), span: self.current_span(), cause: None }
+        Error {
+            message: msg.into(),
+            span: self.current_span(),
+            cause: self.error.as_ref().map(|err| Box::new(err.clone())),
+        }
+    }
+
+    /// Create an error corresponding to
+    pub(crate) fn error_unexpected(&mut self, token: Token, expected: &[TokenKind]) -> Error {
+        if token.kind == TokenKind::ParseError {
+            if let Some(prev) = self.error.take() {
+                return prev;
+            }
+        }
+        let mut err = token.error_unexpected(expected);
+        err.cause = self.error.take().map(|err| Box::new(err));
+        err
+    }
+
+    /// Add `err` to the current error stack.
+    pub(crate) fn set_error(&mut self, mut error: Error) {
+        if let Some(prev) = self.error.take() {
+            error.cause = Some(Box::new(prev));
+        };
+        self.error = Some(error);
     }
 
     /// Returns a special token that is used in place of an error.
@@ -217,10 +241,15 @@ impl Parser {
 
     /// Get the next token after performing any preprocessing
     pub(crate) fn next(&mut self) -> Token {
-        if let Some(token) = self.peeked.pop_front() {
-            return token;
+        loop {
+            let next = match self.peeked.pop_front() {
+                Some(token) => token,
+                None => self.next_raw(),
+            };
+            if !self.ignored_tokens.contains(&next.kind) {
+                return next;
+            }
         }
-        self.next_raw()
     }
 
     /// Configure the parser to include whitespace tokens from the input stream
@@ -242,20 +271,20 @@ impl Parser {
                 None => return Token { kind: TokenKind::Eof, span: self.current_span() },
             };
 
-            if self.ignored_tokens.contains(&token.kind) {
-                continue;
-            }
+            // eprintln!("handling token: {token:?}, peek_stack: {:?}", self.peeked);
 
             match token.kind {
                 TokenKind::Preprocessor(kind) => {
+                    let peek_stack = std::mem::take(&mut self.peeked);
                     let prev = self.ignored_tokens;
                     self.ignored_tokens = &[TokenKind::Comment, TokenKind::Whitespace];
 
                     if let Err(e) = preprocessor::handle_macro(self, kind) {
-                        self.error = Some(e);
+                        self.set_error(e);
                         return self.error_token();
                     }
                     self.ignored_tokens = prev;
+                    self.peeked = peek_stack;
                 }
                 _ if self.state.is_disabled() => {}
                 _ => return token,
@@ -270,7 +299,7 @@ impl Parser {
             let src = &self.sources[cursor.src as usize];
 
             if src.tokens.len() <= cursor.offset {
-                // We are done with this srouce, remove it from the stack, and continue with the
+                // We are done with this source, remove it from the stack, and continue with the
                 // next entry
                 self.cursor.pop();
                 continue;
@@ -282,15 +311,28 @@ impl Parser {
     }
 
     /// Peek at the nth token in the token stream
-    pub(crate) fn peek_nth(&mut self, n: usize) -> Token {
+    pub(crate) fn peek_nth(&mut self, mut n: usize) -> Token {
         if self.error.is_some() {
             return self.error_token();
         }
 
+        // Skip over ignored tokens.
+        for (i, token) in self.peeked.iter().enumerate() {
+            if i > n {
+                break;
+            }
+            if self.ignored_tokens.contains(&token.kind) {
+                n += 1;
+            }
+        }
+
+        // Consume additional tokens if required.
         while self.peeked.len() <= n {
-            // @fixme: better handle ignored tokens here
             let next = self.next_raw();
             self.peeked.push_back(next);
+            if self.ignored_tokens.contains(&next.kind) {
+                n += 1;
+            }
         }
 
         self.peeked[n]
@@ -366,7 +408,7 @@ impl Parser {
     pub(crate) fn expect(&mut self, kind: TokenKind) -> Result<Token, Error> {
         let token = self.next();
         if token.kind != kind {
-            return Err(token.error_unexpected(&[kind]));
+            return Err(self.error_unexpected(token, &[kind]));
         }
         Ok(token)
     }
@@ -381,9 +423,21 @@ impl Parser {
             return Err(e);
         }
 
-        match T::try_parse(self)? {
-            Some(inner) => Ok(inner),
-            None => Err(self.error(format!("Expected: {}", T::NAME))),
+        let span_start = self.peek().span;
+        match T::try_parse(self) {
+            Ok(Some(inner)) => Ok(inner),
+            Ok(None) => Err(self.error(format!("Expected: {}", T::NAME))),
+            Err(err) => {
+                let span = match err.cause.is_some() {
+                    true => err.span,
+                    false => Span::new(span_start, self.current_span()),
+                };
+                Err(Error {
+                    message: format!("Error parsing: {}", T::NAME),
+                    span,
+                    cause: Some(Box::new(err)),
+                })
+            }
         }
     }
 
@@ -407,7 +461,7 @@ impl Parser {
                 let ident = self.expect(TokenKind::Ident)?;
                 Ok(self.get_str(ident).into())
             }
-            _ => Err(next.error_unexpected(&[TokenKind::String, TokenKind::Ident])),
+            _ => Err(self.error_unexpected(next, &[TokenKind::String, TokenKind::Ident])),
         }
     }
 
@@ -577,7 +631,7 @@ pub fn parse_define(p: &mut Parser) -> Result<ast::Item, Error> {
         TokenKind::Ident => ast::Item::SpaceNameDef(p.parse()?),
         _ => {
             use TokenKind::*;
-            return Err(token.error_unexpected(&[
+            return Err(p.error_unexpected(token, &[
                 Endian, Alignment, Space, BitRange, PcodeOp, Token, Context, Ident,
             ]));
         }
@@ -746,7 +800,7 @@ pub fn parse_attach(p: &mut Parser) -> Result<ast::Item, Error> {
         TokenKind::Values => ast::Item::AttachValues(p.parse()?),
         _ => {
             use TokenKind::*;
-            return Err(token.error_unexpected(&[Variables, Names, Values]));
+            return Err(p.error_unexpected(token, &[Variables, Names, Values]));
         }
     };
     p.expect(TokenKind::SemiColon)?;
@@ -853,12 +907,13 @@ impl Parse for ast::Constructor {
     fn try_parse(p: &mut Parser) -> Result<Option<Self>, Error> {
         let start = p.peek().span;
 
+        let table = if !p.check(TokenKind::Colon) { Some(p.parse()?) } else { None };
+        p.expect(TokenKind::Colon)?;
+
         // Between the table header and the `is` expression whitespace is meaningful so enable
         // whitespace in the parser
         p.enable_whitespace();
-        let table = if !p.check(TokenKind::Colon) { Some(p.parse()?) } else { None };
 
-        p.expect(TokenKind::Colon)?;
         let mnemonic = match p.peek().kind {
             TokenKind::Ident | TokenKind::String => Some(p.parse_ident_or_string()?),
             TokenKind::Whitespace => {
@@ -887,7 +942,7 @@ impl Parse for ast::Constructor {
                 p.expect(TokenKind::RightBrace)?;
                 statements
             }
-            _ => return Err(token.error_unexpected(&[TokenKind::Unimpl, TokenKind::LeftBrace])),
+            _ => return Err(p.error_unexpected(token, &[TokenKind::Unimpl, TokenKind::LeftBrace])),
         };
 
         Ok(Some(ast::Constructor {
@@ -997,7 +1052,7 @@ fn parse_constraint(p: &mut Parser) -> Result<ast::ConstraintExpr, Error> {
             inner
         }
 
-        _ => return Err(token.error_unexpected(&[TokenKind::Ident, TokenKind::LeftParen])),
+        _ => return Err(p.error_unexpected(token, &[TokenKind::Ident, TokenKind::LeftParen])),
     };
 
     if p.check(TokenKind::TripleDot) {
@@ -1047,7 +1102,7 @@ fn parse_display_section(p: &mut Parser) -> Result<Vec<ast::DisplaySegment>, Err
             TokenKind::String => Some(p.parse_string()?.into()),
             TokenKind::Line => lit!(""),
             TokenKind::Is => None,
-            _ => return Err(token.error_unexpected(&[])),
+            _ => return Err(p.error_unexpected(token, &[])),
         })
     })?;
 
@@ -1351,7 +1406,13 @@ fn parse_pcode_term(p: &mut Parser) -> Result<ast::PcodeExpr, Error> {
         }
         _ => {
             use TokenKind::*;
-            return Err(token.error_unexpected(&[Ampersand, Star, Minus, Ident, Number, LeftParen]));
+            return Err(Error {
+                message: "Error parsing: Pcode terminal expression".to_string(),
+                span: Span::new(token.span, p.current_span()),
+                cause: Some(Box::new(
+                    p.error_unexpected(token, &[Ampersand, Star, Minus, Ident, Number, LeftParen]),
+                )),
+            });
         }
     };
 
@@ -1486,7 +1547,7 @@ fn parse_disasm_term(p: &mut Parser, allow_symbols: bool) -> Result<ast::Pattern
         }
         _ => {
             use TokenKind::*;
-            Err(token.error_unexpected(&[Ident, Number, Tilde, LeftParen]))
+            Err(p.error_unexpected(token, &[Ident, Number, Tilde, LeftParen]))
         }
     }
 }

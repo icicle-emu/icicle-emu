@@ -4,11 +4,12 @@ use std::path::PathBuf;
 use icicle_vm::{
     cpu::{Environment, ExceptionCode},
     linux::fs::devices::ReadableSharedBufDevice,
-    VmExit,
+    Vm, VmExit,
 };
 
 use crate::{parse_u64_with_prefix, FuzzConfig, FuzzTarget, Runnable};
 
+#[derive(Clone)]
 pub struct LinuxConfig {
     /// Whether stdout/stderr should be mounted.
     pub mount_stdout: bool,
@@ -58,14 +59,7 @@ impl Target {
 }
 
 impl FuzzTarget for Target {
-    fn initialize_vm<I, F>(
-        &mut self,
-        config: &mut FuzzConfig,
-        instrument_vm: F,
-    ) -> anyhow::Result<(icicle_vm::Vm, I)>
-    where
-        F: FnOnce(&mut icicle_vm::Vm, &FuzzConfig) -> anyhow::Result<I>,
-    {
+    fn create_vm(&mut self, config: &mut FuzzConfig) -> anyhow::Result<Vm> {
         let mut vm = icicle_vm::build(&config.cpu_config())?;
         let mut env = icicle_vm::env::build_linux_env(
             &mut vm,
@@ -79,13 +73,10 @@ impl FuzzTarget for Target {
             config.linux.mount_stdout,
         )?;
 
-        // Create a hook for the first time the input is read
-        let mount_path = &config.linux.mount_path;
-        env.vfs.hook_path(mount_path.as_bytes()).map_err(|e| {
-            anyhow::format_err!("failed to create file hook for {}: {}", mount_path, e)
-        })?;
-
         let args = &config.guest_args;
+        if args.is_empty() {
+            anyhow::bail!("Target program not specified.");
+        }
 
         let mut envs = vec![];
         envs.push((&b"LD_BIND_NOW"[..], &b"1"[..]));
@@ -105,39 +96,45 @@ impl FuzzTarget for Target {
         env.process.args.set(&args[0], &args[1..], &envs);
         env.load(&mut vm.cpu, config.guest_args[0].as_bytes())
             .map_err(|e| anyhow::format_err!("{e}"))?;
-        vm.env = Box::new(env);
+        vm.set_env(env);
 
-        // Add instrumentation to the VM. This needs to be done before we run for the first time
-        // since blocks are cached, and currently we don't support invalidating blocks based
-        // on instrumentation changes.
-        let instrumentation = (instrument_vm)(&mut vm, config)?;
+        Ok(vm)
+    }
 
-        // Run until we reach our custom error hook then create a snapshot
+    fn initialize_vm(&mut self, config: &FuzzConfig, vm: &mut Vm) -> anyhow::Result<()> {
+        // Create a hook for the first time the input is read
+        let mount_path = &config.linux.mount_path;
+        let env = vm.env_mut::<icicle_vm::linux::Kernel>().unwrap();
+        env.vfs.hook_path(mount_path.as_bytes()).map_err(|e| {
+            anyhow::format_err!("failed to create file hook for {}: {}", mount_path, e)
+        })?;
+
         match vm.run() {
             VmExit::UnhandledException((ExceptionCode::Environment, 0x1)) => {}
             other => {
-                let backtrace = icicle_vm::debug::backtrace(&mut vm);
+                let backtrace = icicle_vm::debug::backtrace(vm);
                 anyhow::bail!(
                     "Unexpected exit when finding read to file hook: {other:?}\n{backtrace}"
                 )
             }
         }
 
-        let env = vm.env.as_any().downcast_mut::<icicle_vm::linux::Kernel>().unwrap();
+        // Replace the hook with a buffer shared with the fuzzer.
+        let env = vm.env_mut::<icicle_vm::linux::Kernel>().unwrap();
         env.vfs
-            .create_dev(b"/dev/stdin", self.buf.clone())
+            .create_dev(mount_path.as_bytes(), self.buf.clone())
             .map_err(|e| anyhow::format_err!("Failed to set input: {}", e))?;
 
-        let bt = icicle_vm::debug::backtrace(&mut vm);
+        let bt = icicle_vm::debug::backtrace(vm);
         let icount = vm.cpu.icount;
         tracing::info!("First use of input after {icount} instructions: \n{bt}\n-----------",);
 
-        Ok((vm, instrumentation))
+        Ok(())
     }
 }
 
 impl Runnable for Target {
-    fn set_input(&mut self, _vm: &mut icicle_vm::Vm, input: &[u8]) -> anyhow::Result<()> {
+    fn set_input(&mut self, _vm: &mut Vm, input: &[u8]) -> anyhow::Result<()> {
         self.buf.set(input).map_err(|e| anyhow::format_err!("Failed to set input: {}", e))
     }
 

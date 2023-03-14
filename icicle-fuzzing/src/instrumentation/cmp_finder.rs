@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use icicle_vm::cpu::{
     exec::const_eval::BitVecExt,
@@ -8,12 +8,13 @@ use pcode::{Op, PcodeDisplay, Value};
 
 bitflags::bitflags! {
     pub struct CmpAttr: u8 {
-        const NOT_EQUAL     = 0;
-        const IS_EQUAL      = 1;
-        const IS_GREATER    = 2;
-        const IS_LESSER     = 4;
-        const IS_FLOAT      = 8;
-        const IS_OVERFLOW   = 16;
+        const NOT_EQUAL     = 1;
+        const IS_EQUAL      = 1 << 1;
+        const IS_GREATER    = 1 << 2;
+        const IS_LESSER     = 1 << 3;
+        const IS_FLOAT      = 1 << 4;
+        const IS_OVERFLOW   = 1 << 5;
+        const IS_MASKED     = 1 << 6;
     }
 }
 
@@ -66,7 +67,7 @@ impl From<Op> for CmpAttr {
     }
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub struct CmpOp {
     pub kind: CmpAttr,
     pub arg1: pcode::Value,
@@ -152,7 +153,8 @@ impl CmpFinder {
         };
         self.buf.sort_by_key(|x| x.offset);
 
-        // @fixme: avoid needing to compute this here.
+        // Filter uninteresting comparisons after applying bit-level constant propagation.
+        // @fixme: Move this inside of CmpFinder.
         self.buf.retain_mut(|cmp| {
             self.const_eval.clear();
             for stmt in &block.pcode.instructions[..cmp.offset] {
@@ -173,6 +175,13 @@ impl CmpFinder {
             }
             if let Some(x) = arg2.get_const() {
                 cmp.arg2 = pcode::Value::Const(x, cmp.arg2.size());
+            }
+
+            // Since `&` is symmetric, CmpFinder identifies 2 comparisons for comparisons that
+            // involve a mask (one for both the target operand and the mask). If possible we try to
+            // remove the comparisons with the mask which is often constant.
+            if cmp.kind.contains(CmpAttr::IS_MASKED) && cmp.arg2.is_const() {
+                return false;
             }
 
             // Ignore comparisons that involve a small number of variable bits.
@@ -279,7 +288,7 @@ impl<'a> CmpProp<'a> {
     }
 }
 
-const USE_DATALOG: bool = false;
+const USE_DATALOG: bool = true;
 
 fn find_comparisons(prop: &mut CmpProp) -> bool {
     if USE_DATALOG { datalog_find_comparisons(prop) } else { recursive_find_comparisons(prop) }
@@ -530,6 +539,40 @@ enum CmpKind {
     Slt,
     Borrow,
     Carry,
+    MaskedEq(Value),
+}
+
+impl CmpKind {
+    fn flip_operands(&self) -> Option<Self> {
+        match self {
+            Eq => Some(Eq),
+            Ne => Some(Ne),
+            Lt => Some(Gt),
+            Gt => Some(Lt),
+            Le => Some(Ge),
+            Ge => Some(Le),
+            Slt => None,
+            Borrow => None,
+            Carry => None,
+            MaskedEq(x) => Some(MaskedEq(*x)),
+        }
+    }
+
+    fn inv(&self) -> Self {
+        match self {
+            Eq => Ne,
+            Ne => Eq,
+            Lt => Ge,
+            Gt => Le,
+            Le => Gt,
+            Ge => Lt,
+            Slt => Ge,
+            // @fixme? add inverses of these operations.
+            Borrow => Borrow,
+            Carry => Carry,
+            MaskedEq(_) => Ne,
+        }
+    }
 }
 
 impl From<CmpKind> for CmpAttr {
@@ -542,6 +585,7 @@ impl From<CmpKind> for CmpAttr {
             CmpKind::Le => CmpAttr::IS_LESSER | CmpAttr::IS_EQUAL,
             CmpKind::Ge => CmpAttr::IS_GREATER | CmpAttr::IS_EQUAL,
             CmpKind::Borrow | CmpKind::Carry => CmpAttr::IS_OVERFLOW,
+            CmpKind::MaskedEq(_) => CmpAttr::IS_EQUAL | CmpAttr::IS_MASKED,
         }
     }
 }
@@ -549,6 +593,8 @@ impl From<CmpKind> for CmpAttr {
 use CmpKind::*;
 
 use crepe::crepe;
+
+use crate::SSARewriter;
 
 crepe! {
     @input
@@ -596,7 +642,6 @@ crepe! {
     // `!!a == a`
     BoolAlias(a, b) <- Not(a, x), Not(x, b);
 
-
     struct Cmp(usize, CmpKind, Value, Value, Value);
 
     // Direct comparisons:
@@ -632,6 +677,18 @@ crepe! {
         TruncatedAlias(tmp, result),
         Cmp(_, op, cond, result, x), (x.const_eq(0));
 
+    // Allow propagation of booleans through zero and one
+    // `x = a [op] b; c = (x == 1) ==> c = a [op] b`
+    Cmp(offset, op, cond, a, b) <-
+        Cmp(_, Eq, cond, tmp, const_one), (const_one.const_eq(1)),
+        TruncatedAlias(tmp, result),
+        Cmp(offset, op, result, a, b);
+    // `x = a [op] b; c = (x == 0) ==> c = a [inv(op)] b`
+    Cmp(offset, op.inv(), cond, a, b) <-
+        Cmp(_, Eq, cond, tmp, const_one), (const_one.const_eq(0)),
+        TruncatedAlias(tmp, result),
+        Cmp(offset, op, result, a, b);
+
     // Define unsigned comparison operations in terms of signed comparisons and borrows.
     Cmp(offset, Lt, cond, a, b) <-
         Cmp(_, Ne, cond, borrow, signed_lt),
@@ -647,6 +704,10 @@ crepe! {
         And(cond, not_eq, is_ge),
         Cmp(_, Ne, not_eq, a, b),
         Cmp(offset, Ge, is_ge, a, b);
+
+    // Handle masked equality: `c == a & b`
+    Cmp(offset, MaskedEq(c), cond, a, b) <- Statement(_, Op::IntAnd, x, a, b), Cmp(offset, Eq, cond, x, c);
+    Cmp(offset, MaskedEq(c), cond, a, b) <- Statement(_, Op::IntAnd, x, a, b), Cmp(offset, Eq, cond, c, x);
 
     // Allow comparisons to be defined in terms of their inverse
     struct Inv(CmpKind, CmpKind);
@@ -694,47 +755,27 @@ crepe! {
         (!(a.const_eq(0) || b.const_eq(0)));
 }
 
-struct SSARewriter {
-    new_to_old: HashMap<i16, (usize, pcode::VarNode)>,
-    old_to_new: HashMap<i16, pcode::VarNode>,
-    next_id: i16,
-}
-
-impl SSARewriter {
-    pub fn new() -> Self {
-        Self { new_to_old: HashMap::new(), old_to_new: HashMap::new(), next_id: 1 }
-    }
-
-    pub fn get_input(&mut self, x: Value) -> Value {
-        match x {
-            Value::Var(x) if !x.is_invalid() => match self.old_to_new.get(&x.id) {
-                Some(x) => Value::Var(*x),
-                None => self.set_output(0, x).into(),
-            },
-            _ => x,
+/// A comparison between two operands might be defined in terms of multiple subcomparisons. This is
+/// common on architectures that implement comparisons using status flags. For example,
+/// `a <= 0` can be implemented as `SF == 1 || ZR == 0`.
+///
+/// The datalog based comparison finder will output both the individual comparisons and the merged
+/// comparisons. This function defines a ranking that prefers merged comparisons which we use to
+/// filter the output of the datalog finder.
+fn comparison_rank(Output(offset, _, a, b): &Output) -> impl Ord {
+    let value_ordering = |value: &Value| -> i16 {
+        match value {
+            // Prefer comparisons with operands that have smaller IDs to prefer comparisons to the
+            // original value to comparisons with aliases.
+            Value::Var(x) => x.id,
+            // Always prefer comparisons involving constants to those that involve values.
+            Value::Const(_, _) => i16::MIN,
         }
-    }
+    };
 
-    pub fn set_output(&mut self, offset: usize, var: pcode::VarNode) -> pcode::VarNode {
-        if var == pcode::VarNode::NONE {
-            return pcode::VarNode::NONE;
-        }
-        let output = pcode::VarNode::new(self.next_id, var.size);
-        self.new_to_old.insert(self.next_id, (offset, var));
-        self.old_to_new.insert(var.id, output);
-        self.next_id += 1;
-        output
-    }
-
-    pub fn get_original(&mut self, new: Value) -> (usize, Value) {
-        match new {
-            Value::Var(var) => {
-                let (offset, x) = *self.new_to_old.get(&var.id).unwrap_or(&(0, var));
-                (offset, x.into())
-            }
-            Value::Const(_, _) => (0, new),
-        }
-    }
+    let a = value_ordering(a);
+    let b = value_ordering(b);
+    (*offset, a.min(b), a.max(b))
 }
 
 fn datalog_find_comparisons(prop: &mut CmpProp) -> bool {
@@ -761,19 +802,41 @@ fn datalog_find_comparisons(prop: &mut CmpProp) -> bool {
 
     let (output,): (HashSet<Output>,) = runtime.run();
 
-    if let Some(Output(offset, kind, a, b)) = output.into_iter().min_by_key(|x| x.0) {
-        let (_, a) = rw.get_original(a);
-        let (_, b) = rw.get_original(b);
+    if let Some(Output(offset, kind, a_, b_)) = output.into_iter().min_by_key(comparison_rank) {
+        let (_, a) = rw.get_original(a_);
+        let (_, b) = rw.get_original(b_);
 
-        let (a, b) = match kind {
-            CmpKind::Eq | CmpKind::Ne if b == prop.block.instructions[offset].inputs.first() => {
-                // Flip the operands to match the original instruction.
-                (b, a)
+        // Flip the operands to match the original instruction.
+        let (kind, a, b) = match kind.flip_operands() {
+            Some(flipped)
+                if b == prop.block.instructions[offset].inputs.first()
+                    || a == prop.block.instructions[offset].inputs.second() =>
+            {
+                (flipped, b, a)
             }
-            _ => (a, b),
+            _ => (kind, a, b),
         };
 
-        prop.out.push(CmpOp { kind: kind.into(), arg1: a, arg2: b, offset });
+        match kind {
+            MaskedEq(c) => {
+                let (_, c) = rw.get_original(c);
+                // Apply a heuristic to order comparisons based on the observation that the mask is
+                // typically loaded after the value.
+                match (a, b) {
+                    (Value::Var(a), Value::Var(b)) => {
+                        let (a, b) = if a.id < b.id { (a, b) } else { (b, a) };
+                        prop.out.push(CmpOp { kind: kind.into(), arg1: c, arg2: a.into(), offset });
+                        prop.out.push(CmpOp { kind: kind.into(), arg1: c, arg2: b.into(), offset });
+                    }
+                    (Value::Var(x), _) | (_, Value::Var(x)) => {
+                        prop.out.push(CmpOp { kind: kind.into(), arg1: c, arg2: x.into(), offset })
+                    }
+                    _ => {}
+                }
+            }
+            _ => prop.out.push(CmpOp { kind: kind.into(), arg1: a, arg2: b, offset }),
+        }
+
         return true;
     }
 
@@ -797,6 +860,10 @@ mod test {
 
     fn msp430x_ops(input: &[u8]) -> String {
         ops("msp430-none", input)
+    }
+
+    fn thumb_ops(input: &[u8]) -> String {
+        ops("thumbv7m-none", input)
     }
 
     fn ops(arch_name: &str, input: &[u8]) -> String {
@@ -908,11 +975,11 @@ mod test {
 
         let x = block.alloc_tmp(4);
         let cond = block.alloc_tmp(1);
-        block.push((cond, pcode::Op::IntEqual, (x, 0_u32)));
+        block.push((cond, pcode::Op::IntEqual, (x, 0xaa_u32)));
 
         assert_eq!(
             test_generic(cond, block),
-            "CmpOp { kind: IS_EQUAL, arg1: $U1:4, arg2: 0x0:4, offset: 0 }\n"
+            "CmpOp { kind: IS_EQUAL, arg1: $U1:4, arg2: 0xaa:4, offset: 0 }\n"
         );
     }
 
@@ -964,10 +1031,18 @@ mod test {
             0x81, 0x3b, 0x77, 0x7a, 0x66, 0x63, // CMP dword ptr [RBX], 0x63667a77
             0x75, 0x18, // JNZ RIP+0x18
         ];
-        assert_eq!(
-            x86_ops(&input),
-            "CmpOp { kind: NOT_EQUAL, arg1: $U7:4, arg2: 0x63667a77:4, offset: 6 }\n"
-        );
+        if USE_DATALOG {
+            assert_eq!(
+                x86_ops(&input),
+                "CmpOp { kind: NOT_EQUAL, arg1: $U5:4, arg2: 0x63667a77:4, offset: 6 }\n"
+            );
+        }
+        else {
+            assert_eq!(
+                x86_ops(&input),
+                "CmpOp { kind: NOT_EQUAL, arg1: $U7:4, arg2: 0x63667a77:4, offset: 6 }\n"
+            );
+        }
     }
 
     #[test]
@@ -1000,20 +1075,22 @@ mod test {
             0x0f, 0x8f, 0x00, 0x00, 0x00, 0x00, // JG +0x0
         ];
 
-        let datalog_result =
-            "CmpOp { kind: IS_GREATER, arg1: EAX, arg2: 0x6c61754f:4, offset: 2 }\n";
-        // @fixme: The datalog implementation can merge these constraints, but the manual approach
-        // currently doesn't do any merging.
-        let manual_result = "CmpOp { kind: IS_OVERFLOW, arg1: EAX, arg2: 0x6c61754f:4, offset: 2 }\n\
-        CmpOp { kind: NOT_EQUAL, arg1: EAX, arg2: 0x6c61754f:4, offset: 3 }\n\
-        CmpOp { kind: IS_LESSER, arg1: EAX, arg2: 0x6c61754f:4, offset: 3 }\n";
-
         let result = x86_ops(&input);
         if USE_DATALOG {
-            assert_eq!(result, datalog_result)
+            assert_eq!(
+                result,
+                "CmpOp { kind: IS_GREATER, arg1: EAX, arg2: 0x6c61754f:4, offset: 3 }\n"
+            )
         }
         else {
-            assert_eq!(result, manual_result)
+            // @fixme: The datalog implementation can merge these constraints, but the manual
+            // approach currently doesn't do any merging.
+            assert_eq!(
+                result,
+                "CmpOp { kind: IS_OVERFLOW, arg1: EAX, arg2: 0x6c61754f:4, offset: 2 }\n\
+            CmpOp { kind: NOT_EQUAL, arg1: EAX, arg2: 0x6c61754f:4, offset: 3 }\n\
+            CmpOp { kind: IS_LESSER, arg1: EAX, arg2: 0x6c61754f:4, offset: 3 }\n"
+            )
         }
     }
 
@@ -1169,10 +1246,19 @@ mod test {
             0x3f, 0x90, 0x16, 0x00, // CMP.W #0x16,R15
             0x07, 0x34, // JGE
         ];
-        assert_eq!(
-            msp430x_ops(&input),
-            "CmpOp { kind: IS_EQUAL | IS_GREATER, arg1: R15_16, arg2: 0x16:2, offset: 10 }\n"
-        );
+        if USE_DATALOG {
+            assert_eq!(
+                msp430x_ops(&input),
+                "CmpOp { kind: IS_EQUAL | IS_GREATER, arg1: R15_16, arg2: 0x16:2, offset: 10 }\n"
+            );
+        }
+        else {
+            assert_eq!(
+                msp430x_ops(&input),
+                "CmpOp { kind: IS_OVERFLOW, arg1: R15_16, arg2: 0x16:2, offset: 5 }\n\
+                CmpOp { kind: IS_LESSER, arg1: R15_16, arg2: 0x16:2, offset: 10 }\n"
+            );
+        }
     }
 
     #[test]
@@ -1181,10 +1267,19 @@ mod test {
             0x82, 0x9c, 0x16, 0x1f, // CMP.W R12,&1f16
             0x07, 0x34, // JGE
         ];
-        assert_eq!(
-            msp430x_ops(&input),
-            "CmpOp { kind: IS_EQUAL | IS_GREATER, arg1: $U15:2, arg2: R12_16, offset: 13 }\n"
-        );
+        if USE_DATALOG {
+            assert_eq!(
+                msp430x_ops(&input),
+                "CmpOp { kind: IS_EQUAL | IS_GREATER, arg1: $U14:2, arg2: R12_16, offset: 13 }\n"
+            );
+        }
+        else {
+            assert_eq!(
+                msp430x_ops(&input),
+                "CmpOp { kind: IS_OVERFLOW, arg1: $U15:2, arg2: R12_16, offset: 7 }\n\
+                CmpOp { kind: IS_LESSER, arg1: $U16:2, arg2: R12_16, offset: 13 }\n"
+            );
+        }
     }
 
     #[test]
@@ -1205,10 +1300,19 @@ mod test {
             0x0d, 0x9a, // CMP.W R10,R13
             0xf7, 0x34, // JL
         ];
-        assert_eq!(
-            msp430x_ops(&input),
-            "CmpOp { kind: IS_EQUAL | IS_GREATER, arg1: R13_16, arg2: R10_16, offset: 10 }\n"
-        );
+        if USE_DATALOG {
+            assert_eq!(
+                msp430x_ops(&input),
+                "CmpOp { kind: IS_EQUAL | IS_GREATER, arg1: R13_16, arg2: R10_16, offset: 10 }\n"
+            );
+        }
+        else {
+            assert_eq!(
+                msp430x_ops(&input),
+                "CmpOp { kind: IS_OVERFLOW, arg1: R13_16, arg2: R10_16, offset: 5 }\n\
+                CmpOp { kind: IS_LESSER, arg1: R13_16, arg2: R10_16, offset: 10 }\n"
+            );
+        }
     }
 
     #[test]
@@ -1255,10 +1359,18 @@ mod test {
             0xd2, 0x93, 0x11, 0x02, // CMP.B #0x1,&0x0211
             0x3f, 0x24, // JEQ 0x86
         ];
-        assert_eq!(
-            msp430x_ops(&input),
-            "CmpOp { kind: IS_EQUAL, arg1: $U16:1, arg2: 0x1:1, offset: 13 }\n"
-        );
+        if USE_DATALOG {
+            assert_eq!(
+                msp430x_ops(&input),
+                "CmpOp { kind: IS_EQUAL, arg1: $U14:1, arg2: 0x1:1, offset: 13 }\n"
+            );
+        }
+        else {
+            assert_eq!(
+                msp430x_ops(&input),
+                "CmpOp { kind: IS_EQUAL, arg1: $U16:1, arg2: 0x1:1, offset: 13 }\n"
+            );
+        }
     }
 
     #[test]
@@ -1292,5 +1404,54 @@ mod test {
             0x3f, 0x3c, // JMP
         ];
         assert_eq!(msp430x_ops(&input), "");
+    }
+
+    #[test]
+    fn thumb_cmp_bge() {
+        let input = [
+            0xbc, 0x42, // cmp r4, r7
+            0x4e, 0xda, // bge
+        ];
+        assert_eq!(
+            thumb_ops(&input),
+            "CmpOp { kind: IS_EQUAL | IS_GREATER, arg1: r4, arg2: r7, offset: 3 }\n"
+        );
+    }
+
+    #[test]
+    fn thumb_and_cmp_beq() {
+        let input = [
+            0x0b, 0x40, // ands r3, r1
+            0x9a, 0x42, // cmp r2,r3
+            0x2c, 0xd0, // beq
+        ];
+        assert_eq!(
+            thumb_ops(&input),
+            "CmpOp { kind: IS_EQUAL | IS_MASKED, arg1: r2, arg2: r1, offset: 9 }\n\
+            CmpOp { kind: IS_EQUAL | IS_MASKED, arg1: r2, arg2: r3, offset: 9 }\n"
+        );
+
+        let input = [
+            0x03, 0xf0, 0x3f, 0x03, // and     r3,r3,#0x3f
+            0xb4, 0xf8, 0x62, 0x20, // ldrh.w  r2,[r4,#0x62]
+            0x93, 0x42, // cmp r3,r2
+            0x09, 0xd0, // beq
+        ];
+        assert_eq!(
+            thumb_ops(&input),
+            "CmpOp { kind: IS_EQUAL | IS_MASKED, arg1: r2:2, arg2: r3:2, offset: 12 }\n"
+        );
+    }
+
+    #[test]
+    fn thumb_and_cmp_bne() {
+        let input = [
+            0x79, 0x29, // cmp r1,0x79
+            0x2e, 0xd1, // bne
+        ];
+        assert_eq!(
+            thumb_ops(&input),
+            "CmpOp { kind: NOT_EQUAL, arg1: r1, arg2: 0x79:4, offset: 3 }\n"
+        );
     }
 }

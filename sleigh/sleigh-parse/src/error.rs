@@ -35,7 +35,7 @@ impl Span {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Error {
     /// The error message to display to the user
     pub message: String,

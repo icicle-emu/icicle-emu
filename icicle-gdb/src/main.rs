@@ -1,15 +1,9 @@
 use std::net::TcpListener;
 
 use anyhow::Context;
-use gdbstub::{
-    common::Signal,
-    conn::ConnectionExt,
-    stub::{run_blocking, DisconnectReason, GdbStub, SingleThreadStopReason},
-};
+use icicle_gdb::run;
 use target_lexicon::Architecture;
 use tracing::{error, info, warn};
-
-mod stub;
 
 /// Controls whether we should run the VM to the entry point of the binary before accepting the GDB
 /// connection.
@@ -23,21 +17,13 @@ fn main() {
         None => "warn".to_string(),
     };
     tracing_subscriber::fmt().with_env_filter(&log_filter).init();
+    let args: Vec<_> = std::env::args().collect();
 
-    let handle = std::thread::Builder::new()
-        .stack_size(1024 * 1024 * 1024)
-        .name("VmThread".into())
-        .spawn(move || {
-            let args: Vec<_> = std::env::args().collect();
+    let target = args.get(1).expect("Expected target triple");
 
-            let target = args.get(1).expect("Expected target triple");
-
-            if let Err(e) = start(target, &args[2..]) {
-                error!("{}", e);
-            }
-        })
-        .unwrap();
-    handle.join().unwrap();
+    if let Err(e) = start(target, &args[2..]) {
+        error!("{}", e);
+    }
 }
 
 fn start(target: &str, args: &[String]) -> anyhow::Result<()> {
@@ -67,11 +53,14 @@ fn start(target: &str, args: &[String]) -> anyhow::Result<()> {
         })?;
         vm.env = icicle_vm::env::build_auto(&mut vm)?;
 
-        if let Some(env) = vm.env.as_any().downcast_mut::<icicle_vm::linux::Kernel>() {
+        if let Some(env) = vm.env_mut::<icicle_vm::linux::Kernel>() {
             let envs: &[(&[u8], &[u8])] = &[];
             env.process.args.set(&args[0], &args[1..], envs);
         }
         vm.env.load(&mut vm.cpu, args[0].as_bytes()).map_err(|e| anyhow::format_err!("{e}"))?;
+
+        // Create an initial snapshot for reverse execution.
+        vm.save_snapshot();
 
         if RUN_TO_ENTRY {
             if let Some(kernel) = vm.env.as_any().downcast_ref::<icicle_vm::linux::Kernel>() {
@@ -83,73 +72,13 @@ fn start(target: &str, args: &[String]) -> anyhow::Result<()> {
         }
 
         match target.architecture {
-            Architecture::X86_64 => run(stream, stub::VmState::<stub::IcicleX64>::new(vm))?,
+            Architecture::X86_64 => run(stream, &mut icicle_gdb::X64Stub::new(vm))?,
             Architecture::Mips32(target_lexicon::Mips32Architecture::Mipsel) => {
-                run(stream, stub::VmState::<stub::IcicleMips32>::new(vm))?
+                run(stream, &mut icicle_gdb::Mips32Stub::new(vm))?
             }
-            Architecture::Msp430 => run(stream, stub::VmState::<stub::IcicleMsp430>::new(vm))?,
+            Architecture::Msp430 => run(stream, &mut icicle_gdb::Msp430Stub::new(vm))?,
             other => anyhow::bail!("Unsupported architecture: {}", other),
         }
     }
     Ok(())
-}
-
-fn run<T>(stream: std::net::TcpStream, mut target: stub::VmState<T>) -> anyhow::Result<()>
-where
-    T: stub::DynamicTarget,
-{
-    match GdbStub::new(stream).run_blocking::<GdbStubEventLoop<T>>(&mut target)? {
-        DisconnectReason::TargetExited(status) => {
-            info!("Target exited: {}", status);
-        }
-        DisconnectReason::TargetTerminated(signal) => {
-            info!("Target terminated: {}", signal);
-        }
-        DisconnectReason::Disconnect => {
-            info!("Client disconnected");
-        }
-        DisconnectReason::Kill => {
-            info!("Process killed");
-        }
-    }
-    Ok(())
-}
-
-struct GdbStubEventLoop<T> {
-    _target: std::marker::PhantomData<T>,
-}
-
-impl<T> run_blocking::BlockingEventLoop for GdbStubEventLoop<T>
-where
-    T: stub::DynamicTarget,
-{
-    type Target = stub::VmState<T>;
-    type Connection = std::net::TcpStream;
-    type StopReason =
-        gdbstub::stub::SingleThreadStopReason<<T::Arch as gdbstub::arch::Arch>::Usize>;
-
-    fn wait_for_stop_reason(
-        target: &mut Self::Target,
-        conn: &mut Self::Connection,
-    ) -> Result<
-        run_blocking::Event<Self::StopReason>,
-        run_blocking::WaitForStopReasonError<
-            <Self::Target as gdbstub::target::Target>::Error,
-            <Self::Connection as gdbstub::conn::Connection>::Error,
-        >,
-    > {
-        if conn.peek().map(|b| b.is_some()).unwrap_or(true) {
-            let byte = conn.read().map_err(run_blocking::WaitForStopReasonError::Connection)?;
-            return Ok(run_blocking::Event::IncomingData(byte));
-        }
-
-        let exit = target.run();
-        Ok(run_blocking::Event::TargetStopped(exit))
-    }
-
-    fn on_interrupt(
-        _target: &mut Self::Target,
-    ) -> Result<Option<Self::StopReason>, <Self::Target as gdbstub::target::Target>::Error> {
-        Ok(Some(SingleThreadStopReason::Signal(Signal::SIGINT)))
-    }
 }

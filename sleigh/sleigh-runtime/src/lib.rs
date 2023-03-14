@@ -131,8 +131,13 @@ impl Field {
 
     /// Write the value of the field to `dst`.
     pub fn set(&self, dst: &mut u64, value: i64) {
-        let mask = pcode::mask(self.num_bits as u64) << self.offset;
+        let mask = self.mask();
         *dst = (*dst & !mask) | (((value as u64) << self.offset) & mask);
+    }
+
+    /// Get a mask representing the bits that are read as part of `field`.
+    pub fn mask(&self) -> u64 {
+        pcode::mask(self.num_bits as u64) << self.offset
     }
 }
 
@@ -379,17 +384,23 @@ impl SleighData {
         Some(inst)
     }
 
+    /// Disassembles the previously decoded `inst` storing the result in `disasm`.
+    ///
+    /// Returns `None` if the instruction is invalid.
     pub fn disasm_into(&self, inst: &Instruction, disasm: &mut String) -> Option<()> {
         crate::disasm::disasm_subtable(inst.root(self), disasm)
     }
 
+    /// Disassembles the previously decoded `inst` as a string. The same as `self.disasm_into` but
+    /// always allocates and returns a new string.
     pub fn disasm(&self, inst: &Instruction) -> Option<String> {
         let mut disasm = String::new();
         self.disasm_into(inst, &mut disasm)?;
         Some(disasm)
     }
 
-    pub fn register_user_op(&mut self, name: Option<&str>) -> u16 {
+    /// if `Name` is none,
+    pub fn register_user_op(&mut self, name: Option<&str>) -> pcode::HookId {
         let id = self.user_ops.len();
         let before_strs = self.strings.len();
         if let Some(name) = name {
@@ -399,14 +410,15 @@ impl SleighData {
         id.try_into().expect("too many user ops")
     }
 
+    /// Returns an iterater over of all user/pcode operations
     pub fn get_user_ops(&self) -> impl Iterator<Item = &str> + '_ {
         self.user_ops.iter().map(move |i| self.get_str(*i))
     }
 
     /// Get the ID associated with a userop of a given name.
-    pub fn get_userop(&self, name: &str) -> Option<u16> {
+    pub fn get_userop(&self, name: &str) -> Option<pcode::HookId> {
         // @fixme: avoid sequential scan
-        self.user_ops.iter().position(|x| self.get_str(*x) == name).map(|x| x as u16)
+        self.user_ops.iter().position(|x| self.get_str(*x) == name).map(|x| x as pcode::HookId)
     }
 
     /// Get the register for a given name.
@@ -414,7 +426,8 @@ impl SleighData {
         self.register_name_mapping.get(name).map(|x| &self.named_registers[*x as usize])
     }
 
-    /// Get the name of a given varnode.
+    /// Given a runtime varnode, attempt to find the best matching register name from the original
+    /// SLEIGH specification.
     pub fn name_of_varnode(&self, var: pcode::VarNode) -> Option<&str> {
         let reg = self.registers.get(var.id as usize)?;
         if var.offset == 0 && var.size == reg.size {
@@ -427,6 +440,8 @@ impl SleighData {
     }
 
     /// Add a custom register.
+    ///
+    /// Returns `None` if a register with the same name already exists.
     pub fn add_custom_reg(&mut self, name: &str, size: u8) -> Option<pcode::VarNode> {
         if self.register_name_mapping.contains_key(name) {
             // Register with the same name already exists.
@@ -451,6 +466,7 @@ impl SleighData {
         self.registers.len()
     }
 
+    /// Returns a reference to the content of the interned string given by `index`.
     pub fn get_str(&self, index: StrIndex) -> &str {
         &self.strings[index.0 as usize..index.1 as usize]
     }
@@ -470,6 +486,7 @@ impl SleighData {
         }
     }
 
+    /// Finds a matching constructor given the current decoder state using the matcher `matcher_id`.
     fn match_constructor_with(
         &self,
         state: &Decoder,
@@ -495,12 +512,15 @@ impl SleighData {
 }
 
 impl SleighData {
+    /// Interns the string `value`, returning an index that can later be used to retreive the
+    /// string.
     pub fn add_string(&mut self, value: &str) -> StrIndex {
         let index = self.strings.len();
         self.strings.push_str(value);
         (index as u32, self.strings.len() as u32)
     }
 
+    /// Interns all of `segments`, returning that can later be used to retreive the segments.
     pub fn add_display_segments(&mut self, segments: &[DisplaySegment]) -> (u32, u32) {
         let start = self.display_segments.len() as u32;
         self.display_segments.extend(segments);

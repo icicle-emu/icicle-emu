@@ -50,12 +50,12 @@ swivc 0xffa324
 smlawteq r0,r1,r1,pc
 <L0> (entry=0x80000000):
 	$U6:4 = r1
-	$U7:2 = $U6[2]:2
+	$tmp0:2 = $U6[2]:2
 	$U8:1 = !ZR
 	if $U8:1 jump 0x80000004:8
 <L1>:
 	$U2:6 = sext(r1)
-	$U3:6 = sext($U7:2)
+	$U3:6 = sext($tmp0:2)
 	$U1:6 = $U2:6 * $U3:6
 	$U4:4 = $U1[2]:4
 	$U5:1 = $U4:4 scarry 0x80000000:4
@@ -273,12 +273,12 @@ pop.w {r3,r4,r5,r6,r7,r8,r9,pc}
 	r3 = r3 | r2
 <L4>:
 	instruction(0x8011eae)
-	$U1:4 = r0 + 0x104:4
+	$tmp0:4 = r0 + 0x104:4
 	$U3:1 = ZR != 0x0:1
 	$U2:1 = !$U3:1
 	if $U2:1 jump <L6>
 <L5>:
-	ram[$U1:4] = r3
+	ram[$tmp0:4] = r3
 <L6>:
 	instruction(0x8011eb2)
 	$U1:4 = r4 + 0x4:4
@@ -419,12 +419,12 @@ beq 0x80003aa
 	NG = tmpNG
 	instruction(0x800034e)
 	instruction(0x8000350)
-	$U4:4 = r5 s>> 0x15:4
+	$tmp0:4 = r5 s>> 0x15:4
 	$U6:1 = tmpZR == 0x0:1
 	$U5:1 = !$U6:1
 	if $U5:1 jump <L2>
 <L1>:
-	r12 = ~$U4:4
+	r12 = ~$tmp0:4
 	tmpNG = r12 s< 0x0:4
 	tmpZR = r12 == 0x0:4
 	ZR = tmpZR
@@ -476,14 +476,14 @@ bx.gt lr
 	OV = tmpOV
 <L2>:
 	instruction(0x8000ec8)
-	$U4:4 = r2 << 0x17:4
+	$tmp0:4 = r2 << 0x17:4
 	$U7:1 = !ZR
 	$U8:1 = NG == OV
 	$U6:1 = $U7:1 && $U8:1
 	$U5:1 = !$U6:1
 	if $U5:1 jump <L4>
 <L3>:
-	r0 = r0 | $U4:4
+	r0 = r0 | $tmp0:4
 <L4>:
 	instruction(0x8000ecc)
 	$U6:1 = !ZR

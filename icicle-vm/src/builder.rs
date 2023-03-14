@@ -108,23 +108,33 @@ fn build_arch(
     })
 }
 
+pub fn register_helpers(vm: &mut Vm, helpers: &[(&str, helpers::PcodeOpHelper)]) {
+    for &(name, func) in helpers {
+        let id = match vm.cpu.arch.sleigh.get_userop(name) {
+            Some(id) => id,
+            None => continue,
+        };
+        vm.cpu.set_helper(id, func);
+    }
+}
+
 fn register_helpers_for(vm: &mut Vm, arch: target_lexicon::Architecture) {
     use target_lexicon::Architecture;
 
-    lifter::get_injectors(&vm.cpu, &mut vm.lifter.op_injectors);
+    lifter::get_injectors(&mut vm.cpu, &mut vm.lifter.op_injectors);
 
-    vm.register_helpers(helpers::HELPERS);
+    register_helpers(vm, helpers::HELPERS);
     match arch {
         Architecture::Arm(_) => {
-            vm.register_helpers(helpers::arm::HELPERS);
+            register_helpers(vm, helpers::arm::HELPERS);
             // Fixes `pop {..., pc}`
             let pc = vm.cpu.arch.sleigh.get_reg("pc").unwrap().var;
             let tmp_pc = vm.cpu.arch.sleigh.add_custom_reg("tmp_pc", pc.size).unwrap();
             icicle_cpu::lifter::register_read_pc_patcher(&mut vm.lifter, pc, tmp_pc);
         }
-        Architecture::Aarch64(_) => vm.register_helpers(helpers::aarch64::HELPERS),
+        Architecture::Aarch64(_) => register_helpers(vm, helpers::aarch64::HELPERS),
         Architecture::X86_32(_) | Architecture::X86_64 => {
-            vm.register_helpers(helpers::x86::HELPERS)
+            register_helpers(vm, helpers::x86::HELPERS)
         }
         Architecture::Msp430 => {
             lifter::msp430::status_register_control_patch(&mut vm.cpu, &mut vm.lifter);
@@ -177,17 +187,26 @@ fn get_spec_config(arch: target_lexicon::Architecture) -> Option<SpecConfig> {
     Some(match arch {
         Architecture::Arm(variant) => {
             let path = match variant {
-                ArmArchitecture::Armv7 | ArmArchitecture::Arm => {
-                    "ARM/data/languages/ARM7_le.slaspec"
-                }
-                ArmArchitecture::Armv8 => "ARM/data/languages/ARM8_le.slaspec",
+                ArmArchitecture::Armv7
+                | ArmArchitecture::Thumbv7m
+                | ArmArchitecture::Thumbv7a
+                | ArmArchitecture::Thumbv7em
+                | ArmArchitecture::Thumbv7neon => "ARM/data/languages/ARM7_le.slaspec",
+                ArmArchitecture::Armv8
+                | ArmArchitecture::Arm
+                | ArmArchitecture::Thumbv8mBase
+                | ArmArchitecture::Thumbv8mMain => "ARM/data/languages/ARM8_le.slaspec",
                 _ => return None,
+            };
+            let context = match variant.is_thumb() {
+                false => vec![arm::ARM_MODE_CTX, arm::THUMB_MODE_CTX],
+                true => vec![arm::THUMB_MODE_CTX, arm::THUMB_MODE_CTX],
             };
             SpecConfig {
                 path,
                 reg_pc: "pc",
                 reg_sp: "sp",
-                context: vec![arm::ARM_MODE_CTX, arm::THUMB_MODE_CTX],
+                context,
                 init_registers: vec![],
                 temp_registers: vec![
                     "tmpCY",
@@ -455,7 +474,7 @@ pub mod x86 {
         let extract_bit = |field: u32| ((eflags >> field.trailing_zeros()) & 0x1) as u8;
 
         let mut write = |name: &str, value: u8| {
-            cpu.write(cpu.arch.sleigh.get_reg(name).unwrap().var, value);
+            cpu.write_var(cpu.arch.sleigh.get_reg(name).unwrap().var, value);
         };
 
         write("CF", extract_bit(0x0001));

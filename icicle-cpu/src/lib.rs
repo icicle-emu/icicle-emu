@@ -1,5 +1,3 @@
-#![feature(new_uninit, box_syntax)]
-
 pub mod cpu;
 pub mod debug_info;
 pub mod elf;
@@ -12,20 +10,19 @@ mod exit;
 mod regs;
 mod trace;
 
-use std::{
-    any::Any,
-    collections::{HashMap, HashSet},
-};
+use std::any::Any;
 
-use crate::debug_info::SourceLocation;
+use hashbrown::{HashMap, HashSet};
+
+use crate::debug_info::{DebugInfo, SourceLocation};
 
 pub use crate::{
     config::Config,
-    cpu::{Arch, Cpu, CpuSnapshot, Exception, Hook, ShadowStack, ShadowStackEntry},
+    cpu::{Arch, Cpu, CpuSnapshot, Exception, RegHandler, ShadowStack, ShadowStackEntry},
     exit::VmExit,
     lifter::BlockGroup,
     regs::{RegValue, Regs, ValueSource, VarSource},
-    trace::{StoreRef, TraceStore},
+    trace::{HookHandler, HookTrampoline, InstHook, StoreRef, TraceStore},
 };
 pub use icicle_mem as mem;
 pub use icicle_mem::Mmu;
@@ -53,6 +50,46 @@ impl BlockTable {
         self.disasm.clear();
         self.modified.clear();
     }
+
+    pub fn get_info(&self, key: BlockKey) -> Option<BlockInfoRef> {
+        let group = *self.map.get(&key)?;
+        Some(BlockInfoRef { group, code: self })
+    }
+
+    pub fn address_of(&self, id: u64, offset: u64) -> u64 {
+        let block = &self.blocks[id as usize];
+        block
+            .pcode
+            .instructions
+            .iter()
+            .take(offset as usize)
+            .filter(|inst| matches!(inst.op, pcode::Op::InstructionMarker))
+            .map(|x| x.inputs.first().as_u64())
+            .last()
+            .unwrap_or(0)
+    }
+}
+
+pub struct BlockInfoRef<'a> {
+    group: BlockGroup,
+    code: &'a BlockTable,
+}
+
+impl<'a> BlockInfoRef<'a> {
+    /// Return an iterator over all (instruction start, instruction len) pairs in the group.
+    pub fn instructions(&self) -> impl Iterator<Item = (u64, u64)> + 'a {
+        self.code.blocks[self.group.range()].iter().map(|block| block.instructions()).flatten()
+    }
+
+    /// Return the entry block
+    pub fn entry_block(&self) -> &'a lifter::Block {
+        &self.code.blocks[self.group.blocks.0]
+    }
+
+    /// Return an iterator over all blocks in the group
+    pub fn blocks(&self) -> impl Iterator<Item = (usize, &'a lifter::Block)> + 'a {
+        self.group.range().map(|i| (i, &self.code.blocks[i]))
+    }
 }
 
 pub trait Environment {
@@ -65,6 +102,11 @@ pub trait Environment {
     /// Returns the next time the environment wants to interrupt the CPU.
     fn next_timer(&self) -> u64 {
         u64::MAX
+    }
+
+    /// Get a direct reference to the debug info loaded for the current environment
+    fn debug_info(&self) -> Option<&DebugInfo> {
+        None
     }
 
     /// Obtains debug information about the target address.
@@ -89,8 +131,21 @@ pub trait Environment {
 
     /// Restores the environment to the state of the snapshot.
     fn restore(&mut self, snapshot: &Box<dyn Any>);
+}
 
-    fn as_any(&mut self) -> &mut dyn Any;
+pub trait EnvironmentAny: Environment {
+    fn as_any(&self) -> &dyn Any;
+    fn as_mut_any(&mut self) -> &mut dyn Any;
+}
+
+impl<E: Environment + 'static> EnvironmentAny for E {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_mut_any(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
 impl Environment for () {
@@ -104,9 +159,6 @@ impl Environment for () {
         Box::new(())
     }
     fn restore(&mut self, _: &Box<dyn Any>) {}
-    fn as_any(&mut self) -> &mut dyn Any {
-        self
-    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -116,6 +168,7 @@ pub enum ExceptionCode {
 
     InstructionLimit = 0x0001,
     Halt = 0x0002,
+    Sleep = 0x0003,
 
     Syscall = 0x0101,
     CpuStateChanged = 0x0102,
@@ -163,6 +216,7 @@ impl ExceptionCode {
             0x0000 => Self::None,
             0x0001 => Self::InstructionLimit,
             0x0002 => Self::Halt,
+            0x0003 => Self::Sleep,
 
             0x0101 => Self::Syscall,
             0x0102 => Self::CpuStateChanged,
@@ -278,4 +332,13 @@ impl From<icicle_mem::MemError> for ExceptionCode {
 #[repr(u64)]
 pub enum InternalError {
     CorruptedBlockMap,
+    UnsupportedIsaMode,
+}
+
+pub fn read_value_zxt(cpu: &mut Cpu, value: pcode::Value) -> u64 {
+    cpu.read_dynamic(value).zxt()
+}
+
+pub fn read_value_sxt(cpu: &mut Cpu, value: pcode::Value) -> i64 {
+    cpu.read_dynamic(value).sxt()
 }

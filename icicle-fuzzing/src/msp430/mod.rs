@@ -1,8 +1,11 @@
-mod config;
+pub mod config;
 mod env;
 mod hw;
 
-pub use self::{config::Config, env::Msp430};
+pub use self::{
+    config::{Config, Mcu},
+    env::Msp430,
+};
 
 use std::{collections::HashSet, rc::Rc};
 
@@ -27,14 +30,7 @@ impl RandomIoTarget {
 }
 
 impl crate::FuzzTarget for RandomIoTarget {
-    fn initialize_vm<I, F>(
-        &mut self,
-        config: &mut FuzzConfig,
-        instrument_vm: F,
-    ) -> anyhow::Result<(icicle_vm::Vm, I)>
-    where
-        F: FnOnce(&mut icicle_vm::Vm, &FuzzConfig) -> anyhow::Result<I>,
-    {
+    fn create_vm(&mut self, config: &mut FuzzConfig) -> anyhow::Result<icicle_vm::Vm> {
         anyhow::ensure!(!config.guest_args.is_empty(), "program not specified in input arguments");
 
         if let Some(fuzz_addrs) = config.msp430.fuzz_addrs.as_ref() {
@@ -74,25 +70,27 @@ impl crate::FuzzTarget for RandomIoTarget {
             }));
         }
 
-        vm.env = Box::new(env);
+        vm.set_env(env);
+        Ok(vm)
+    }
 
-        let instrumentation = instrument_vm(&mut vm, config)?;
-        if let Some(reg) = vm.cpu.arch.sleigh.get_reg("afl.prev_pc") {
-            let env = vm.env.as_any().downcast_mut::<env::Msp430>().unwrap();
-            env.afl_prev_pc = Some(reg.var);
+    fn initialize_vm(&mut self, config: &FuzzConfig, vm: &mut icicle_vm::Vm) -> anyhow::Result<()> {
+        if let Some(var) = vm.cpu.arch.sleigh.get_reg("afl.prev_pc").map(|x| x.var) {
+            let env = vm.env_mut::<env::Msp430>().unwrap();
+            env.afl_prev_pc = Some(var);
         }
 
         if let Some(addr) = config.start_addr {
             vm.run_until(addr);
         }
 
-        Ok((vm, instrumentation))
+        Ok(())
     }
 }
 
 impl Runnable for RandomIoTarget {
     fn set_input(&mut self, vm: &mut icicle_vm::Vm, input: &[u8]) -> anyhow::Result<()> {
-        let env = vm.env.as_any().downcast_mut::<env::Msp430>().unwrap();
+        let env = vm.env_mut::<env::Msp430>().unwrap();
 
         let (input, rand_seed) = match self.fixed_seed {
             Some(seed) => {
@@ -111,13 +109,34 @@ impl Runnable for RandomIoTarget {
         };
 
         let mut handler = env.unknown_peripheral_handler.inner.borrow_mut();
-        match handler.as_any().downcast_mut::<InputHandler>() {
+        match handler.as_mut_any().downcast_mut::<InputHandler>() {
             Some(handler) => handler.reset(input, rand_seed),
             None => {
                 *handler =
                     Box::new(InputHandler::new(self.fuzz_addrs.clone(), input.to_vec(), rand_seed));
             }
         };
+
+        Ok(())
+    }
+
+    fn modify_input(
+        &mut self,
+        vm: &mut icicle_vm::Vm,
+        offset: u64,
+        input: &[u8],
+    ) -> anyhow::Result<()> {
+        let env = vm.env_ref::<env::Msp430>().unwrap();
+
+        let mut handler_ref = env.unknown_peripheral_handler.inner.borrow_mut();
+        let handler = handler_ref
+            .as_mut_any()
+            .downcast_mut::<InputHandler>()
+            .ok_or_else(|| anyhow::format_err!("Input not configured"))?;
+
+        handler.offset = offset as usize;
+        handler.data.clear();
+        handler.data.extend_from_slice(input);
 
         Ok(())
     }
@@ -188,10 +207,6 @@ impl mem::IoMemory for InputHandler {
             self.rng = *rng;
         }
     }
-
-    fn as_any(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
 }
 
 const BLOCK_SIZE: usize = 16;
@@ -248,9 +263,5 @@ impl<I: AsRef<[u8]> + 'static> mem::IoMemory for BlockInputHandler<I> {
 
     fn write(&mut self, _addr: u64, _value: &[u8]) -> MemResult<()> {
         Ok(())
-    }
-
-    fn as_any(&mut self) -> &mut dyn std::any::Any {
-        self
     }
 }

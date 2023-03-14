@@ -146,14 +146,14 @@ fn copy<E: ValueSource>(exec: &mut E, input: Value, output: VarNode) {
     fn cold<E: ValueSource>(exec: &mut E, input: Value, output: VarNode) {
         for i in 0..output.size {
             let byte = exec.read::<u8>(input.slice(i, 1));
-            exec.write(output.slice(i, 1), byte);
+            exec.write_var(output.slice(i, 1), byte);
         }
     }
 
     macro_rules! copy {
         ($ty:ty) => {{
             let value = exec.read::<$ty>(input);
-            exec.write(output, value);
+            exec.write_var(output, value);
         }};
     }
 
@@ -174,19 +174,19 @@ fn zero_extend<E: ValueSource>(exec: &mut E, input: Value, output: VarNode) {
         // Copy value
         for i in 0..input.size() {
             let byte = exec.read::<u8>(input.slice(i, 1));
-            exec.write(output.slice(i, 1), byte);
+            exec.write_var(output.slice(i, 1), byte);
         }
 
         // Zero extend
         for i in input.size()..output.size {
-            exec.write(output.slice(i, 1), 0_u8);
+            exec.write_var(output.slice(i, 1), 0_u8);
         }
     }
 
     macro_rules! eval {
         ($in_ty:ty, $out_ty:ty) => {{
             let value = exec.read::<$in_ty>(input) as $out_ty;
-            exec.write(output, value);
+            exec.write_var(output, value);
         }};
 
         ($in_ty:ty) => {
@@ -229,13 +229,13 @@ where
         let mut byte = 0;
         for i in 0..input.size() {
             byte = exec.read::<u8>(input.slice(i, 1));
-            exec.write(output.slice(i, 1), byte);
+            exec.write_var(output.slice(i, 1), byte);
         }
 
         // Sign-extend
         let fill: u8 = if byte >> 7 == 0 { 0x00 } else { 0xff };
         for i in input.size()..output.size {
-            exec.write::<u8>(output.slice(i, 1), fill);
+            exec.write_var::<u8>(output.slice(i, 1), fill);
         }
     }
 
@@ -243,7 +243,7 @@ where
         ($in_ty:ty, $out_ty:ty) => {{
             let value =
                 <$out_ty>::from_ne_bytes(resize_sxt(exec.read::<$in_ty>(input).to_ne_bytes()));
-            exec.write(output, value);
+            exec.write_var(output, value);
         }};
 
         ($in_ty:ty) => {
@@ -275,7 +275,7 @@ fn load<E: PcodeExecutor>(exec: &mut E, id: MemId, dst: VarNode, addr: u64) -> M
                 true => <$ty>::from_be_bytes(tmp),
                 false => <$ty>::from_le_bytes(tmp),
             };
-            exec.write($dst, value);
+            exec.write_var($dst, value);
         }};
     }
 
@@ -407,7 +407,7 @@ where
         ($ty:ty) => {{
             let a: $ty = exec.read(a);
             let b: $ty = exec.read(b);
-            exec.write(output, O::eval(a, b));
+            exec.write_var(output, O::eval(a, b));
         }};
     }
 
@@ -475,7 +475,7 @@ where
                 exec.exception(ExceptionCode::DivideByZero, 0);
                 return;
             }
-            exec.write(output, O::eval(a, b));
+            exec.write_var(output, O::eval(a, b));
         }};
     }
 
@@ -509,7 +509,7 @@ where
         ($ty:ty) => {{
             let a: $ty = exec.read(a);
             let b: $ty = exec.read(b);
-            exec.write(output, O::eval(a, b) as u8);
+            exec.write_var(output, O::eval(a, b) as u8);
         }};
     }
 
@@ -573,7 +573,7 @@ where
     macro_rules! eval {
         ($ty:ty) => {{
             let input: $ty = exec.read(input);
-            exec.write(output, O::eval(input));
+            exec.write_var(output, O::eval(input));
         }};
     }
 
@@ -632,7 +632,7 @@ where
     let [a, b] = inputs;
     let a: u8 = exec.read(a);
     let b: u8 = exec.read(b);
-    exec.write(output, O::eval(a, b) as u8);
+    exec.write_var(output, O::eval(a, b) as u8);
 }
 
 /// Represents an operation taking two inputs of the same size producing a boolean output
@@ -661,7 +661,7 @@ where
     E: PcodeExecutor,
 {
     let x = exec.read::<u8>(input);
-    exec.write(output, pcode::cast_bool(x == 0));
+    exec.write_var(output, pcode::cast_bool(x == 0));
 }
 
 #[inline(always)]
@@ -677,7 +677,7 @@ where
         ($ty:ty) => {{
             let a: $ty = exec.read(a);
             let b: $ty = exec.read(b);
-            exec.write(output, O::eval(a, b));
+            exec.write_var(output, O::eval(a, b));
         }};
     }
 
@@ -781,7 +781,7 @@ where
     macro_rules! eval {
         ($ty:ty) => {{
             let input: $ty = exec.read(input);
-            exec.write(output, O::eval(input));
+            exec.write_var(output, O::eval(input));
         }};
     }
 
@@ -848,7 +848,7 @@ where
         10 => eval!([u8; 10]),
         size => return exec.invalid_op_size(size),
     };
-    exec.write(output, pcode::cast_bool(result));
+    exec.write_var(output, pcode::cast_bool(result));
 }
 
 #[inline(always)]
@@ -864,7 +864,7 @@ where
         ($ty:ty) => {{
             let a: $ty = exec.read(a);
             let b: $ty = exec.read(b);
-            exec.write(output, O::eval(a, b) as u8);
+            exec.write_var(output, O::eval(a, b) as u8);
         }};
     }
 
@@ -920,9 +920,9 @@ where
         ($in:ty) => {{
             let value = exec.read::<$in>(input).to_signed();
             match output.size {
-                4 => exec.write::<u32>(output, FromFloat::from_float(value as f32)),
-                8 => exec.write::<u64>(output, FromFloat::from_float(value as f64)),
-                10 => exec.write::<[u8; 10]>(output, FromFloat::from_float(value as f64)),
+                4 => exec.write_var::<u32>(output, FromFloat::from_float(value as f32)),
+                8 => exec.write_var::<u64>(output, FromFloat::from_float(value as f64)),
+                10 => exec.write_var::<[u8; 10]>(output, FromFloat::from_float(value as f64)),
                 size => exec.exception(ExceptionCode::InvalidFloatSize, size as u64),
             }
         }};
@@ -945,9 +945,9 @@ where
         ($val:expr) => {{
             let val = $val;
             match output.size {
-                4 => exec.write::<u32>(output, FromFloat::from_float(val as f32)),
-                8 => exec.write::<u64>(output, FromFloat::from_float(val as f64)),
-                10 => exec.write::<[u8; 10]>(output, FromFloat::from_float(val as f64)),
+                4 => exec.write_var::<u32>(output, FromFloat::from_float(val as f32)),
+                8 => exec.write_var::<u64>(output, FromFloat::from_float(val as f64)),
+                10 => exec.write_var::<[u8; 10]>(output, FromFloat::from_float(val as f64)),
                 size => return exec.exception(ExceptionCode::InvalidFloatSize, size as u64),
             }
         }};
@@ -969,9 +969,9 @@ where
         ($val:expr) => {{
             let val = $val;
             match output.size {
-                2 => exec.write::<u16>(output, val as u16),
-                4 => exec.write::<u32>(output, val as u32),
-                8 => exec.write::<u64>(output, val as u64),
+                2 => exec.write_var::<u16>(output, val as u16),
+                4 => exec.write_var::<u32>(output, val as u32),
+                8 => exec.write_var::<u64>(output, val as u64),
                 size => return exec.exception(ExceptionCode::InvalidFloatSize, size as u64),
             }
         }};

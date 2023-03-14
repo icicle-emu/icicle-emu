@@ -1,53 +1,18 @@
 use std::collections::HashSet;
 
-use icicle_vm::{linux, Vm, VmExit};
+use icicle_vm::{Vm, VmExit};
 
 #[derive(Default)]
 pub struct CrashLogger {
-    use_access_address: bool,
-    crashes: HashSet<(u64, u64, String)>,
+    crashes: HashSet<(u64, String)>,
 }
 
 impl CrashLogger {
     pub fn check_crash(&mut self, vm: &mut Vm, exit: VmExit) -> bool {
         let pc = vm.cpu.read_pc();
-        let mut key = pc;
-
-        let cause = match exit {
-            VmExit::UnhandledException((code, addr)) if code.is_memory_error() => {
-                if self.use_access_address {
-                    key = addr;
-                }
-                format!("{code:?}")
-            }
-            VmExit::Halt if exit_sigsegv(vm) => {
-                // MAGMA (with canaries) triggers crashes via the kill syscall, so the current pc
-                // will not be unique even for different crashes. So generate a new key based on the
-                // last few stack frames.
-                for entry in vm.cpu.shadow_stack.as_slice().iter().rev().take(3) {
-                    key ^= entry.addr;
-                }
-                "SIGSEGV".into()
-            }
-            _other => "OTHER".into(),
-        };
-
-        self.crashes.insert((pc, key, cause))
+        let key = crate::gen_crash_key(vm, exit);
+        self.crashes.insert((pc, key))
     }
-
-    pub fn unique_crashes(&self) -> usize {
-        self.crashes.len()
-    }
-}
-
-fn exit_sigsegv(vm: &mut Vm) -> bool {
-    let kernel = match vm.env.as_any().downcast_ref::<linux::Kernel>() {
-        Some(kernel) => kernel,
-        None => return false,
-    };
-
-    const SIGSEGV: u64 = linux::sys::signal::SIGSEGV as u64;
-    matches!(kernel.process.termination_reason, Some(linux::TerminationReason::Killed(SIGSEGV)))
 }
 
 pub struct StatsLogger {

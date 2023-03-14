@@ -6,4 +6,5 @@ edition = "2021"
 [dependencies]
 sleigh-parse = { path = "../sleigh-parse" }
 sleigh-runtime = { path = "../sleigh-runtime" }
+petgraph = { version = "0.6.3", default-features = false }
 pcode = { path = "../pcode" }

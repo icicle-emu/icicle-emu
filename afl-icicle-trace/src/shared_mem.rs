@@ -42,7 +42,7 @@ fn map_size() -> anyhow::Result<usize> {
 
 #[cfg(not(unix))]
 unsafe fn shared_memory_from_env(_: &str) -> anyhow::Result<*mut u8> {
-    unimplemented!("shared memory not supported on current platform");
+    anyhow::bail!("shared memory not supported on current platform");
 }
 
 #[cfg(unix)]

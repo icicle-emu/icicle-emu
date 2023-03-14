@@ -1,8 +1,6 @@
-use std::cmp::Ordering;
-
 use sleigh_parse::ast::{self, ParserDisplay};
 use sleigh_runtime::{
-    matcher::{Constraint, ConstraintOperand, MatchCase, SequentialMatcher},
+    matcher::{Constraint, ConstraintOperand, MatchCase},
     ConstructorId,
 };
 
@@ -11,11 +9,17 @@ use crate::{
     Context,
 };
 
-pub(crate) fn build_sequential_matcher(
-    symbols: &SymbolTable,
+/// Iterates over all the constructors in `table` to build a list of cases that can be used for
+/// identifying whether a constructor matches the current decoder state.
+///
+/// Returns the list of match cases and the number of token bits required for the largest case.
+///
+/// Note: some of the cases may overlap.
+pub(crate) fn collect_constraints(
     table: &Table,
+    symbols: &SymbolTable,
     ctx: &Context,
-) -> Result<SequentialMatcher, String> {
+) -> Result<(Vec<MatchCase>, usize), String> {
     let mut max_token_bytes = 0;
     let mut cases = vec![];
     for &id in &table.constructors {
@@ -27,10 +31,13 @@ pub(crate) fn build_sequential_matcher(
             let (case, required_bytes) = match build_case_matcher(id, entry, ctx.data.big_endian) {
                 Ok(entry) => entry,
                 Err(err) => {
-                    // Skip this constraint if it is impossible to satisfy.
+                    // Skip this constraint if it is impossible to satisfy. This sometimes occurs
+                    // when multiple constraint expressions are generated due to the use of `|`
+                    // expressions in the original specification. For example, this occurs due to
+                    // $(THCC) in `ARMTHUMBInstructions.sinc`.
                     //
-                    // This is neccessary to support the $(THCC) constraint in
-                    // `ARMTHUMBInstructions.sinc`
+                    // Note we keep track of the conflict here so we can print an error if is there
+                    // is no possible match for the current constructor.
                     constraint_err = Some(err);
                     continue;
                 }
@@ -53,9 +60,7 @@ pub(crate) fn build_sequential_matcher(
         }
     }
 
-    // Ensure that cases are sorted in the correct order for matching.
-    cases.sort_by(|a, b| order_case(a, b).reverse());
-    Ok(SequentialMatcher { cases, token_size: max_token_bytes as usize })
+    Ok((cases, max_token_bytes as usize))
 }
 
 fn build_case_matcher(
@@ -94,58 +99,13 @@ fn build_case_matcher(
         context: context.pattern(),
         token: tokens.pattern(),
         constraints: complex,
+        rank: 0,
     };
     Ok((case, token_bytes))
 }
 
-/// The specification requires that the most constrained constructors should be matched first
-/// so sort them here.
-///
-/// (actual specification seems to be slightly more subtle, but I haven't been able to find
-/// any concrete case where this doesn't work).
-fn order_case(a: &MatchCase, b: &MatchCase) -> Ordering {
-    match compare_bits_set(a.token.mask, b.token.mask) {
-        Some(Ordering::Equal) | None => {}
-        Some(x) => return x,
-    }
-
-    match a.constraints.len().cmp(&b.constraints.len()) {
-        Ordering::Equal => {}
-        x => return x,
-    }
-
-    match compare_bits_set(a.context.mask, b.context.mask) {
-        Some(Ordering::Equal) | None => {}
-        Some(x) => return x,
-    }
-
-    // @fixme: this attempts to avoid breaking sorting when there are cases that cannot be compared.
-    a.token.mask.count_ones().cmp(&b.token.mask.count_ones())
-}
-
-/// Compares the bits set in self with other.
-///
-/// Possible results:
-///
-/// - [Some(Ordering::Equal)]: both self and other set the same bits.
-/// - [Some(Ordering::Less)]: every bit in self is set in other, but other contains bits not set in
-///   self.
-/// - [Some(Ordering::Greater)]: every bit in other is set in self, but self contains bits not set
-///   in other.
-/// - [None]: both self and other contains bits not set by the other.
-fn compare_bits_set(a: u64, b: u64) -> Option<Ordering> {
-    let extra_a = a & (!b) != 0;
-    let extra_b = b & (!a) != 0;
-    match (extra_a, extra_b) {
-        (true, true) => None,
-        (false, false) => Some(Ordering::Equal),
-        (true, false) => Some(Ordering::Greater),
-        (false, true) => Some(Ordering::Less),
-    }
-}
-
 #[derive(Clone, Default)]
-struct BitMatcher {
+pub(crate) struct BitMatcher {
     bits: BitVec,
     mask: BitVec,
 }
@@ -200,7 +160,7 @@ impl BitMatcher {
         self.mask.grow(new_len, false);
     }
 
-    fn pattern(&self) -> sleigh_runtime::matcher::Pattern {
+    pub(crate) fn pattern(&self) -> sleigh_runtime::matcher::Pattern {
         sleigh_runtime::matcher::Pattern {
             bits: self.bits.value as u64,
             mask: self.mask.value as u64,
@@ -208,7 +168,7 @@ impl BitMatcher {
     }
 
     #[cfg(test)]
-    fn from_str(value: &str) -> Self {
+    pub(crate) fn from_str(value: &str) -> Self {
         let mut bits = BitVec::default();
         let mut mask = BitVec::default();
         for x in value.chars() {
@@ -255,19 +215,6 @@ pub(crate) struct BitVec {
 }
 
 impl BitVec {
-    #[cfg(test)]
-    pub fn from_str(value: &str) -> Self {
-        let mut bit_vec = Self::default();
-        for x in value.chars() {
-            match x {
-                '0' => bit_vec.push_bit(false),
-                '1' => bit_vec.push_bit(true),
-                _ => panic!("Invalid char: {}", x),
-            }
-        }
-        bit_vec
-    }
-
     /// Creates a new bit vector from a u64 value
     pub fn from_u64(value: u64, len: usize) -> Self {
         let mut bit_vec = Self::default();
@@ -401,55 +348,4 @@ fn bit_vec() {
     let b = BitVec::from([true, true, true]);
     assert_eq!(a.and(&b), BitVec::from([true, true, true, false]));
     assert_eq!(a.or(&b), BitVec::from([true, true, true, true]));
-}
-
-#[test]
-fn test_compare_bits_set() {
-    let a = 0b1111;
-    let b = 0b11111;
-    assert_eq!(compare_bits_set(a, a), Some(std::cmp::Ordering::Equal));
-    assert_eq!(compare_bits_set(a, b), Some(std::cmp::Ordering::Less));
-    assert_eq!(compare_bits_set(b, a), Some(std::cmp::Ordering::Greater));
-
-    let c = 0b10000;
-    assert_eq!(compare_bits_set(c, a), None);
-    assert_eq!(compare_bits_set(c, b), Some(std::cmp::Ordering::Less));
-
-    let ands = 0b11111111100000000000000000000000;
-    let tst = 0b11111111100000000000000000011111;
-
-    assert_eq!(compare_bits_set(ands, tst), Some(std::cmp::Ordering::Less));
-    assert_eq!(compare_bits_set(tst, ands), Some(std::cmp::Ordering::Greater));
-}
-
-#[test]
-fn compare_pattern() {
-    let ands = MatchCase {
-        context: BitMatcher::from_str("_______________________________1").pattern(),
-        token: BitMatcher::from_str("_______________________001001111").pattern(),
-        constraints: vec![],
-        constructor: 0,
-    };
-    let tst = MatchCase {
-        context: BitMatcher::from_str("_______________________________1").pattern(),
-        token: BitMatcher::from_str("11111__________________001001111").pattern(),
-        constraints: vec![],
-        constructor: 0,
-    };
-    assert_eq!(order_case(&tst, &ands), std::cmp::Ordering::Greater);
-
-    // Tokens constrains should be checked before context constraints
-    let a = MatchCase {
-        context: BitMatcher::from_str("___").pattern(),
-        token: BitMatcher::from_str("_110").pattern(),
-        constraints: vec![],
-        constructor: 0,
-    };
-    let b = MatchCase {
-        context: BitMatcher::from_str("__1").pattern(),
-        token: BitMatcher::from_str("__10").pattern(),
-        constraints: vec![],
-        constructor: 0,
-    };
-    assert_eq!(order_case(&a, &b), std::cmp::Ordering::Greater);
 }

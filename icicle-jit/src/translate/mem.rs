@@ -2,7 +2,10 @@
 
 use std::convert::TryInto;
 
-use cranelift::prelude::{types, Block, InstBuilder, IntCC, MemFlags, Type, Value};
+use cranelift::prelude::{
+    types, Block, InstBuilder, IntCC, MemFlags, StackSlotData, StackSlotKind::ExplicitSlot, Type,
+    Value,
+};
 use cranelift_codegen::ir::Endianness;
 use icicle_cpu::mem::{
     self, perm,
@@ -43,8 +46,7 @@ fn check_alignment(trans: &mut Translator, addr: Value, bytes: u8, unaligned_blo
     }
 
     let cond = trans.builder.ins().band_imm(addr, (bytes - 1) as i64);
-    trans.builder.ins().brnz(cond, unaligned_block, &[]);
-    trans.jump_next_block();
+    trans.branch_non_zero(cond, unaligned_block);
 }
 
 /// Generate code for modifying `value` with a `>>` of `shift` bits followed by an `&` with `mask`.
@@ -54,6 +56,7 @@ fn rshift_and_mask(trans: &mut Translator, value: Value, shift: i64, mask: i64) 
 }
 
 /// Generate code for modifying `value` with a `<<` of `shift` bits followed by an `&` with `mask`.
+#[allow(unused)]
 fn lshift_and_mask(trans: &mut Translator, value: Value, shift: i64, mask: i64) -> Value {
     let tmp = trans.builder.ins().ishl_imm(value, shift);
     trans.builder.ins().band_imm(tmp, mask)
@@ -79,14 +82,16 @@ fn tlb_lookup(trans: &mut Translator, addr: Value, kind: AccessKind, not_found: 
     let kind_offset = kind.tlb_offset();
     let expected_tag = trans.builder.ins().load(types::I64, mem_flags, tlb_addr, kind_offset + 0);
 
-    // Check that the tag matches
+    // Check that the tag matches. Note we can avoid the mask here, since all non-tag bits are
+    // already zeroed.
     let tag_shift = (OFFSET_BITS + TLB_INDEX_BITS) as i64;
-    let tag_mask = ((1_u64 << mem::tlb::TLB_TAG_BITS) - 1) as i64;
-    let tag = rshift_and_mask(trans, addr, tag_shift, tag_mask);
-    trans.builder.ins().br_icmp(IntCC::NotEqual, tag, expected_tag, not_found, &[]);
-    trans.jump_next_block();
+    // let tag_mask = ((1_u64 << mem::tlb::TLB_TAG_BITS) - 1) as i64;
+    // let tag = rshift_and_mask(trans, addr, tag_shift, tag_mask);
+    let tag = trans.builder.ins().ushr_imm(addr, tag_shift);
+    let cond = trans.builder.ins().icmp(IntCC::Equal, tag, expected_tag);
+    trans.branch_zero(cond, not_found);
 
-    // Load the pointer
+    // Found matching entry in TLB, so load the pointer
     trans.builder.ins().load(types::I64, mem_flags, tlb_addr, kind_offset + 8)
 }
 
@@ -116,10 +121,10 @@ fn tlb_lookup_const(
     // Check that the tag matches
     let tag =
         trans.builder.ins().iconst(types::I64, icicle_cpu::mem::tlb::TLBEntry::tag(addr) as i64);
-    trans.builder.ins().br_icmp(IntCC::NotEqual, tag, expected_tag, not_found, &[]);
-    trans.jump_next_block();
+    let cond = trans.builder.ins().icmp(IntCC::Equal, tag, expected_tag);
+    trans.branch_zero(cond, not_found);
 
-    // Load the pointer
+    // Found matching entry in TLB, so load the pointer
     trans.builder.ins().load(types::I64, mem_flags, tlb_addr, kind_offset + 8)
 }
 
@@ -136,9 +141,21 @@ fn check_perm(trans: &mut Translator, host_addr: Value, size: u8, perm: u8, inva
     let perm = splat_const(trans, perm, ty);
 
     // Check if the all the bits in `perm` are set for this address.
-    let value = trans.builder.ins().band(value, perm);
-    trans.builder.ins().br_icmp(IntCC::NotEqual, value, perm, invalid_perm, &[]);
-    trans.jump_next_block();
+    if size > 4 {
+        // Avoid needing to to compare with a large constant by using the identity:
+        // `a & b == b => !a & b == 0`
+        //
+        // @fixme: This could be done with `band_not` however this is not supported for 64-bit
+        // instructions on x64 in cranelift.
+        let tmp = trans.builder.ins().bnot(value);
+        let value = trans.builder.ins().band(tmp, perm);
+        trans.branch_non_zero(value, invalid_perm);
+    }
+    else {
+        let value = trans.builder.ins().band(value, perm);
+        let cond = trans.builder.ins().icmp(IntCC::Equal, value, perm);
+        trans.branch_zero(cond, invalid_perm);
+    }
 }
 
 /// Create a constant of `ty` that consists of `value` repeated for every byte.
@@ -172,7 +189,7 @@ pub(super) fn load_host(trans: &mut Translator, addr: Value, size: u8) -> Value 
     // Setting the endianness doesn't actually do anything in x86_64 backend for cranelift
     // currently, so we manually perform a byte swap operation.
     if trans.ctx.endianness != Endianness::Little {
-        result = bswap(trans, result, ty);
+        result = trans.builder.ins().bswap(result);
     }
 
     result
@@ -188,7 +205,7 @@ pub(super) fn load_ram(trans: &mut Translator, guest_addr: pcode::Value, output:
             pcode::Inputs::one(guest_addr),
         )));
         // Check for memory exceptions.
-        trans.maybe_exit_jit();
+        trans.maybe_exit_jit(None);
         return;
     }
 
@@ -244,25 +261,35 @@ fn load_fallback(trans: &mut Translator, output: pcode::VarNode, guest_addr: Val
     trans.flush_current_pc();
 
     let func = trans.symbols.mmu.load(output.size);
-    let args = [trans.vm_ptr.0, guest_addr];
-    let call = trans.builder.ins().call(func, &args);
-    let value = match trans.builder.inst_results(call) {
-        &[result] => result,
-        _ => unreachable!(),
+    let value = if output.size == 16 {
+        let stack_slot =
+            trans.builder.create_sized_stack_slot(StackSlotData::new(ExplicitSlot, 16));
+        let out_ptr = trans.builder.ins().stack_addr(types::I64, stack_slot, 0);
+        let args = [trans.vm_ptr.0, guest_addr, out_ptr];
+        trans.builder.ins().call(func, &args);
+        trans.builder.ins().stack_load(types::I128, stack_slot, 0)
+    }
+    else {
+        let args = [trans.vm_ptr.0, guest_addr];
+        let call = trans.builder.ins().call(func, &args);
+        match trans.builder.inst_results(call) {
+            &[result] => result,
+            _ => unreachable!(),
+        }
     };
-    let block = trans.maybe_exit_jit();
+
+    let block = trans.maybe_exit_jit(None);
     trans.builder.set_cold_block(block);
     value
 }
 
-pub(super) fn store_host(trans: &mut Translator, addr: Value, mut value: Value, size: u8) {
-    let ty = sized_int(size);
+pub(super) fn store_host(trans: &mut Translator, addr: Value, mut value: Value) {
     let mut flags = MemFlags::trusted().with_heap();
     flags.set_endianness(trans.ctx.endianness);
     // Setting the endianness doesn't actually do anything in x86_64 backend for cranelift
     // currently, so we manually perform a byte swap operation.
     if trans.ctx.endianness != Endianness::Little {
-        value = bswap(trans, value, ty);
+        value = trans.builder.ins().bswap(value);
     }
     trans.builder.ins().store(flags, value, addr, 0);
 }
@@ -276,7 +303,7 @@ pub(super) fn store_ram(trans: &mut Translator, guest_addr: pcode::Value, value:
             pcode::Inputs::new(guest_addr, value),
         )));
         // Check for memory exceptions.
-        trans.maybe_exit_jit();
+        trans.maybe_exit_jit(None);
         return;
     }
 
@@ -305,7 +332,7 @@ pub(super) fn store_ram(trans: &mut Translator, guest_addr: pcode::Value, value:
 
     // inline access (fallthrough):
     {
-        store_host(trans, host_addr, value, size);
+        store_host(trans, host_addr, value);
         trans.builder.ins().jump(success_block, &[]);
     }
 
@@ -328,9 +355,22 @@ fn store_fallback(trans: &mut Translator, size: u8, guest_addr: Value, value: Va
     trans.flush_current_pc();
 
     let func = trans.symbols.mmu.store(size);
-    let args = [trans.vm_ptr.0, guest_addr, value];
-    trans.builder.ins().call(func, &args);
-    let block = trans.maybe_exit_jit();
+    if size == 16 {
+        // There is no standardized C calling convention for 128 bit integers, so we split the value
+        // into two 64-bit values.
+        let low = trans.builder.ins().ireduce(types::I64, value);
+        let high = {
+            let tmp = trans.builder.ins().sshr_imm(value, 64);
+            trans.builder.ins().ireduce(types::I64, tmp)
+        };
+        let args = [trans.vm_ptr.0, guest_addr, low, high];
+        trans.builder.ins().call(func, &args);
+    }
+    else {
+        let args = [trans.vm_ptr.0, guest_addr, value];
+        trans.builder.ins().call(func, &args);
+    }
+    let block = trans.maybe_exit_jit(None);
     trans.builder.set_cold_block(block);
 }
 
@@ -382,7 +422,8 @@ fn try_inline_access_const(
 }
 
 /// Swaps the byteorder of `input`
-// @todo: replace with native cranelift implementation when avaliable: https://github.com/bytecodealliance/wasmtime/issues/1092
+#[deprecated]
+#[allow(unused)]
 fn bswap(trans: &mut Translator, input: Value, ty: types::Type) -> Value {
     match ty {
         types::I8 => input,

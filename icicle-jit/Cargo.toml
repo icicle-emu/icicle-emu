@@ -9,15 +9,14 @@ doctest = false
 [dependencies]
 icicle-cpu = { path = "../icicle-cpu" }
 pcode = { path = "../sleigh/pcode" }
-target-lexicon = "0.12.4"
-tracing = { version = "0.1.36", default-features = false }
-
-cranelift = "0.86.1"
-cranelift-native = "0.86.1"
-cranelift-module = "0.86.1"
-cranelift-jit = "0.86.1"
-cranelift-codegen = { version = "0.86.1", default-features = false, features = ["std"] }
-memoffset = "0.6.5"
+target-lexicon = "0.12.6"
+tracing = { version = "0.1.37", default-features = false }
+memoffset = "0.8.0"
+cranelift = "0.93.1"
+cranelift-native = "0.93.1"
+cranelift-module = "0.93.1"
+cranelift-jit = "0.93.1"
+cranelift-codegen = { version = "0.93.1", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 quickcheck = { version = "1.0.3", default-features = false }

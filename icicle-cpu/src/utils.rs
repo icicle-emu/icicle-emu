@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 pub fn align_up(value: u64, alignment: u64) -> u64 {
     assert_eq!(alignment.count_ones(), 1, "Alignment must be a non-zero power of 2");
     let mask = alignment.wrapping_sub(1);
@@ -43,18 +41,29 @@ impl XorShiftRng {
 }
 
 pub struct UdpWriter {
-    socket: std::net::UdpSocket,
+    socket: Option<std::net::UdpSocket>,
 }
 
 impl UdpWriter {
-    pub fn new(socket: std::net::UdpSocket) -> Self {
-        Self { socket }
+    pub fn new(addr: &str) -> Self {
+        Self::try_connect(addr).unwrap_or(Self { socket: None })
+    }
+
+    fn try_connect(addr: &str) -> Option<Self> {
+        let socket = std::net::UdpSocket::bind("127.0.0.1:0").ok()?;
+        socket.connect(addr).ok()?;
+        Some(Self { socket: Some(socket) })
     }
 }
 
 impl std::io::Write for UdpWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.socket.send(&buf[..buf.len().min(512)])
+        if let Some(socket) = self.socket.as_mut() {
+            socket.send(&buf[..buf.len().min(512)])
+        }
+        else {
+            Ok(buf.len())
+        }
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
@@ -140,6 +149,21 @@ pub fn get_u64(value: &[u8]) -> u64 {
         [x0, x1, x2, x3, x4, x5, x6, x7] => u64::from_le_bytes([x0, x1, x2, x3, x4, x5, x6, x7]),
         _ => 0,
     }
+}
+
+/// Parse a u64 with either no prefix (decimal), '0x' prefix (hex), or '0b' (binary)
+pub fn parse_u64_with_prefix(value: &str) -> Option<u64> {
+    if value.len() < 2 {
+        return value.parse().ok();
+    }
+
+    let (value, radix) = match &value[0..2] {
+        "0x" => (&value[2..], 16),
+        "0b" => (&value[2..], 2),
+        _ => (value, 10),
+    };
+
+    u64::from_str_radix(value, radix).ok()
 }
 
 pub struct BasicInstructionSource {

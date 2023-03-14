@@ -10,11 +10,9 @@ use icicle_vm::{
     CodeInjector, Vm,
 };
 
-use crate::{
-    fnv_hash,
-    instrumentation::cmp_finder::{CmpAttr, CmpFinder, CmpOp},
-    try_read_mem,
-};
+use crate::{fnv_hash, instrumentation::cmp_finder::CmpFinder, try_read_mem};
+
+pub use crate::instrumentation::cmp_finder::{CmpAttr, CmpOp};
 
 #[derive(Copy, Clone, Debug)]
 pub struct CmpLogOp {
@@ -409,7 +407,7 @@ where
         map: &'static UnsafeCell<CmpMap>,
         enable_cmplog_return: bool,
     ) -> StoreRef {
-        let cmp_map = vm.cpu.trace.register_store(Box::new(map));
+        let cmp_map = vm.cpu.trace.register_store(map);
 
         // The function that is called to copy comparison functions into the CmpMap.
         let ins_hook = move |cpu: &mut Cpu, _addr: u64| {
@@ -417,9 +415,8 @@ where
             let a1 = cpu.args[1];
             let a2 = cpu.args[2];
 
-            let map: &mut &'static UnsafeCell<CmpMap> =
-                cpu.trace[cmp_map].as_any().downcast_mut().unwrap();
-
+            let map: &&'static UnsafeCell<CmpMap> =
+                cpu.trace[cmp_map].as_any().downcast_ref().unwrap();
             unsafe { map.get().as_mut().unwrap() }.ins_hook(meta, a1, a2);
         };
 
@@ -455,8 +452,8 @@ where
 
             let index = fnv_hash(addr ^ 0x1dd0b3aeef90cd97) & (CMP_MAP_W - 1) as u32;
 
-            let map: &mut &'static UnsafeCell<CmpMap> =
-                cpu.trace[cmp_map].as_any().downcast_mut().unwrap();
+            let map: &&'static UnsafeCell<CmpMap> =
+                cpu.trace[cmp_map].as_any().downcast_ref().unwrap();
             unsafe { map.get().as_mut().unwrap() }.rtn_hook(index, a, b);
         };
 
@@ -469,7 +466,7 @@ where
             enable_cmplog_return,
             filter,
         };
-        vm.add_injector(Box::new(tracer));
+        vm.add_injector(tracer);
 
         cmp_map
     }

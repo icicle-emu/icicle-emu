@@ -15,9 +15,10 @@ use std::{
 };
 
 use anyhow::Context;
-use icicle_vm::{cpu::ExceptionCode, VmExit};
+use icicle_vm::{cpu::ExceptionCode, Vm, VmExit};
 
 pub use crate::{config::CustomSetup, instrumentation::*};
+pub use icicle_vm::cpu::utils::parse_u64_with_prefix;
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum CoverageMode {
@@ -25,13 +26,43 @@ pub enum CoverageMode {
     Blocks,
     /// Store a bit whenever an edge is hit.
     Edges,
+    /// Increment a counter whenever a block is hit.
+    BlockCounts,
     /// Increment a counter whenever an edge is hit.
-    HitCounts,
+    EdgeCounts,
 }
 
+impl std::str::FromStr for CoverageMode {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.eq_ignore_ascii_case("blocks") {
+            return Ok(Self::Blocks);
+        }
+        if s.eq_ignore_ascii_case("edges") {
+            return Ok(Self::Edges);
+        }
+        if s.eq_ignore_ascii_case("blockcounts") {
+            return Ok(Self::BlockCounts);
+        }
+        if s.eq_ignore_ascii_case("edgecounts") {
+            return Ok(Self::EdgeCounts);
+        }
+
+        Err(anyhow::format_err!("Unknown coverage mode: {s}"))
+    }
+}
+
+#[derive(Clone)]
 pub struct FuzzConfig {
-    /// Configures whether crashes should be saved internally.
+    /// Whether the fuzzer should try to resume from a previous run.
+    pub resume: bool,
+
+    /// Configures whether the fuzzer should save de-duplicated crashes.
     pub save_crashes: bool,
+
+    /// Configures whether the fuzzer should save de-duplicated hanging inputs.
+    pub save_hangs: bool,
 
     /// Configures whether the slowest input executed so far should be saved.
     pub save_slowest: bool,
@@ -51,6 +82,9 @@ pub struct FuzzConfig {
 
     /// Controls what instrumentation strategy to use for
     pub coverage_mode: CoverageMode,
+
+    /// The level to to use for ComparisonCoverage instrumentation.
+    pub compcov_level: Option<u8>,
 
     /// The number of bits to use for context when context coverage is enabled.
     pub context_bits: u8,
@@ -131,18 +165,32 @@ impl FuzzConfig {
             },
         };
 
-        let coverage_mode = match (
-            std::env::var_os("ICICLE_BLOCK_COVERAGE_ONLY").is_some(),
-            std::env::var_os("ICICLE_EDGE_HITS_ONLY").is_some(),
-        ) {
-            (false, false) => CoverageMode::HitCounts,
-            (false, true) => CoverageMode::Edges,
-            (true, false) => CoverageMode::Blocks,
-            (true, true) => {
-                anyhow::bail!(
-                    "ICICLE_BLOCK_COVERAGE_ONLY is incompatible with ICICLE_EDGE_HITS_ONLY"
-                )
+        let coverage_mode = if let Ok(mode) = std::env::var("COVERAGE_MODE") {
+            mode.parse()?
+        }
+        else {
+            match (
+                parse_bool_env("ICICLE_BLOCK_COVERAGE_ONLY")?.unwrap_or(false),
+                parse_bool_env("ICICLE_EDGE_HITS_ONLY")?.unwrap_or(false),
+            ) {
+                (false, false) => CoverageMode::EdgeCounts,
+                (false, true) => CoverageMode::Edges,
+                (true, false) => CoverageMode::Blocks,
+                (true, true) => {
+                    anyhow::bail!(
+                        "ICICLE_BLOCK_COVERAGE_ONLY is incompatible with ICICLE_EDGE_HITS_ONLY"
+                    )
+                }
             }
+        };
+
+        let compcov_level = match std::env::var("AFL_COMPCOV_LEVEL") {
+            Ok(level) => Some(
+                level
+                    .parse::<u8>()
+                    .with_context(|| format!("Invalid value for AFL_COMPCOV_LEVEL: {level}"))?,
+            ),
+            Err(_) => None,
         };
 
         let context_bits = match std::env::var("ICICLE_CONTEXT_BITS") {
@@ -155,18 +203,21 @@ impl FuzzConfig {
         };
 
         Ok(Self {
-            save_crashes: std::env::var_os("ICICLE_SAVE_CRASH").is_some(),
-            save_slowest: std::env::var_os("ICICLE_SAVE_SLOWEST").is_some(),
-            disable_jit: std::env::var_os("ICICLE_DISABLE_JIT").is_some(),
-            shared_mem_inputs: std::env::var_os("ICICLE_DISABLE_SHMEM_INPUT").is_none(),
+            resume: parse_bool_env("RESUME")?.unwrap_or(false),
+            save_crashes: parse_bool_env("SAVE_CRASHES")?.unwrap_or(true),
+            save_hangs: parse_bool_env("SAVE_HANGS")?.unwrap_or(true),
+            save_slowest: parse_bool_env("SAVE_SLOWEST")?.unwrap_or(false),
+            disable_jit: parse_bool_env("ICICLE_DISABLE_JIT")?.unwrap_or(false),
+            shared_mem_inputs: parse_bool_env("ICICLE_SHMEM_INPUT")?.unwrap_or(true),
             cmplog_path: std::env::var_os("ICICLE_SAVE_CMPLOG_MAP").map(|x| x.into()),
-            enable_dry_run: std::env::var_os("ICICLE_DRY_RUN").is_some(),
-            track_path: std::env::var_os("ICICLE_TRACK_PATH").is_some(),
+            enable_dry_run: parse_bool_env("ICICLE_DRY_RUN")?.unwrap_or(false),
+            track_path: parse_bool_env("ICICLE_TRACK_PATH")?.unwrap_or(false),
             arch,
             linux: linux::LinuxConfig::from_env(),
             coverage_mode,
+            compcov_level,
             context_bits,
-            no_cmplog_return: std::env::var_os("ICICLE_NO_CMPLOG_RTN").is_some(),
+            no_cmplog_return: parse_bool_env("ICICLE_CMPLOG_RTN")?.unwrap_or(false),
             start_addr,
             msp430: Msp430Config::from_env()?,
             icount_limit,
@@ -176,7 +227,7 @@ impl FuzzConfig {
         })
     }
 
-    pub fn get_instrumentation_range(&self, vm: &mut icicle_vm::Vm) -> Option<(u64, u64)> {
+    pub fn get_instrumentation_range(&self, vm: &mut Vm) -> Option<(u64, u64)> {
         if !self.linux.instrument_libs {
             if let Some(kernel) = vm.env.as_any().downcast_ref::<icicle_vm::linux::Kernel>() {
                 return Some((kernel.process.image.start_addr, kernel.process.image.end_addr));
@@ -185,7 +236,20 @@ impl FuzzConfig {
         None
     }
 
-    fn cpu_config(&self) -> icicle_vm::cpu::Config {
+    pub fn get_target(&mut self) -> anyhow::Result<Box<dyn FuzzTarget>> {
+        use target_lexicon::{Architecture, OperatingSystem};
+
+        Ok(match (self.arch.operating_system, self.arch.architecture) {
+            (OperatingSystem::Linux, _) => Box::new(linux::Target::new()),
+            (OperatingSystem::None_, Architecture::Msp430) => {
+                Box::new(msp430::RandomIoTarget::new())
+            }
+            (OperatingSystem::None_, _) => Box::new(HookedTarget::new(self.custom_setup.clone())),
+            _ => anyhow::bail!("unsupported target: {}", self.arch),
+        })
+    }
+
+    pub fn cpu_config(&self) -> icicle_vm::cpu::Config {
         icicle_vm::cpu::Config {
             triple: self.arch.clone(),
             enable_jit: !self.disable_jit,
@@ -197,6 +261,7 @@ impl FuzzConfig {
     }
 }
 
+#[derive(Clone)]
 pub struct Msp430Config {
     /// How many instructions to execute between triggering interrupts.
     // @fixme: have a better way of configuring this, default is ~10ms of device time assuming
@@ -289,44 +354,57 @@ fn get_args() -> anyhow::Result<(Vec<String>, Vec<String>)> {
 
 pub trait Runnable {
     /// Configure the VM to use `input` as the input.
-    fn set_input(&mut self, vm: &mut icicle_vm::Vm, input: &[u8]) -> anyhow::Result<()>;
+    fn set_input(&mut self, vm: &mut Vm, input: &[u8]) -> anyhow::Result<()>;
 
-    /// Restore the VM to before the first input interaction, configure `input` to be the input then
-    /// run it until it exits.
-    fn run_vm(
-        &mut self,
-        vm: &mut icicle_vm::Vm,
-        input: &[u8],
-        max_instructions: u64,
-    ) -> anyhow::Result<VmExit> {
-        self.set_input(vm, input)?;
-        vm.icount_limit = vm.cpu.icount.saturating_add(max_instructions);
+    /// Modify the current input.
+    fn modify_input(&mut self, _vm: &mut Vm, _offset: u64, _input: &[u8]) -> anyhow::Result<()> {
+        anyhow::bail!("Not supported by this target")
+    }
+
+    /// Get the current input offset from the target.
+    fn get_input_cursor(&mut self, _vm: &mut Vm) -> u64 {
+        panic!("Not supported by this target")
+    }
+
+    /// Run a single fuzzing trial with the current input.
+    fn run(&mut self, vm: &mut Vm) -> anyhow::Result<VmExit> {
         Ok(vm.run())
     }
 
+    /// Configure `input` to be the input then run it until it exits.
+    #[deprecated]
+    fn run_vm(&mut self, vm: &mut Vm, input: &[u8]) -> anyhow::Result<VmExit> {
+        self.set_input(vm, input)?;
+        Ok(vm.run())
+    }
+
+    #[deprecated]
     fn input_buf(&self) -> Option<&icicle_vm::linux::fs::devices::ReadableSharedBufDevice> {
         None
     }
 }
 
 pub trait FuzzTarget: Runnable {
-    /// Create a new VM instance ready for fuzzing.
-    fn initialize_vm<I, F>(
-        &mut self,
-        config: &mut FuzzConfig,
-        instrument_vm: F,
-    ) -> anyhow::Result<(icicle_vm::Vm, I)>
-    where
-        F: FnOnce(&mut icicle_vm::Vm, &FuzzConfig) -> anyhow::Result<I>;
+    /// Create a new VM instance configured for the target.
+    fn create_vm(&mut self, config: &mut FuzzConfig) -> anyhow::Result<Vm>;
+
+    /// Initialize the VM to a state ready for fuzzing.
+    ///
+    /// This should be performed after configuring instrumentation, since this may involve executing
+    /// code.
+    fn initialize_vm(&mut self, _config: &FuzzConfig, _vm: &mut Vm) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Returns a user understandable exit string
+    fn exit_string(&self, exit: VmExit) -> String {
+        format!("{exit:?}")
+    }
 }
 
 pub trait Fuzzer {
     type Output;
-    fn run<T: FuzzTarget + Clone>(
-        self,
-        target: T,
-        config: FuzzConfig,
-    ) -> anyhow::Result<Self::Output>;
+    fn run<T: FuzzTarget>(self, target: T, config: FuzzConfig) -> anyhow::Result<Self::Output>;
 }
 
 /// Run `run` configured for an inbuilt fuzzing target architecture.
@@ -354,27 +432,17 @@ pub fn run_auto<T, F: Fuzzer<Output = T>>(config: FuzzConfig, fuzzer: F) -> anyh
 pub fn initialize_vm_auto<I, F>(
     config: &mut FuzzConfig,
     instrument_vm: F,
-) -> anyhow::Result<((icicle_vm::Vm, I), Box<dyn Runnable>)>
+) -> anyhow::Result<((Vm, I), Box<dyn FuzzTarget>)>
 where
-    F: FnOnce(&mut icicle_vm::Vm, &FuzzConfig) -> anyhow::Result<I>,
+    F: FnOnce(&mut Vm, &FuzzConfig) -> anyhow::Result<I>,
 {
-    use target_lexicon::{Architecture, OperatingSystem};
+    let mut target = config.get_target()?;
 
-    match (config.arch.operating_system, config.arch.architecture) {
-        (OperatingSystem::Linux, _) => {
-            let mut target = linux::Target::new();
-            Ok((target.initialize_vm(config, instrument_vm)?, Box::new(target)))
-        }
-        (OperatingSystem::None_, Architecture::Msp430) => {
-            let mut target = msp430::RandomIoTarget::new();
-            Ok((target.initialize_vm(config, instrument_vm)?, Box::new(target)))
-        }
-        (OperatingSystem::None_, _) => {
-            let mut target = HookedTarget::new(config.custom_setup.clone());
-            Ok((target.initialize_vm(config, instrument_vm)?, Box::new(target)))
-        }
-        _ => anyhow::bail!("unsupported target: {}", config.arch),
-    }
+    let mut vm = target.create_vm(config)?;
+    let instrumentation = instrument_vm(&mut vm, config)?;
+    target.initialize_vm(config, &mut vm)?;
+
+    Ok(((vm, instrumentation), target))
 }
 
 pub struct CrashEntry {
@@ -394,92 +462,28 @@ pub struct CrashEntry {
 pub type CrashMap = BTreeMap<String, CrashEntry>;
 
 /// Resolves and captures deduplicated stack-traces for all inputs in `dir`.
-pub fn resolve_crashes(config: &mut FuzzConfig, dir: &std::path::Path) -> anyhow::Result<CrashMap> {
-    let ((mut vm, path_tracer), mut runner) =
-        initialize_vm_auto(config, |vm, _| trace::add_path_tracer(vm))?;
+pub fn resolve_crashes<T>(
+    mut target: T,
+    config: &mut FuzzConfig,
+    dir: &std::path::Path,
+) -> anyhow::Result<CrashMap>
+where
+    T: FuzzTarget,
+{
+    let mut vm = target.create_vm(config)?;
+    target.initialize_vm(config, &mut vm)?;
 
     let snapshot = vm.snapshot();
     let mut map = BTreeMap::new();
     utils::input_visitor(&dir, |path, input| {
-        path_tracer.clear(&mut vm);
         vm.restore(&snapshot);
 
         tracing::info!("resolving crashes for {}", path.display());
-        let exit = runner.run_vm(&mut vm, &input, u64::MAX)?;
+        target.set_input(&mut vm, &input)?;
+        let exit = vm.run();
         let exit_code = utils::get_afl_exit_code(&mut vm, exit);
 
-        let pc = vm.cpu.read_pc();
-        let stack = vm.get_callstack();
-        let stack_hash = stack.iter().rev().skip(1).take(3).fold(0x0, |acc, x| acc ^ x);
-        let last_blocks = path_tracer.get_last_blocks(&mut vm);
-
-        // Choose a de-duplication strategy depending on how the program crashed.
-        let key = match exit {
-            VmExit::Running
-            | VmExit::InstructionLimit
-            | VmExit::Interrupted
-            | VmExit::AllocFailure => {
-                // Caused by timeouts or resource exhaustion. Since the detection is based on
-                // heuristics, the final PC frequently changes. To reduce duplicates we just use
-                // the parent function (if avaliable).
-                format!("{:#x}_hang", stack.iter().rev().skip(1).next().unwrap_or(&pc))
-            }
-
-            VmExit::Breakpoint | VmExit::Unimplemented => {
-                // Generally only caused by either a bug in the emulator, or a handcrafted error
-                // exit condition, so generate a key based on the current pc
-                format!("{pc:#x}_internal")
-            }
-
-            VmExit::UnhandledException((
-                ExceptionCode::InvalidInstruction
-                | ExceptionCode::InvalidTarget
-                | ExceptionCode::ShadowStackInvalid
-                | ExceptionCode::ExecViolation,
-                _,
-            )) => {
-                // If we ended up at an invalid instruction then assume that the last jump was bad.
-                let last_block =
-                    last_blocks.iter().rev().skip(1).next().map_or(pc, |(addr, _)| *addr);
-
-                // Try to deduplicate cases where multiple blocks end at the same place by using the
-                // address at the end of the block.
-                let key = vm.get_block_key(last_block);
-                let last_addr = vm.code.map.get(&key).map_or(last_block, |group| group.end);
-
-                match pc {
-                    0 => format!("{stack_hash:#x}_{last_addr:#x}_jump_null"),
-                    _ => format!("{stack_hash:#x}_{last_addr:#x}_jump_invalid"),
-                }
-            }
-
-            VmExit::UnhandledException((code, addr)) if code.is_memory_error() => {
-                // Separate any errors from different kinds of memory exceptions.
-                let kind = match code {
-                    ExceptionCode::ReadUnmapped
-                    | ExceptionCode::ReadPerm
-                    | ExceptionCode::ReadUnaligned
-                    | ExceptionCode::ReadWatch
-                    | ExceptionCode::ReadUninitialized => "read_violation",
-
-                    ExceptionCode::WriteUnmapped
-                    | ExceptionCode::WritePerm
-                    | ExceptionCode::WriteWatch
-                    | ExceptionCode::WriteUnaligned => "write_violation",
-
-                    _ => "unknown_mem_error",
-                };
-                match addr {
-                    0 => format!("{stack_hash:#x}_{kind}_null"),
-                    _ => format!("{stack_hash:#x}_{kind}"),
-                }
-            }
-
-            VmExit::Deadlock | VmExit::Halt => format!("{stack_hash:#x}_halt"),
-            VmExit::UnhandledException(..) => format!("{stack_hash:#x}_unknown"),
-        };
-
-        map.entry(key)
+        map.entry(gen_crash_key(&mut vm, exit))
             .or_insert_with(|| CrashEntry {
                 call_stack_string: icicle_vm::debug::backtrace(&mut vm),
                 exit,
@@ -491,7 +495,56 @@ pub fn resolve_crashes(config: &mut FuzzConfig, dir: &std::path::Path) -> anyhow
 
         Ok(())
     })?;
+
+    tracing::info!("{} crash groups found", map.len());
+
     Ok(map)
+}
+
+pub fn gen_crash_key(vm: &mut Vm, exit: VmExit) -> String {
+    let pc = vm.cpu.read_pc();
+    let last_addr = vm.code.blocks.get(vm.cpu.block_id as usize).map_or(pc, |x| x.end);
+
+    let stack = vm.get_callstack();
+    let stack_hash = match vm.cpu.enable_shadow_stack {
+        true => stack.iter().rev().skip(1).take(3).fold(0x0, |acc, x| acc ^ x),
+        false => match pc == last_addr {
+            true => pc,
+            false => pc ^ last_addr,
+        },
+    };
+
+    // Choose a de-duplication strategy depending on how the program crashed.
+    match CrashKind::from(exit) {
+        CrashKind::Custom(code) => format!("{code:#05x}_{pc:#x}_custom"),
+        CrashKind::Halt => format!("{stack_hash:#x}_halt"),
+        CrashKind::Hang | CrashKind::OutOfMemory => {
+            // Caused by timeouts or resource exhaustion. Since the detection is based on
+            // heuristics, the final PC frequently changes. To reduce duplicates we just use
+            // the parent function (if avaliable).
+            format!("{:#x}_hang", stack.iter().rev().skip(1).next().unwrap_or(&pc))
+        }
+        CrashKind::Killed => format!("{stack_hash:#x}_killed"),
+        CrashKind::ExecViolation => {
+            // On `InvalidInstruction` exceptions, the `block_id` field represents the last block
+            // that was executed. Try to deduplicate cases where multiple blocks end at the same
+            // place by using the address at the end of the block.
+            let last_addr = vm.code.blocks.get(vm.cpu.block_id as usize).map_or(pc, |x| x.end);
+            match pc {
+                0 => format!("{stack_hash:#x}_{last_addr:#x}_jump_null"),
+                _ => format!("{stack_hash:#x}_{last_addr:#x}_jump_invalid"),
+            }
+        }
+        CrashKind::ReadViolation(addr) => match addr {
+            0 => format!("{stack_hash:#x}_{pc:#x}_read_error_null"),
+            _ => format!("{stack_hash:#x}_{pc:#x}_read_error"),
+        },
+        CrashKind::WriteViolation(addr) => match addr {
+            0 => format!("{stack_hash:#x}_{pc:#x}_write_error_null"),
+            _ => format!("{stack_hash:#x}_{pc:#x}_write_error"),
+        },
+        CrashKind::Unknown => format!("{pc:#x}_unknown"),
+    }
 }
 
 #[derive(Clone)]
@@ -507,7 +560,7 @@ impl HookedTarget {
 }
 
 impl Runnable for HookedTarget {
-    fn set_input(&mut self, vm: &mut icicle_vm::Vm, input: &[u8]) -> anyhow::Result<()> {
+    fn set_input(&mut self, vm: &mut Vm, input: &[u8]) -> anyhow::Result<()> {
         self.setup.input.clear();
         self.setup.input.extend_from_slice(input);
         self.setup.init(vm, &mut self.buf)?;
@@ -516,14 +569,7 @@ impl Runnable for HookedTarget {
 }
 
 impl FuzzTarget for HookedTarget {
-    fn initialize_vm<I, F>(
-        &mut self,
-        config: &mut FuzzConfig,
-        instrument_vm: F,
-    ) -> anyhow::Result<(icicle_vm::Vm, I)>
-    where
-        F: FnOnce(&mut icicle_vm::Vm, &FuzzConfig) -> anyhow::Result<I>,
-    {
+    fn create_vm(&mut self, config: &mut FuzzConfig) -> anyhow::Result<Vm> {
         let mut vm = icicle_vm::build(&config.cpu_config())?;
         let mut env = icicle_vm::env::build_auto(&mut vm)?;
         env.load(&mut vm.cpu, config.guest_args[0].as_bytes())
@@ -531,27 +577,49 @@ impl FuzzTarget for HookedTarget {
         vm.env = env;
         self.setup.configure(&mut vm)?;
 
-        let instrumentation = instrument_vm(&mut vm, config)?;
-        Ok((vm, instrumentation))
+        Ok(vm)
     }
 }
 
-/// Parse a u64 with either no prefix (decimal), '0x' prefix (hex), or '0b' (binary)
-pub fn parse_u64_with_prefix(value: &str) -> Option<u64> {
-    if value.len() < 2 {
-        return value.parse().ok();
+/// Adds debug instrumentation to `vm` based on environment variables.
+pub fn add_debug_instrumentation(vm: &mut icicle_vm::Vm) {
+    if let Ok(entries) = std::env::var("ICICLE_LOG_WRITES") {
+        // A `;` separated list of locations to instrument writes to, e.g:
+        // "applet=0x1c00:2;jumptarget=0x1c02:2"
+        for entry in entries.split(";") {
+            match parse_write_hook(entry) {
+                Some((name, addr, size)) => {
+                    tracing::info!("Logging writes to {name}@{addr:#x} ({size} bytes)");
+                    icicle_vm::debug::log_write(vm, name.to_string(), addr, size);
+                }
+                _ => tracing::error!("Invalid write hook format: {entry}"),
+            }
+        }
     }
-
-    let (value, radix) = match &value[0..2] {
-        "0x" => (&value[2..], 16),
-        "0b" => (&value[2..], 2),
-        _ => (value, 10),
-    };
-
-    u64::from_str_radix(value, radix).ok()
+    if let Ok(entries) = std::env::var("ICICLE_LOG_REGS") {
+        for entry in entries.split(";") {
+            match parse_reg_print_hook(entry) {
+                Some((name, addr, reglist)) => {
+                    icicle_vm::debug::log_regs(vm, name.to_string(), addr, &reglist);
+                }
+                _ => tracing::error!("Invalid write hook format: {entry}"),
+            }
+        }
+    }
+    if let Ok(entries) = std::env::var("BREAKPOINTS") {
+        // A comma separated list of addresses to stop execution at.
+        for entry in entries.split(",") {
+            match parse_u64_with_prefix(entry) {
+                Some(addr) => {
+                    vm.add_breakpoint(addr);
+                }
+                _ => tracing::error!("Invalid breakpoint: {entry}"),
+            }
+        }
+    }
 }
 
-// A string of the format `<name>=<address>:<size>`.
+/// A string of the format `<name>=<address>:<size>`.
 pub fn parse_write_hook(entry: &str) -> Option<(&str, u64, u8)> {
     let entry = entry.trim();
     if entry.is_empty() {
@@ -564,4 +632,153 @@ pub fn parse_write_hook(entry: &str) -> Option<(&str, u64, u8)> {
     let size: u8 = size.parse().ok()?;
 
     Some((name, addr, size))
+}
+
+/// A string of the format `<name>@<address>=<reglist>`
+pub fn parse_reg_print_hook(entry: &str) -> Option<(&str, u64, Vec<&str>)> {
+    let entry = entry.trim();
+    if entry.is_empty() {
+        return None;
+    }
+
+    let (target, reglist) = entry.split_once('=')?;
+    let (name, pc) = target.split_once('@')?;
+
+    let pc = parse_u64_with_prefix(pc)?;
+
+    Some((name, pc, reglist.split(",").collect()))
+}
+
+/// Parse a string of the format `<address>(<reglist>)` and return a tuple with the address and
+/// register.
+pub fn parse_func_hook(entry: &str) -> Option<(u64, Vec<&str>)> {
+    let entry = entry.trim();
+    if entry.is_empty() {
+        return None;
+    }
+
+    let (pc, reg) = entry.split_once('(')?;
+    let pc = parse_u64_with_prefix(pc)?;
+    let reglist = reg.trim_end_matches(')');
+
+    Some((pc, reglist.split(",").collect()))
+}
+
+/// Parse a boolean environment varialbe
+pub fn parse_bool_env(name: &str) -> anyhow::Result<Option<bool>> {
+    match std::env::var_os(name) {
+        Some(var) => {
+            let x =
+                var.to_str().ok_or_else(|| anyhow::format_err!("{name} was not a valid string"))?;
+            Ok(Some(x.trim() != "0"))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Groups VmExits into different crash kinds.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CrashKind {
+    /// The VM halted execution.
+    Halt,
+
+    /// Caused by timeouts or resource exhaustion.
+    Hang,
+
+    /// The program running in the VM exceeded memory limits.
+    OutOfMemory,
+
+    /// Killed by an environment specific mechanism.
+    Killed,
+
+    /// Attempted to execute an invalid instruction or memory with the incorrect permissions.
+    ExecViolation,
+
+    /// Attempted to read from an invalid address.
+    ReadViolation(u64),
+
+    /// Attempted to write to an invalid address.
+    WriteViolation(u64),
+
+    /// Custom environment defined error.
+    Custom(u64),
+
+    /// Generally only caused by either a bug in the emulator, or a handcrafted error exit
+    /// condition
+    Unknown,
+}
+
+impl CrashKind {
+    pub fn is_crash(&self) -> bool {
+        match self {
+            CrashKind::Halt | CrashKind::Hang => false,
+            _ => true,
+        }
+    }
+
+    pub fn is_hang(&self) -> bool {
+        match self {
+            CrashKind::Hang => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_ok(&self) -> bool {
+        match self {
+            CrashKind::Halt => true,
+            _ => false,
+        }
+    }
+}
+
+impl From<VmExit> for CrashKind {
+    fn from(exit: VmExit) -> Self {
+        match exit {
+            VmExit::UnhandledException((ExceptionCode::Environment, value)) => Self::Custom(value),
+
+            VmExit::Halt
+            | VmExit::UnhandledException((
+                ExceptionCode::ReadWatch | ExceptionCode::WriteWatch,
+                _,
+            )) => Self::Halt,
+
+            VmExit::Running | VmExit::InstructionLimit | VmExit::Interrupted | VmExit::Deadlock => {
+                Self::Hang
+            }
+
+            VmExit::OutOfMemory => Self::OutOfMemory,
+
+            VmExit::Killed => Self::Killed,
+
+            VmExit::UnhandledException((
+                ExceptionCode::InvalidInstruction
+                | ExceptionCode::InvalidTarget
+                | ExceptionCode::ShadowStackInvalid
+                | ExceptionCode::ExecViolation,
+                _,
+            )) => Self::ExecViolation,
+
+            VmExit::UnhandledException((code, addr)) if code.is_memory_error() => match code {
+                ExceptionCode::ReadUnmapped
+                | ExceptionCode::ReadPerm
+                | ExceptionCode::ReadUnaligned
+                | ExceptionCode::ReadUninitialized => Self::ReadViolation(addr),
+
+                ExceptionCode::WriteUnmapped
+                | ExceptionCode::WritePerm
+                | ExceptionCode::WriteUnaligned => Self::WriteViolation(addr),
+
+                // @fixme: change the error type for this address?
+                ExceptionCode::SelfModifyingCode => Self::WriteViolation(addr),
+
+                _ => Self::Unknown,
+            },
+
+            VmExit::Breakpoint
+            | VmExit::Unimplemented
+            | VmExit::UnhandledException((ExceptionCode::InternalError, _)) => Self::Unknown,
+
+            VmExit::UnhandledException(..) => Self::Unknown,
+        }
+    }
 }

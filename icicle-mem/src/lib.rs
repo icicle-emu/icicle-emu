@@ -1,11 +1,9 @@
-#![feature(array_chunks, new_uninit)]
-
 pub mod perm;
 pub mod physical;
 pub mod tlb;
 
 mod mmu;
-mod range_map;
+pub mod range_map;
 
 #[cfg(test)]
 mod tests;
@@ -50,13 +48,13 @@ pub trait Resettable {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct PhysicalMapping {
-    /// The physical index of this page associated wtih the mapping.
-    pub index: physical::Index,
-
-    /// The starting address to prevent two distinct virtual mappings to the physical address from
-    /// being merged.
+    /// The starting address to prevent two distinct virtual mappings to the same physical address
+    /// from being merged.
     // @todo: consider specializing the RangeMap data structure to avoid the need for this field.
     pub addr: u64,
+
+    /// The physical index of this page associated with the mapping.
+    pub index: physical::Index,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -93,8 +91,21 @@ pub trait IoMemory {
     fn restore(&mut self, snapshot: &Box<dyn Any>) {
         let _ = snapshot;
     }
+}
 
-    fn as_any(&mut self) -> &mut dyn Any;
+pub trait IoMemoryAny: IoMemory {
+    fn as_any(&self) -> &dyn Any;
+    fn as_mut_any(&mut self) -> &mut dyn Any;
+}
+
+impl<T: IoMemory + 'static> IoMemoryAny for T {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_mut_any(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
 pub struct NullMemory;
@@ -106,10 +117,6 @@ impl IoMemory for NullMemory {
 
     fn write(&mut self, _addr: u64, _value: &[u8]) -> MemResult<()> {
         Ok(())
-    }
-
-    fn as_any(&mut self) -> &mut dyn Any {
-        self
     }
 }
 

@@ -104,7 +104,7 @@ where
             hooks.push(entry);
         }
 
-        vm.add_injector(Box::new(CompareCov {
+        vm.add_injector(CompareCov {
             coverage_map: cov,
             size_mask: map_size as u32 - 1,
             cmp_finder: CmpFinder::with_arch(&vm.cpu.arch),
@@ -112,7 +112,7 @@ where
             hooks,
             level,
             filter,
-        }));
+        });
     }
 
     /// Adds instrumentation to keep track of the PC value of any callers to hooked functions.

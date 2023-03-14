@@ -4,7 +4,7 @@ use std::{
 };
 
 use icicle_vm::cpu::{
-    mem::{IoMemory, MemResult},
+    mem::{IoMemory, MemError, MemResult},
     utils::get_u64,
 };
 
@@ -47,7 +47,7 @@ impl<T: IoMemory> Peripherals<T> {
             };
             match *handler {
                 Peripheral::LogWrite => {
-                    mapper.write.insert(addr, |state, value| state.debug.write(value));
+                    mapper.write.push((addr, |state, value| state.debug.write(value)));
                 }
                 Peripheral::Byte(value) => mapper.map_read_byte(addr, value),
                 Peripheral::Word(value) => mapper.map_read_word(addr, value),
@@ -95,7 +95,11 @@ impl<T: IoMemory> Peripherals<T> {
 
 impl<T: IoMemory + 'static> IoMemory for Peripherals<T> {
     fn read(&mut self, addr: u64, buf: &mut [u8]) -> MemResult<()> {
-        if let Some(handler) = self.mapper.read.get(&addr) {
+        if buf.len() > 8 {
+            return Err(MemError::Unaligned);
+        }
+
+        if let Some((_, handler)) = self.mapper.read.iter().find(|x| x.0 == addr) {
             match handler {
                 ReadHandler::Byte(x) => copy_trunc(buf, &x.to_le_bytes()),
                 ReadHandler::Word(x) => copy_trunc(buf, &x.to_le_bytes()),
@@ -125,7 +129,11 @@ impl<T: IoMemory + 'static> IoMemory for Peripherals<T> {
     }
 
     fn write(&mut self, addr: u64, value: &[u8]) -> MemResult<()> {
-        if let Some(handler) = self.mapper.write.get(&addr) {
+        if value.len() > 8 {
+            return Err(MemError::Unaligned);
+        }
+
+        if let Some((_, handler)) = self.mapper.write.iter().find(|x| x.0 == addr) {
             handler(&mut self.state, value);
             return Ok(());
         }
@@ -164,10 +172,6 @@ impl<T: IoMemory + 'static> IoMemory for Peripherals<T> {
         self.state = state.clone();
         self.unknown_handler.restore(unknown_handler)
     }
-
-    fn as_any(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
 }
 
 enum ReadHandler {
@@ -176,8 +180,8 @@ enum ReadHandler {
     Func(fn(&mut State, value: &mut [u8])),
 }
 
-type ReadMapper = HashMap<u64, ReadHandler>;
-type WriteMapper = HashMap<u64, fn(&mut State, value: &[u8])>;
+type ReadMapper = Vec<(u64, ReadHandler)>;
+type WriteMapper = Vec<(u64, fn(&mut State, value: &[u8]))>;
 
 #[derive(Default)]
 struct Mapper {
@@ -187,12 +191,12 @@ struct Mapper {
 
 impl Mapper {
     fn map_read_byte(&mut self, addr: u64, value: u8) {
-        self.read.insert(addr, ReadHandler::Byte(value));
+        self.read.push((addr, ReadHandler::Byte(value)));
     }
 
     fn map_read_word(&mut self, addr: u64, value: u16) {
-        self.read.insert(addr, ReadHandler::Word(value));
-        self.read.insert(addr + 1, ReadHandler::Byte((value >> 8) as u8));
+        self.read.push((addr, ReadHandler::Word(value)));
+        self.read.push((addr + 1, ReadHandler::Byte((value >> 8) as u8)));
     }
 }
 
@@ -211,13 +215,13 @@ struct Mpy32 {
 impl Mpy32 {
     fn register(config: &Mcu, mapper: &mut Mapper) {
         if let Some(addr) = config.symbols.get("MPY") {
-            mapper.write.insert(*addr, |state, value| state.mpy32.write_mpy(value));
+            mapper.write.push((*addr, |state, value| state.mpy32.write_mpy(value)));
         }
         if let Some(addr) = config.symbols.get("OP2") {
-            mapper.write.insert(*addr, |state, value| state.mpy32.write_op2(value));
+            mapper.write.push((*addr, |state, value| state.mpy32.write_op2(value)));
         }
         if let Some(addr) = config.symbols.get("RESLO") {
-            mapper.read.insert(*addr, ReadHandler::Func(|state, out| state.mpy32.read_reslo(out)));
+            mapper.read.push((*addr, ReadHandler::Func(|state, out| state.mpy32.read_reslo(out))));
         }
     }
 

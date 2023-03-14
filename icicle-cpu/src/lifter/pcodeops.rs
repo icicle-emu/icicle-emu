@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use crate::{
     lifter::{BlockState, InstructionSource},
@@ -62,6 +62,17 @@ fn halt(
     true
 }
 
+fn sleep(
+    _: &dyn InstructionSource,
+    _: pcode::PcodeOpId,
+    _: pcode::Inputs,
+    _: pcode::VarNode,
+    state: &mut BlockState,
+) -> bool {
+    state.pcode.push((pcode::Op::Exception, (ExceptionCode::Sleep as u32, 0_u64)));
+    true
+}
+
 fn syscall(
     src: &dyn InstructionSource,
     _: pcode::PcodeOpId,
@@ -86,7 +97,7 @@ fn ignored_hint(
 }
 
 pub fn get_injectors(
-    cpu: &Cpu,
+    cpu: &mut Cpu,
     injectors: &mut HashMap<pcode::PcodeOpId, Box<dyn PcodeOpInjector>>,
 ) {
     /// All the different ways that various SLEIGH specifications refer to syscalls/traps.
@@ -113,7 +124,7 @@ pub fn get_injectors(
     }
 
     /// Names for hints
-    const HINT_OPS: &[&str] = &["prefetch", "Hint_Prefetch"];
+    const HINT_OPS: &[&str] = &["prefetch", "Hint_Prefetch", "HintPreloadData"];
     for id in HINT_OPS.iter().filter_map(|name| cpu.arch.sleigh.get_userop(name)) {
         injectors.insert(id, Box::new(ignored_hint));
     }
@@ -132,6 +143,10 @@ pub fn get_injectors(
 
     if matches!(cpu.arch.triple.architecture, target_lexicon::Architecture::Aarch64(_)) {
         aarch64::get_injectors(cpu, injectors);
+    }
+
+    if matches!(cpu.arch.triple.architecture, target_lexicon::Architecture::Arm(_)) {
+        arm::get_injectors(cpu, injectors);
     }
 
     if matches!(cpu.arch.triple.architecture, target_lexicon::Architecture::Mips32(_)) {
@@ -161,6 +176,71 @@ pub mod aarch64 {
                 id,
                 Box::new(|_: &dyn InstructionSource, _, _, dst, state: &mut BlockState| {
                     state.pcode.push((dst, pcode::Op::Copy, 0_u8));
+                    false
+                }),
+            );
+        }
+    }
+}
+
+pub mod arm {
+    use pcode::Inputs;
+
+    use super::*;
+
+    pub fn get_injectors(
+        cpu: &mut Cpu,
+        injectors: &mut HashMap<pcode::PcodeOpId, Box<dyn PcodeOpInjector>>,
+    ) {
+        if let Some(id) = cpu.arch.sleigh.get_userop("WaitForInterrupt") {
+            injectors.insert(id, Box::new(sleep));
+        }
+        if let Some(id) = cpu.arch.sleigh.get_userop("WaitForEvent") {
+            injectors.insert(id, Box::new(sleep));
+        }
+
+        let ex_addr = match cpu.arch.sleigh.get_reg("exclusive_addr") {
+            Some(reg) => reg.var,
+            None => cpu.arch.sleigh.add_custom_reg("exclusive_addr", 4).unwrap(),
+        };
+
+        if let Some(id) = cpu.arch.sleigh.get_userop("ExclusiveAccess") {
+            injectors.insert(
+                id,
+                Box::new(
+                    move |_: &dyn InstructionSource,
+                          _,
+                          input: Inputs,
+                          _,
+                          state: &mut BlockState| {
+                        state.pcode.push(ex_addr.copy_from(input.first()));
+                        false
+                    },
+                ),
+            );
+        }
+
+        if let Some(id) = cpu.arch.sleigh.get_userop("hasExclusiveAccess") {
+            injectors.insert(
+                id,
+                Box::new(
+                    move |_: &dyn InstructionSource,
+                          _,
+                          inputs: Inputs,
+                          dst,
+                          state: &mut BlockState| {
+                        state.pcode.push((dst, pcode::Op::IntEqual, ex_addr, inputs.first()));
+                        false
+                    },
+                ),
+            );
+        }
+
+        if let Some(id) = cpu.arch.sleigh.get_userop("ClearExclusiveLocal") {
+            injectors.insert(
+                id,
+                Box::new(move |_: &dyn InstructionSource, _, _, _, state: &mut BlockState| {
+                    state.pcode.push(ex_addr.copy_from(u32::MAX));
                     false
                 }),
             );

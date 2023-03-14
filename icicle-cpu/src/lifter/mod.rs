@@ -2,7 +2,7 @@ pub mod msp430;
 mod optimize;
 mod pcodeops;
 
-use std::collections::{HashMap, HashSet};
+use hashbrown::{HashMap, HashSet};
 
 use pcode::PcodeDisplay;
 
@@ -156,7 +156,10 @@ impl InstructionLifter {
         let mut next_saved_tmp: u16 = 0;
 
         for inst in &self.lifted.instructions {
-            if matches!(inst.op, pcode::Op::PcodeLabel(_) | pcode::Op::PcodeBranch(_)) {
+            if matches!(
+                inst.op,
+                pcode::Op::PcodeLabel(_) | pcode::Op::PcodeBranch(_) | pcode::Op::Branch(_)
+            ) {
                 // Start of a new basic block.
                 self.written_tmps.clear();
                 continue;
@@ -689,7 +692,7 @@ impl BlockLifter {
         if self.instruction_lifter.generate_disassembly {
             let new_disasm = &self.instruction_lifter.disasm;
             match ctx.code.disasm.entry(ctx.vaddr) {
-                std::collections::hash_map::Entry::Occupied(old) => {
+                hashbrown::hash_map::Entry::Occupied(old) => {
                     let old_disasm = old.get();
                     if old_disasm != new_disasm {
                         tracing::error!(
@@ -699,7 +702,7 @@ impl BlockLifter {
                         return None;
                     }
                 }
-                std::collections::hash_map::Entry::Vacant(slot) => {
+                hashbrown::hash_map::Entry::Vacant(slot) => {
                     slot.insert(new_disasm.clone());
                 }
             }
@@ -767,6 +770,56 @@ impl BlockExit {
                 }
             }
             _ => {}
+        }
+    }
+
+    pub fn targets(&self) -> impl Iterator<Item = Target> {
+        let mut exits = [Target::Invalid, Target::Invalid];
+        match self {
+            BlockExit::Jump { target } => {
+                exits[0] = *target;
+            }
+            BlockExit::Branch { target, fallthrough, .. } => {
+                exits[0] = *target;
+                exits[1] = *fallthrough;
+            }
+            BlockExit::Call { target, fallthrough } => {
+                exits[0] = Target::External(*target);
+                exits[1] = Target::External(pcode::Value::Const(*fallthrough, 8));
+            }
+            BlockExit::Return { target } => {
+                exits[0] = Target::External(*target);
+            }
+        }
+
+        exits.into_iter().filter(|x| *x != Target::Invalid)
+    }
+
+    /// Returns the condition for the block exit (if it has one).
+    pub fn cond(&self) -> Option<pcode::Value> {
+        match self {
+            BlockExit::Branch { cond, .. } => Some(*cond),
+            _ => None,
+        }
+    }
+
+    /// Returns a p-code operation equivalent to the exit.
+    pub fn to_pcode(&self) -> pcode::Instruction {
+        let to_inst = |cond: pcode::Value, hint: pcode::BranchHint, target: &Target| match target {
+            Target::Invalid => pcode::Op::Invalid.into(),
+            Target::Internal(_) => (pcode::Op::PcodeBranch(0), cond).into(),
+            Target::External(var) => (pcode::Op::Branch(hint), (cond, *var)).into(),
+        };
+
+        match self {
+            Self::Jump { target } => to_inst(1_u8.into(), pcode::BranchHint::Jump, target),
+            Self::Branch { cond, target, .. } => to_inst(*cond, pcode::BranchHint::Jump, target),
+            Self::Call { target, .. } => {
+                to_inst(1_u8.into(), pcode::BranchHint::Call, &Target::External(*target))
+            }
+            Self::Return { target } => {
+                to_inst(1_u8.into(), pcode::BranchHint::Return, &Target::External(*target))
+            }
         }
     }
 }

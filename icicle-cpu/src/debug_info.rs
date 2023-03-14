@@ -53,18 +53,17 @@ impl DebugInfo {
             Err(e) => tracing::warn!("failed to get DWARF debug context: {}", e),
         }
 
-        let debug_symbols = file.symbols().filter_map(|sym| {
-            let name = sym.name().ok()?;
-            Some((sym.address(), (name.to_string(), sym.size())))
-        });
-
-        let dynamic_symbols = file.dynamic_symbols().filter_map(|sym| {
-            let name = sym.name().ok()?;
-            Some((sym.address(), (name.to_string(), sym.size())))
-        });
-
-        for (addr, (name, size)) in dynamic_symbols.chain(debug_symbols) {
-            std::rc::Rc::make_mut(&mut self.symbols).insert(name, addr + relocation_offset, size);
+        for sym in file.symbols().chain(file.dynamic_symbols()) {
+            let name = match sym.name() {
+                Ok(name) => name,
+                Err(_) => continue,
+            };
+            std::rc::Rc::make_mut(&mut self.symbols).insert(
+                name.to_string(),
+                sym.address() + relocation_offset,
+                sym.size(),
+                get_symbol_kind(&sym),
+            );
         }
 
         if self.dl_debug_addr.is_none() && self.r_debug_addr.is_none() {
@@ -143,6 +142,19 @@ impl DebugInfo {
         Some(output)
     }
 
+    /// Return an iterator over all symbols found in the debug info.
+    pub fn debug_symbols_iter(&self) {
+        todo!()
+    }
+
+    /// Return an iterator over all symbols found in the section headers.
+    pub fn symbols_iter(&self) -> impl Iterator<Item = (u64, u64, &str, SymbolKind)> {
+        self.symbols
+            .addr_to_sym
+            .iter()
+            .map(|(start, (name, len, kind))| (*start, *len, name.as_str(), *kind))
+    }
+
     /// Strip the original prefix (from the debug info) from `path` and return the remapped host
     /// prefix and the rest of the path.
     fn strip_prefix<'a, 'b>(&'a self, path: &'b str) -> Option<(&'a str, &'b str)> {
@@ -176,22 +188,44 @@ where
 
 #[derive(Debug, Clone, Default)]
 pub struct SymbolTable {
-    sym_to_addr: BTreeMap<String, (u64, u64)>,
-    addr_to_sym: BTreeMap<u64, (String, u64)>,
+    pub sym_to_addr: BTreeMap<String, (u64, u64, SymbolKind)>,
+    pub addr_to_sym: BTreeMap<u64, (String, u64, SymbolKind)>,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum SymbolKind {
+    Function,
+    Unknown,
+    Null,
+    Object,
+    File,
+}
+
+fn get_symbol_kind(sym: &object::Symbol) -> SymbolKind {
+    use object::ObjectSymbol;
+    match sym.kind() {
+        object::SymbolKind::Null => SymbolKind::Null,
+        object::SymbolKind::Text | object::SymbolKind::Label => SymbolKind::Function,
+        object::SymbolKind::Data => SymbolKind::Object,
+        object::SymbolKind::Section => SymbolKind::Unknown,
+        object::SymbolKind::File => SymbolKind::File,
+        object::SymbolKind::Tls => SymbolKind::Unknown,
+        _ => SymbolKind::Unknown,
+    }
 }
 
 impl SymbolTable {
     /// Inserts a value into the symbol table
-    pub fn insert(&mut self, name: String, addr: u64, len: u64) {
-        self.sym_to_addr.insert(name.clone(), (addr, len));
-        self.addr_to_sym.insert(addr, (name, len));
+    pub fn insert(&mut self, name: String, addr: u64, len: u64, kind: SymbolKind) {
+        self.sym_to_addr.insert(name.clone(), (addr, len, kind));
+        self.addr_to_sym.insert(addr, (name, len, kind));
     }
 
     /// Attempts to resolve a address to a symbol returning the name of the symbol and its starting
     /// address
     pub fn resolve_addr(&self, addr: u64) -> Option<(&str, u64)> {
         // @fixme: optimize this search to avoid needing to iterate though the entire symbol array
-        for (start, (name, len)) in self.addr_to_sym.range(..=addr).rev() {
+        for (start, (name, len, _)) in self.addr_to_sym.range(..=addr).rev() {
             if addr < start + len {
                 return Some((name, *start));
             }

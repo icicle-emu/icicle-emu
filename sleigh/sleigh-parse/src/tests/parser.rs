@@ -409,6 +409,15 @@ fn complex_pcode_statement() {
 }
 
 #[test]
+fn macro_in_expr() {
+    let _ = parse::<ast::Statement>(
+        r#"
+@define Carry "F[0,1]"
+r = (r << 1) | $(Carry);"#,
+    );
+}
+
+#[test]
 fn mips() {
     let path = std::path::PathBuf::from(std::env::var_os("GHIDRA_SRC").unwrap())
         .join("Ghidra/Processors/MIPS/data/languages/mips32le.slaspec");

@@ -17,9 +17,10 @@ use gdbstub::{
     },
 };
 use icicle_vm::{
-    cpu::{mem::perm, Cpu, ExceptionCode, ValueSource},
+    cpu::{mem::perm, Cpu, ExceptionCode},
+    injector::PathTracerRef,
     linux::TerminationReason,
-    Snapshot, Vm, VmExit,
+    Vm, VmExit,
 };
 use tracing::warn;
 
@@ -36,210 +37,55 @@ enum ExecMode {
     ReverseStep,
 }
 
+struct Snapshot {
+    trace: Option<Vec<(u64, u64)>>,
+    vm: icicle_vm::Snapshot,
+}
+
 pub struct VmState<T: DynamicTarget> {
-    trace: bool,
+    tracer: Option<PathTracerRef>,
     snapshots: HashMap<Option<String>, Snapshot>,
     vm: Vm,
     target: T,
     exec_mode: ExecMode,
+    #[allow(unused)]
+    write_hooks: HashMap<(u64, u64), u64>,
+    #[allow(unused)]
+    read_hooks: HashMap<(u64, u64), u64>,
 }
 
 impl<T: DynamicTarget> VmState<T> {
-    pub fn new(vm: Vm) -> Self {
+    pub fn new(mut vm: Vm) -> Self {
         let target = T::new(&vm.cpu);
-        Self { trace: false, snapshots: HashMap::new(), vm, target, exec_mode: ExecMode::Continue }
+        // Create an initial snapshot for reverse execution.
+        vm.save_snapshot();
+        Self {
+            tracer: None,
+            snapshots: HashMap::new(),
+            vm,
+            target,
+            exec_mode: ExecMode::Continue,
+            read_hooks: HashMap::new(),
+            write_hooks: HashMap::new(),
+        }
     }
 
     pub fn run(&mut self) -> SingleThreadStopReason<<T::Arch as Arch>::Usize> {
         let exit = match self.exec_mode {
             ExecMode::Continue => self.vm.run(),
             ExecMode::Step => self.vm.step(1),
-            ExecMode::ReverseStep => self.vm.step_back(1),
-        };
-        translate_stop_reason(&mut self.vm, exit)
-    }
-}
-
-pub struct IcicleX64SegmentRegs {
-    pub cs: pcode::VarNode,
-    pub ss: pcode::VarNode,
-    pub ds: pcode::VarNode,
-    pub es: pcode::VarNode,
-    pub fs: pcode::VarNode,
-    pub gs: pcode::VarNode,
-}
-
-pub struct IcicleX64 {
-    /// RAX, RBX, RCX, RDX, RSI, RDI, RBP, RSP, r8-r15
-    pub regs: [pcode::VarNode; 16],
-    /// Status register
-    pub eflags: pcode::VarNode,
-    /// Instruction pointer
-    pub rip: pcode::VarNode,
-    /// Segment registers: CS, SS, DS, ES, FS, GS
-    pub segments: IcicleX64SegmentRegs,
-    /// FPU registers: ST0 through ST7
-    pub st: [pcode::VarNode; 8],
-    /// FPU internal registers
-    pub fpu: (),
-    /// SIMD Registers: XMM0 through XMM15
-    pub xmm: [pcode::VarNode; 0x10],
-    /// SSE Status/Control Register
-    pub mxcsr: pcode::VarNode,
-}
-
-impl DynamicTarget for IcicleX64 {
-    type Arch = gdbstub_arch::x86::X86_64_SSE;
-
-    #[rustfmt::skip]
-    fn new(cpu: &Cpu) -> Self {
-        let r = |name: &str| cpu.arch.sleigh.get_reg(name).unwrap().var;
-        Self {
-            regs: [
-                r("RAX"), r("RBX"), r("RCX"), r("RDX"), r("RSI"), r("RDI"),
-                r("RBP"), r("RSP"), r("R8"),  r("R9"),  r("R10"), r("R11"),
-                r("R12"), r("R13"), r("R14"), r("R15"),
-            ],
-            eflags: r("eflags"),
-            rip: r("RIP"),
-            segments: IcicleX64SegmentRegs {
-                cs: r("CS"),
-                ss: r("SS"),
-                ds: r("DS"),
-                es: r("ES"),
-                fs: r("FS"),
-                gs: r("GS")
+            ExecMode::ReverseStep => match self.vm.step_back(1) {
+                Some(exit) => exit,
+                None => {
+                    return SingleThreadStopReason::ReplayLog {
+                        tid: None,
+                        pos: ext::base::reverse_exec::ReplayLogPosition::Begin,
+                    };
+                }
             },
-            st: [r("ST0"), r("ST1"), r("ST2"), r("ST3"), r("ST4"), r("ST5"), r("ST6"), r("ST7")],
-            fpu: (),
-            xmm: [
-                r("XMM0"),  r("XMM1"),  r("XMM2"),  r("XMM3"),  r("XMM4"),
-                r("XMM5"),  r("XMM6"),  r("XMM7"),  r("XMM8"),  r("XMM9"),
-                r("XMM10"), r("XMM11"), r("XMM12"), r("XMM13"), r("XMM14"),
-                r("XMM15"),
-            ],
-            mxcsr: r("MXCSR"),
-        }
-    }
-
-    fn read_registers(&self, cpu: &Cpu, regs: &mut gdbstub_arch::x86::reg::X86_64CoreRegs) {
-        regs.regs.iter_mut().zip(&self.regs).for_each(|(dst, var)| *dst = cpu.read_var(*var));
-        regs.eflags = icicle_vm::x86::eflags(cpu);
-        regs.rip = cpu.read_var(self.rip);
-
-        regs.segments.cs = cpu.read_var(self.segments.cs);
-        regs.segments.ss = cpu.read_var(self.segments.ss);
-        regs.segments.ds = cpu.read_var(self.segments.ds);
-        regs.segments.es = cpu.read_var(self.segments.es);
-        regs.segments.fs = cpu.read_var(self.segments.fs);
-        regs.segments.gs = cpu.read_var(self.segments.gs);
-
-        regs.st.iter_mut().zip(&self.st).for_each(|(dst, var)| *dst = cpu.read_var(*var));
-        regs.fpu = gdbstub_arch::x86::reg::X87FpuInternalRegs::default();
-        regs.xmm.iter_mut().zip(&self.xmm).for_each(|(dst, var)| *dst = cpu.read_var(*var));
-        regs.mxcsr = cpu.read_var(self.mxcsr);
-    }
-
-    fn write_registers(&self, cpu: &mut Cpu, regs: &gdbstub_arch::x86::reg::X86_64CoreRegs) {
-        let _cpu = cpu;
-        let _regs = regs;
-    }
-}
-
-pub struct IcicleMips32 {
-    pub r: [pcode::VarNode; 32],
-    pub lo: pcode::VarNode,
-    pub hi: pcode::VarNode,
-    pub pc: pcode::VarNode,
-    pub cop0: (),
-    pub fpu_r: [pcode::VarNode; 32],
-    pub fcsr: pcode::VarNode,
-    pub fir: pcode::VarNode,
-}
-
-impl DynamicTarget for IcicleMips32 {
-    type Arch = gdbstub_arch::mips::Mips;
-
-    #[rustfmt::skip]
-    fn new(cpu: &Cpu) -> Self {
-        let r = |name: &str| cpu.arch.sleigh.get_reg(name).unwrap().var;
-        Self {
-            r: [
-                r("zero"), r("at"), r("v0"), r("v1"),
-                r("a0"), r("a1"), r("a2"), r("a3"),
-                r("t0"), r("t1"), r("t2"), r("t3"),
-                r("t4"), r("t5"), r("t6"), r("t7"),
-                r("s0"), r("s1"), r("s2"), r("s3"),
-                r("s4"), r("s5"), r("s6"), r("s7"),
-                r("t8"), r("t9"), r("k0"), r("k1"),
-                r("gp"), r("sp"), r("s8"), r("ra"),
-            ],
-            lo: r("lo"),
-            hi: r("hi"),
-            pc: r("pc"),
-            cop0: (),
-            fpu_r: [
-                r("f0"),  r("f1"),  r("f2"),  r("f3"),  r("f4"),  r("f5"),  r("f6"),
-                r("f7"),  r("f8"),  r("f9"),  r("f10"), r("f11"), r("f12"), r("f13"),
-                r("f14"), r("f15"), r("f16"), r("f17"), r("f18"), r("f19"), r("f20"),
-                r("f21"), r("f22"), r("f23"), r("f24"), r("f25"), r("f26"), r("f27"),
-                r("f28"), r("f29"), r("f30"), r("f31"),
-            ],
-            fcsr: r("fcsr"),
-            fir: r("fir"),
-        }
-    }
-
-    fn read_registers(&self, cpu: &Cpu, regs: &mut gdbstub_arch::mips::reg::MipsCoreRegs<u32>) {
-        regs.r.iter_mut().zip(&self.r).for_each(|(dst, var)| *dst = cpu.read_var(*var));
-        regs.lo = cpu.read_var(self.lo);
-        regs.hi = cpu.read_var(self.hi);
-        regs.pc = cpu.read_var(self.pc);
-        regs.fpu.r.iter_mut().zip(&self.fpu_r).for_each(|(dst, var)| *dst = cpu.read_var(*var));
-        regs.fpu.fcsr = cpu.read_var(self.fcsr);
-        regs.fpu.fir = cpu.read_var(self.fir);
-    }
-
-    fn write_registers(&self, cpu: &mut Cpu, regs: &gdbstub_arch::mips::reg::MipsCoreRegs<u32>) {
-        let _cpu = cpu;
-        let _regs = regs;
-    }
-}
-
-pub struct IcicleMsp430 {
-    pc: pcode::VarNode,
-    sp: pcode::VarNode,
-    sr: pcode::VarNode,
-    r: [pcode::VarNode; 12],
-}
-
-impl DynamicTarget for IcicleMsp430 {
-    type Arch = gdbstub_arch::msp430::Msp430X;
-
-    #[rustfmt::skip]
-    fn new(cpu: &Cpu) -> Self {
-        let r = |name: &str| cpu.arch.sleigh.get_reg(name).unwrap().var;
-        Self {
-            pc: r("PC"),
-            sp: r("SP"),
-            sr: r("SR"),
-            r: [
-                r("R4"),  r("R5"),  r("R6"),  r("R7"),  r("R8"),  r("R9"),
-                r("R10"), r("R11"), r("R12"), r("R13"), r("R14"), r("R15"),
-            ],
-        }
-    }
-
-    fn read_registers(&self, cpu: &Cpu, regs: &mut gdbstub_arch::msp430::reg::Msp430Regs<u32>) {
-        regs.pc = cpu.read_var(self.pc);
-        regs.sp = cpu.read_var(self.sp);
-        regs.sr = cpu.read_var(self.sr);
-        regs.r.iter_mut().zip(&self.r).for_each(|(dst, var)| *dst = cpu.read_var(*var));
-    }
-
-    fn write_registers(&self, cpu: &mut Cpu, regs: &gdbstub_arch::msp430::reg::Msp430Regs<u32>) {
-        let _ = cpu;
-        let _ = regs;
+        };
+        tracing::debug!("VmExit: {exit:?}");
+        translate_stop_reason(&mut self.vm, exit)
     }
 }
 
@@ -296,11 +142,11 @@ impl<T: DynamicTarget> SingleThreadBase for VmState<T> {
         start_addr: <Self::Arch as Arch>::Usize,
         data: &mut [u8],
     ) -> TargetResult<(), Self> {
-        self.vm
-            .cpu
-            .mem
-            .read_bytes(num_traits::cast(start_addr).unwrap(), data, perm::NONE)
-            .map_err(|_| TargetError::NonFatal)
+        let start: u64 = num_traits::cast(start_addr).unwrap();
+        if !self.vm.cpu.mem.is_regular_region((start, start + data.len() as u64)) {
+            return Err(TargetError::NonFatal);
+        }
+        self.vm.cpu.mem.read_bytes(start, data, perm::NONE).map_err(|_| TargetError::NonFatal)
     }
 
     fn write_addrs(
@@ -308,11 +154,11 @@ impl<T: DynamicTarget> SingleThreadBase for VmState<T> {
         start_addr: <Self::Arch as Arch>::Usize,
         data: &[u8],
     ) -> TargetResult<(), Self> {
-        self.vm
-            .cpu
-            .mem
-            .write_bytes(num_traits::cast(start_addr).unwrap(), data, perm::NONE)
-            .map_err(|_| TargetError::NonFatal)
+        let start: u64 = num_traits::cast(start_addr).unwrap();
+        if !self.vm.cpu.mem.is_regular_region((start, start + data.len() as u64)) {
+            return Err(TargetError::NonFatal);
+        }
+        self.vm.cpu.mem.write_bytes(start, data, perm::NONE).map_err(|_| TargetError::NonFatal)
     }
 
     fn support_resume(&mut self) -> Option<SingleThreadResumeOps<Self>> {
@@ -324,6 +170,12 @@ impl<T: DynamicTarget> SingleThreadResume for VmState<T> {
     fn support_single_step(
         &mut self,
     ) -> Option<ext::base::singlethread::SingleThreadSingleStepOps<'_, Self>> {
+        if matches!(
+            self.vm.cpu.arch.triple.architecture,
+            target_lexicon::Architecture::Riscv64(_) | target_lexicon::Architecture::Mips32(_)
+        ) {
+            return None;
+        }
         Some(self)
     }
 
@@ -363,6 +215,10 @@ impl<T: DynamicTarget> ext::breakpoints::Breakpoints for VmState<T> {
     fn support_sw_breakpoint(&mut self) -> Option<ext::breakpoints::SwBreakpointOps<Self>> {
         Some(self)
     }
+
+    fn support_hw_watchpoint(&mut self) -> Option<ext::breakpoints::HwWatchpointOps<'_, Self>> {
+        Some(self)
+    }
 }
 
 impl<T: DynamicTarget> ext::breakpoints::SwBreakpoint for VmState<T> {
@@ -386,6 +242,35 @@ impl<T: DynamicTarget> ext::breakpoints::SwBreakpoint for VmState<T> {
     }
 }
 
+impl<'a, T: DynamicTarget> ext::breakpoints::HwWatchpoint for VmState<T> {
+    fn add_hw_watchpoint(
+        &mut self,
+        addr: <Self::Arch as Arch>::Usize,
+        len: <Self::Arch as Arch>::Usize,
+        _kind: ext::breakpoints::WatchKind,
+    ) -> TargetResult<bool, Self> {
+        let addr: u64 = num_traits::cast(addr).unwrap();
+        let len: u64 = num_traits::cast(len).unwrap();
+
+        self.vm.cpu.mem.add_write_hook(
+            addr,
+            addr + len,
+            Box::new(|_mem: &mut icicle_vm::cpu::Mmu, _addr: u64, _value: &[u8]| todo!()),
+        );
+
+        Ok(true)
+    }
+
+    fn remove_hw_watchpoint(
+        &mut self,
+        _addr: <Self::Arch as Arch>::Usize,
+        _len: <Self::Arch as Arch>::Usize,
+        _kind: ext::breakpoints::WatchKind,
+    ) -> TargetResult<bool, Self> {
+        todo!()
+    }
+}
+
 impl<T: DynamicTarget> ext::monitor_cmd::MonitorCmd for VmState<T> {
     fn handle_monitor_cmd(
         &mut self,
@@ -402,17 +287,84 @@ impl<T: DynamicTarget> ext::monitor_cmd::MonitorCmd for VmState<T> {
 
         let mut parts = msg.split_whitespace();
         match parts.next() {
-            Some("trace") => {
-                self.trace ^= true;
+            Some("attach-tracer") => {
+                if self.tracer.is_some() {
+                    gdbstub::outputln!(out, "path tracer already attached");
+                    return Ok(());
+                }
+                match icicle_vm::injector::add_path_tracer(&mut self.vm) {
+                    Ok(tracer) => {
+                        self.tracer = Some(tracer);
+                        gdbstub::outputln!(out, "path tracer attached");
+                    }
+                    Err(e) => {
+                        gdbstub::outputln!(out, "Error attaching path tracer: {e:?}")
+                    }
+                }
+            }
+            Some("pcode") => {
+                let pcode = icicle_vm::debug::current_disasm(&mut self.vm);
+                gdbstub::outputln!(out, "{}", pcode);
+            }
+            Some("save-trace") => {
+                let path = parts.next().unwrap_or("trace.txt");
+                let tracer = match self.tracer {
+                    Some(tracer) => tracer,
+                    None => {
+                        gdbstub::outputln!(out, "path tracer not attached");
+                        return Ok(());
+                    }
+                };
+                if let Err(e) = tracer.save_trace(&mut self.vm, path.as_ref()) {
+                    gdbstub::outputln!(out, "failed to save trace to {path}: {e:?}");
+                    return Ok(());
+                }
+                gdbstub::outputln!(out, "trace saved to {path}");
+            }
+            Some("lookup-varnode") => {
+                if let Some(name) = parts.next() {
+                    match self.vm.cpu.arch.sleigh.get_reg(name) {
+                        Some(var) => gdbstub::outputln!(out, "{:?}", var.var),
+                        None => gdbstub::outputln!(out, "unknown register"),
+                    }
+                }
+                else {
+                    warn!("Expected register name");
+                    return Ok(());
+                }
+            }
+
+            Some("varnode") => {
+                if let Some(name) = parts.next() {
+                    match self.vm.cpu.arch.sleigh.get_reg(name) {
+                        Some(var) => {
+                            let value = self.vm.cpu.read_reg(var.var);
+                            gdbstub::outputln!(out, "{name} = {value:#x}")
+                        }
+                        None => gdbstub::outputln!(out, "unknown register"),
+                    }
+                }
+                else {
+                    warn!("Expected register name");
+                    return Ok(());
+                }
             }
             Some("snapshot") => {
-                let snapshot = self.vm.snapshot();
+                self.vm.save_snapshot();
+                let snapshot = Snapshot {
+                    trace: self.tracer.map(|tracer| tracer.get_last_blocks(&mut self.vm)),
+                    vm: self.vm.snapshot(),
+                };
                 self.snapshots.insert(None, snapshot);
                 gdbstub::outputln!(out, "created snapshot");
             }
             Some("restore") => match self.snapshots.get(&None) {
                 Some(snapshot) => {
-                    self.vm.restore(snapshot);
+                    self.vm.restore(&snapshot.vm);
+                    snapshot
+                        .trace
+                        .as_ref()
+                        .map(|trace| self.tracer.unwrap().restore(&mut self.vm, trace));
                     gdbstub::outputln!(out, "state restored from snapshot");
                 }
                 None => gdbstub::outputln!(out, "snapshot does not exist"),
@@ -421,18 +373,41 @@ impl<T: DynamicTarget> ext::monitor_cmd::MonitorCmd for VmState<T> {
                 let _ = self.vm.step_back(1);
             }
             Some("step") => {
-                if let Some(inner) = parts.next() {
-                    let count = inner.parse().map_err(|e| anyhow::format_err!("{}", e))?;
-                    let _ = self.vm.step(count);
-                }
-                else {
+                let Some(inner) = parts.next() else {
                     warn!("Expected count");
                     return Ok(());
-                }
+                };
+
+                let count = inner.parse().map_err(|e| anyhow::format_err!("{}", e))?;
+                let _ = self.vm.step(count);
             }
             Some("backtrace") => {
                 let backtrace = icicle_vm::debug::backtrace(&mut self.vm);
                 out.write_raw(backtrace.as_bytes());
+            }
+            Some("icount") => {
+                gdbstub::outputln!(out, "icount = {}", self.vm.cpu.icount());
+            }
+            Some("memory-map") => {
+                gdbstub::outputln!(out, "{:#x?}", self.vm.cpu.mem.get_mapping());
+            }
+            Some("ensure-exec") => {
+                let (Some(addr), Some(len)) = (parts.next(), parts.next()) else {
+                    warn!("Expected address and length ");
+                    return Ok(());
+                };
+
+                let addr = icicle_vm::cpu::utils::parse_u64_with_prefix(addr)
+                    .ok_or_else(|| anyhow::format_err!("invalid address: {addr}"))?;
+                let len = icicle_vm::cpu::utils::parse_u64_with_prefix(len)
+                    .ok_or_else(|| anyhow::format_err!("invalid length: {len}"))?;
+
+                let is_exec = self.vm.cpu.mem.ensure_executable(addr, len);
+                gdbstub::outputln!(
+                    out,
+                    "{addr:#x}:{len} is {}",
+                    if is_exec { "exec" } else { "not exec" }
+                );
             }
             _ => {
                 let msg = std::str::from_utf8(cmd).unwrap_or("<not utf8-encoded>");
@@ -462,7 +437,7 @@ impl<T: DynamicTarget> ext::catch_syscalls::CatchSyscalls for VmState<T> {
         &mut self,
         filter: Option<ext::catch_syscalls::SyscallNumbers<<Self::Arch as Arch>::Usize>>,
     ) -> TargetResult<(), Self> {
-        let mut kernel = self.vm.env.as_any().downcast_mut::<icicle_vm::linux::Kernel>().unwrap();
+        let mut kernel = self.vm.env_mut::<icicle_vm::linux::Kernel>().unwrap();
         kernel.syscall_breakpoints.clear();
         match filter {
             Some(filter) => {
@@ -481,7 +456,7 @@ impl<T: DynamicTarget> ext::catch_syscalls::CatchSyscalls for VmState<T> {
     }
 
     fn disable_catch_syscalls(&mut self) -> TargetResult<(), Self> {
-        let mut kernel = self.vm.env.as_any().downcast_mut::<icicle_vm::linux::Kernel>().unwrap();
+        let mut kernel = self.vm.env_mut::<icicle_vm::linux::Kernel>().unwrap();
         kernel.syscall_breakpoints.clear();
         kernel.catch_syscalls = icicle_vm::linux::CatchSyscalls::None;
         Ok(())
@@ -497,9 +472,7 @@ where
         VmExit::Halt => {
             // @fixme get last status code
             match vm
-                .env
-                .as_any()
-                .downcast_ref::<icicle_vm::linux::Kernel>()
+                .env_ref::<icicle_vm::linux::Kernel>()
                 .and_then(|k| k.process.termination_reason)
             {
                 Some(TerminationReason::Exit(exit)) => SingleThreadStopReason::Exited(exit as u8),
@@ -518,7 +491,7 @@ where
         }
         VmExit::Breakpoint => SingleThreadStopReason::SwBreak(()),
         VmExit::UnhandledException((ExceptionCode::Environment, code)) => {
-            if code == 0 {
+            if code == EnvironmentCode::SyscallEntry as u64 {
                 // @fixme get syscall number
                 let id = 0_u64;
                 let number = num_traits::cast(id).unwrap();
@@ -528,7 +501,7 @@ where
                     position: CatchSyscallPosition::Entry,
                 }
             }
-            else if code == 1 {
+            else if code == EnvironmentCode::SyscallExit as u64 {
                 // @fixme get syscall number
                 let id = 0_u64;
                 let number = num_traits::cast(id).unwrap();
@@ -542,14 +515,27 @@ where
                 SingleThreadStopReason::SwBreak(())
             }
         }
+        VmExit::UnhandledException((ExceptionCode::ReadWatch | ExceptionCode::WriteWatch, _)) => {
+            SingleThreadStopReason::Signal(Signal::SIGSTOP)
+        }
         VmExit::UnhandledException((code, addr)) if code.is_memory_error() => {
-            warn!("{code:?} addr={addr:#0x}");
+            warn!("Unhandled exception: {code:?}, addr={addr:#0x}");
             SingleThreadStopReason::Signal(Signal::SIGSEGV)
         }
-
+        VmExit::UnhandledException((code, addr)) => {
+            warn!("Unhandled exception: ({code:?}, {addr:#0x})");
+            SingleThreadStopReason::Signal(Signal::SIGILL)
+        }
         other => {
-            warn!("{:?}", other);
-            SingleThreadStopReason::SwBreak(())
+            warn!("Unknown error: {:?}", other);
+            SingleThreadStopReason::Signal(Signal::SIGILL)
         }
     }
+}
+
+// @fixme: these are not actually generated by the VM.
+#[repr(u64)]
+pub enum EnvironmentCode {
+    SyscallEntry,
+    SyscallExit,
 }

@@ -1072,7 +1072,7 @@ pub fn mmap2<C: LinuxCpu>(
 
     if is_fixed && alloc_addr != addr {
         tracing::error!("Wrong allocation address, wanted: {:0x} got: {:0x}", addr, alloc_addr);
-        return Err(VmExit::AllocFailure.into());
+        return Err(VmExit::OutOfMemory.into());
     }
 
     let written_bytes = if is_file {

@@ -104,11 +104,11 @@ pub const READ: u8 = 0b0000_0010;
 pub const WRITE: u8 = 0b0000_0100;
 pub const EXEC: u8 = 0b0000_1000;
 pub const MAP: u8 = 0b0001_0000;
-pub const ALL: u8 = MAP | INIT | READ | WRITE | EXEC;
+pub const IN_CODE_CACHE: u8 = 0b1000_0000;
+pub const ALL: u8 = MAP | INIT | READ | WRITE | EXEC | IN_CODE_CACHE;
 
 pub const READ_WATCH: u8 = 0b0010_0000;
 pub const WRITE_WATCH: u8 = 0b0100_0000;
-pub const IN_CODE_CACHE: u8 = 0b1000_0000;
 
 #[inline(always)]
 pub fn check(perm: u8, mask: u8) -> MemResult<()> {
@@ -117,6 +117,27 @@ pub fn check(perm: u8, mask: u8) -> MemResult<()> {
         return Err(get_error_kind(perm));
     }
     Ok(())
+}
+
+#[inline(always)]
+pub fn check_bytes<const N: usize>(mut perm: [u8; N], mask: u8) -> MemResult<()> {
+    for (byte, mask) in perm.iter_mut().zip([!mask & ALL; N]) {
+        *byte |= mask;
+    }
+    if perm != [ALL; N] {
+        return Err(get_error_kind_bytes(perm));
+    }
+    Ok(())
+}
+
+#[inline(never)]
+#[cold]
+fn get_error_kind_bytes<const N: usize>(perm: [u8; N]) -> MemError {
+    let mut check = ALL;
+    for byte in perm {
+        check &= byte;
+    }
+    get_error_kind(check)
 }
 
 #[inline(never)]

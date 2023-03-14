@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use icicle_vm::cpu::{mem::perm, Cpu};
 
 pub mod cmp_finder;
@@ -23,17 +25,60 @@ pub(crate) fn get_pointer_perm(cpu: &mut Cpu, addr: u64, len: u64) -> u8 {
     cpu.mem.get_perm(addr) & cpu.mem.get_perm(addr + len)
 }
 
-/// Read 32-bytes from memory starting at `addr`. Returns [None] if the memory is not readable, or
+/// Read N-bytes from memory starting at `addr`. Returns [None] if the memory is not readable, or
 /// is IO mapped.
-pub(crate) fn try_read_mem(cpu: &mut Cpu, addr: u64) -> Option<[u8; 31]> {
-    if get_pointer_perm(cpu, addr, 31) & perm::READ == 0 {
+pub(crate) fn try_read_mem<const N: usize>(cpu: &mut Cpu, addr: u64) -> Option<[u8; N]> {
+    if get_pointer_perm(cpu, addr, N as u64) & perm::READ == 0 {
         return None;
     }
 
-    let mut a = [0; 31];
+    let mut a = [0; N];
     if cpu.mem.read_bytes(addr, &mut a, perm::READ).is_err() {
         return None;
     }
 
     Some(a)
+}
+
+pub struct SSARewriter {
+    new_to_old: HashMap<i16, (usize, pcode::VarNode)>,
+    old_to_new: HashMap<i16, pcode::VarNode>,
+    next_id: i16,
+}
+
+impl SSARewriter {
+    pub fn new() -> Self {
+        Self { new_to_old: HashMap::new(), old_to_new: HashMap::new(), next_id: 1 }
+    }
+
+    pub fn get_input(&mut self, x: pcode::Value) -> pcode::Value {
+        match x {
+            pcode::Value::Var(x) if !x.is_invalid() => match self.old_to_new.get(&x.id) {
+                Some(x) => pcode::Value::Var(*x),
+                None => self.set_output(0, x).into(),
+            },
+            _ => x,
+        }
+    }
+
+    pub fn set_output(&mut self, offset: usize, var: pcode::VarNode) -> pcode::VarNode {
+        if var == pcode::VarNode::NONE {
+            return pcode::VarNode::NONE;
+        }
+        let output = pcode::VarNode::new(self.next_id, var.size);
+        self.new_to_old.insert(self.next_id, (offset, var));
+        self.old_to_new.insert(var.id, output);
+        self.next_id += 1;
+        output
+    }
+
+    pub fn get_original(&mut self, new: pcode::Value) -> (usize, pcode::Value) {
+        match new {
+            pcode::Value::Var(var) => {
+                let (offset, x) = *self.new_to_old.get(&var.id).unwrap_or(&(0, var));
+                (offset, x.into())
+            }
+            pcode::Value::Const(_, _) => (0, new),
+        }
+    }
 }

@@ -1,5 +1,3 @@
-#![feature(backtrace)]
-
 mod builder;
 pub mod debug;
 pub mod elf_dump;
@@ -7,37 +5,35 @@ pub mod env;
 pub mod hw;
 pub mod injector;
 
-pub use builder::{build, build_sleigh_for, x86, BuildError};
 pub use icicle_cpu as cpu;
 pub use icicle_cpu::VmExit;
 pub use icicle_linux as linux;
 
-use std::collections::HashSet;
+pub use crate::{
+    builder::{build, build_sleigh_for, x86, BuildError},
+    injector::{CodeInjector, InjectorRef},
+};
+pub use icicle_cpu::BlockTable;
+
+use std::{
+    collections::{BTreeMap, HashSet},
+    rc::Rc,
+};
 
 use icicle_cpu::{
-    exec::helpers,
     lifter::{self, count_instructions, Target},
-    mem, BlockKey, BlockTable, Cpu, CpuSnapshot, Environment, ExceptionCode, InternalError,
-    ValueSource,
+    mem, BlockKey, Cpu, CpuSnapshot, Environment, ExceptionCode, InternalError, ValueSource,
 };
 use pcode::PcodeDisplay;
 
-pub use crate::injector::CodeInjector;
+use crate::{cpu::EnvironmentAny, injector::CodeInjectorAny};
 
-/// The number of instructions to wait before checking `vm.interrupt_flag`. Should be set quite high
-/// since it causes a full VM exit to check.
-#[cfg(debug_assertions)]
-const CHECK_FOR_INTERRUPT_FLAG_TIMER: u64 = 0x1_0000;
-#[cfg(not(debug_assertions))]
-const CHECK_FOR_INTERRUPT_FLAG_TIMER: u64 = 0x10_0000;
-
-const PRINT_EXITS: bool = false;
+const TRACE_EXEC: bool = false;
 
 pub struct Vm {
     pub cpu: Box<Cpu>,
-    pub env: Box<dyn Environment>,
+    pub env: Box<dyn EnvironmentAny>,
     pub lifter: lifter::BlockLifter,
-    pub injectors: Vec<Box<dyn CodeInjector>>,
     pub icount_limit: u64,
     pub next_timer: u64,
     pub interrupt_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -50,6 +46,8 @@ pub struct Vm {
     /// The number of new blocks that have been compiled since the last full recompilation step.
     pub compiled_blocks: u64,
 
+    injectors: Vec<Box<dyn CodeInjectorAny>>,
+
     /// The last time the JIT was recompiled.
     last_recompile: std::time::Instant,
 
@@ -58,6 +56,9 @@ pub struct Vm {
 
     /// Cached pointers that are used inside of the JIT
     jit_ctx: icicle_jit::VmCtx,
+
+    /// Snapshots at different icounts for reverse execution.
+    snapshots: BTreeMap<u64, Rc<Snapshot>>,
 }
 
 impl Drop for Vm {
@@ -88,68 +89,85 @@ impl Vm {
             last_recompile: std::time::Instant::now(),
             recompile_offset: 0,
             jit_ctx: icicle_jit::VmCtx::new(),
+            snapshots: BTreeMap::new(),
         }
     }
 
-    pub fn add_injector(&mut self, injector: Box<dyn CodeInjector>) -> usize {
+    /// Set the current execution environment for the VM.
+    pub fn set_env(&mut self, env: impl Environment + 'static) {
+        self.env = Box::new(env)
+    }
+
+    /// Gets a reference to the execution environment managed by the VM.
+    pub fn env_ref<T: Environment + 'static>(&self) -> Option<&T> {
+        self.env.as_any().downcast_ref::<T>()
+    }
+
+    /// Gets a mutable reference to the execution environment managed by the VM.
+    pub fn env_mut<T: Environment + 'static>(&mut self) -> Option<&mut T> {
+        self.env.as_mut_any().downcast_mut::<T>()
+    }
+
+    /// Registers a [CodeInjector] in the VM which is invoked whenever the emulator lifts a new
+    /// block of code.
+    ///
+    /// Returns a reference that can be later used to obtain mutable access to the injector using
+    /// `get_injector_mut`.
+    ///
+    /// Note: the injector is only executed on newly lifted blocks.
+    pub fn add_injector<C>(&mut self, injector: C) -> InjectorRef
+    where
+        C: CodeInjector + 'static,
+    {
         // @todo: consider running the injector over all current blocks.
         let injector_id = self.injectors.len();
-        self.injectors.push(injector);
+        self.injectors.push(Box::new(injector));
         injector_id
     }
 
+    /// Gets a mutable reference previously registered injector using `id`.
+    ///
+    /// Note: Be wary of changing the behavior of the injector, sine it will _not_ re-executed on
+    /// existing blocks.
+    pub fn get_injector_mut<C>(&mut self, id: InjectorRef) -> Option<&mut C>
+    where
+        C: CodeInjector + 'static,
+    {
+        self.injectors[id].as_mut_any().downcast_mut::<C>()
+    }
+
+    /// Registers a function `hook` to called before the instruction at `addr` is executed.
     pub fn hook_address(&mut self, addr: u64, hook: impl FnMut(&mut Cpu, u64) + 'static) {
-        let hook_id = self.cpu.add_hook(Box::new(hook));
-        injector::register_instruction_hook_injector(self, addr, hook_id);
+        let hook_id = self.cpu.add_hook(hook);
+        injector::register_instruction_hook_injector(self, vec![addr], hook_id);
     }
 
-    pub fn register_helpers(&mut self, helpers: &[(&str, helpers::PcodeOpHelper)]) {
-        for &(name, func) in helpers {
-            let id = match self.cpu.arch.sleigh.get_userop(name) {
-                Some(id) => id,
-                None => continue,
-            };
-            self.cpu.set_helper(id, func);
-        }
+    /// Registers a function `hook` that called whenever any of the addresses in `addrs` are about
+    /// to be executed.
+    pub fn hook_many_addresses(
+        &mut self,
+        addrs: &[u64],
+        hook: impl FnMut(&mut Cpu, u64) + 'static,
+    ) {
+        let hook_id = self.cpu.add_hook(hook);
+        injector::register_instruction_hook_injector(self, addrs.into(), hook_id);
     }
 
-    pub fn add_breakpoint(&mut self, addr: u64) -> bool {
-        if !self.code.breakpoints.insert(addr) {
-            // There is already a breakpoint at the target address.
-            return false;
-        }
-
-        for block in self.code.blocks.iter_mut().filter(|x| x.start <= addr && addr < x.end) {
-            block.breakpoints += 1;
-        }
-
-        // Make sure that any JIT blocks containing this address are removed from fast lookup.
-        self.jit.remove_fast_lookup(addr);
-
+    /// Registers an injector that is called whenever the p-code operation `name` is translated.
+    pub fn add_op_injector(
+        &mut self,
+        name: &str,
+        injector: impl lifter::PcodeOpInjector + Sized + 'static,
+    ) -> bool {
+        let idx = match self.cpu.arch.sleigh.get_userop(name) {
+            Some(idx) => idx,
+            None => return false,
+        };
+        self.lifter.op_injectors.insert(idx, Box::new(injector));
         true
     }
 
-    pub fn remove_breakpoint(&mut self, addr: u64) -> bool {
-        if !self.code.breakpoints.remove(&addr) {
-            // The breakpoint we are trying to remove does not exist.
-            return false;
-        }
-
-        for block in self.code.blocks.iter_mut().filter(|x| x.start <= addr && addr < x.end) {
-            block.breakpoints -= 1;
-        }
-
-        true
-    }
-
-    pub fn toggle_breakpoint(&mut self, addr: u64) -> bool {
-        if self.add_breakpoint(addr) {
-            return true;
-        }
-        self.remove_breakpoint(addr);
-        false
-    }
-
+    /// Runs the VM until it encounters an exit condition.
     pub fn run(&mut self) -> VmExit {
         if self.should_recompile() && self.enable_recompilation {
             self.recompile();
@@ -195,7 +213,7 @@ impl Vm {
         }
     }
 
-    pub fn get_block_key(&self, vaddr: u64) -> BlockKey {
+    pub(crate) fn get_block_key(&self, vaddr: u64) -> BlockKey {
         let isa_mode = self.cpu.isa_mode() as u64;
         BlockKey { vaddr, isa_mode }
     }
@@ -209,7 +227,7 @@ impl Vm {
         tracing::trace!("{code:?}: icount={}, next_timer={}", self.cpu.icount, self.next_timer);
         match code {
             ExceptionCode::None | ExceptionCode::InstructionLimit => {
-                if self.interrupt_flag.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                if self.interrupt_flag.load(std::sync::atomic::Ordering::Relaxed) {
                     return VmExit::Interrupted;
                 }
                 if self.cpu.icount >= self.icount_limit {
@@ -233,7 +251,8 @@ impl Vm {
                     self.code.blocks[self.cpu.block_id as usize].pcode.instructions.len() as u64;
                 VmExit::UnhandledException((code, self.cpu.exception.value))
             }
-            ExceptionCode::Halt => VmExit::Halt,
+            ExceptionCode::Halt | ExceptionCode::Sleep => VmExit::Halt,
+            ExceptionCode::OutOfMemory => VmExit::OutOfMemory,
             code => VmExit::UnhandledException((code, self.cpu.exception.value)),
         }
     }
@@ -299,7 +318,26 @@ impl Vm {
         VmExit::UnhandledException((ExceptionCode::UnimplementedOp, self.cpu.exception.value))
     }
 
+    #[cold]
+    #[inline(never)]
+    fn corrupted_block_map(&mut self, id: u64) {
+        self.cpu.exception.code = ExceptionCode::InternalError as u32;
+        self.cpu.exception.value = InternalError::CorruptedBlockMap as u64;
+        let pc = self.cpu.read_pc();
+        eprintln!(
+            "Block map corrupted at: pc={pc:#x} id={id}\n{}",
+            std::backtrace::Backtrace::force_capture()
+        );
+    }
+
     fn update_timer(&mut self) {
+        /// The number of instructions to wait before checking `vm.interrupt_flag`. Should be set
+        /// quite high since it causes a full VM exit to check.
+        #[cfg(debug_assertions)]
+        const CHECK_FOR_INTERRUPT_FLAG_TIMER: u64 = 0x1_0000;
+        #[cfg(not(debug_assertions))]
+        const CHECK_FOR_INTERRUPT_FLAG_TIMER: u64 = 0x10_0000;
+
         let user_exit = self.icount_limit;
         let env_exit = self.env.next_timer();
         self.next_timer =
@@ -314,17 +352,18 @@ impl Vm {
             Some(value) => value,
             None => {
                 self.cpu.exception.code = ExceptionCode::CodeNotTranslated as u32;
+                self.cpu.exception.value = self.cpu.read_pc();
                 return;
             }
         };
+        if TRACE_EXEC {
+            print_interpreter_enter(self, block_id, offset);
+        }
         self.cpu.block_offset = 0;
         loop {
             let block = match self.code.blocks.get(block_id as usize) {
                 Some(block) => block,
-                None => {
-                    corrupted_block_map(self, block_id);
-                    return;
-                }
+                None => return self.corrupted_block_map(block_id),
             };
 
             if block.has_breakpoint() {
@@ -371,6 +410,7 @@ impl Vm {
                         None => {
                             self.cpu.block_id = block_id;
                             self.cpu.exception.code = ExceptionCode::CodeNotTranslated as u32;
+                            self.cpu.exception.value = addr;
                         }
                     }
 
@@ -388,15 +428,8 @@ impl Vm {
             }
         }
 
-        if PRINT_EXITS {
-            eprintln!(
-                "interpreter_exit: (code={:?}, value={:x}), block={}, offset={}, fuel={}",
-                ExceptionCode::from_u32(self.cpu.exception.code),
-                self.cpu.exception.value,
-                self.cpu.block_id,
-                self.cpu.block_offset,
-                self.cpu.fuel.remaining,
-            );
+        if TRACE_EXEC {
+            print_interpreter_exit(self);
         }
     }
 
@@ -425,17 +458,14 @@ impl Vm {
             *dst = src;
         }
 
-        for (id, (dst, hook)) in self.jit_ctx.hooks.iter_mut().zip(self.cpu.get_hooks()).enumerate()
-        {
-            let (fn_ptr, data_ptr) = hook
-                .as_ptr()
-                .unwrap_or((icicle_jit::runtime::run_dynamic_hook, (id as u64) as *mut ()));
-            dst.fn_ptr = fn_ptr;
-            dst.data_ptr = data_ptr;
+        for (dst, hook) in self.jit_ctx.hooks.iter_mut().zip(self.cpu.get_hooks()) {
+            (dst.fn_ptr, dst.data_ptr) = hook.get_ptr();
         }
 
         let mut next_addr = self.cpu.read_pc();
-        // tracing::info!("jit_enter: next_addr={next_addr:#x}, fuel={}", self.cpu.fuel.remaining);
+        if TRACE_EXEC {
+            print_jit_enter(self, next_addr);
+        }
         while self.cpu.exception.code == ExceptionCode::None as u32 {
             let jit_func = match self.jit.lookup_fast(next_addr) {
                 Some(func) => {
@@ -451,31 +481,26 @@ impl Vm {
             }
         }
 
-        if PRINT_EXITS {
-            eprintln!(
-                "jit_exit: (code={:?}, value={:x}), block={}, offset={}, next_addr={next_addr:#x}, fuel={}",
-                ExceptionCode::from_u32(self.cpu.exception.code),
-                self.cpu.exception.value,
-                self.cpu.block_id,
-                self.cpu.block_offset,
-                self.cpu.fuel.remaining,
-            );
+        if self.cpu.block_offset != 0 {
+            self.jit_exit_before_end_of_block();
         }
 
-        if self.cpu.block_offset != 0 {
-            // Since we exited before we reached the end of a block, we need to check how many
-            // instructions we executed in the block adjust the consumed fuel.
-            let block = match self.code.blocks.get(self.cpu.block_id as usize) {
-                Some(block) => block,
-                None => {
-                    corrupted_block_map(self, self.cpu.block_id);
-                    return;
-                }
-            };
-            let unexecuted_instructions =
-                count_instructions(&block.pcode.instructions[self.cpu.block_offset as usize..]);
-            self.cpu.fuel.remaining += unexecuted_instructions as u64;
+        if TRACE_EXEC {
+            print_jit_exit(self, next_addr);
         }
+    }
+
+    #[cold]
+    fn jit_exit_before_end_of_block(&mut self) {
+        // Since we exited before we reached the end of a block, we need to check how many
+        // instructions we executed in the block to adjust the consumed fuel.
+        let block = match self.code.blocks.get(self.cpu.block_id as usize) {
+            Some(block) => block,
+            None => return self.corrupted_block_map(self.cpu.block_id),
+        };
+        let executed_instructions =
+            count_instructions(&block.pcode.instructions[..self.cpu.block_offset as usize]);
+        self.cpu.fuel.remaining -= executed_instructions as u64;
     }
 
     /// Return the currently active block and offset. If no block is active, retrieve the next block
@@ -505,14 +530,9 @@ impl Vm {
         self.code.disasm.get(&addr).map(|s| s.as_str())
     }
 
-    pub fn disasm(&mut self, addr: u64) -> &str {
-        self.update_context();
-        self.lifter.instruction_lifter.disasm(&mut *self.cpu, addr).unwrap_or("invalid_instruction")
-    }
-
-    pub fn decode(&mut self, addr: u64) -> Option<&sleigh_runtime::Instruction> {
-        self.update_context();
-        self.lifter.instruction_lifter.decode(&mut *self.cpu, addr)
+    pub fn get_block_info(&self, addr: u64) -> Option<cpu::BlockInfoRef> {
+        let key = self.get_block_key(addr);
+        self.code.get_info(key)
     }
 
     pub fn lift(&mut self, addr: u64) -> Option<lifter::BlockGroup> {
@@ -540,7 +560,7 @@ impl Vm {
 
         // Validate that all modified code is valid, and invalidate any jitted code that is now
         // modified.
-        for id in group.range() {
+        for id in self.code.modified.drain() {
             let block = &mut self.code.blocks[id];
             for inst in &block.pcode.instructions {
                 if !self.cpu.validate(inst) {
@@ -578,13 +598,19 @@ impl Vm {
             tracing::debug!("ISA mode change {} -> {isa_mode}", self.prev_isa_mode);
             self.jit.clear_fast_lookup();
             self.prev_isa_mode = isa_mode;
-            self.lifter.set_context(self.cpu.arch.isa_mode_context[isa_mode as usize]);
+            match self.cpu.arch.isa_mode_context.get(isa_mode as usize) {
+                Some(ctx) => self.lifter.set_context(*ctx),
+                None => self.invalid_isa_mode(),
+            }
         }
     }
 
-    pub fn get_callstack(&self) -> Vec<u64> {
-        let pc = self.cpu.read_pc();
-        self.cpu.shadow_stack.as_slice().iter().map(|entry| entry.addr).chain(Some(pc)).collect()
+    #[inline(never)]
+    #[cold]
+    fn invalid_isa_mode(&mut self) {
+        tracing::error!("Unknown or unsupported ISA mode: {}", self.prev_isa_mode);
+        self.cpu.exception.code = ExceptionCode::InternalError as u32;
+        self.cpu.exception.value = InternalError::CorruptedBlockMap as u64;
     }
 
     #[inline(never)]
@@ -728,6 +754,46 @@ impl Vm {
     }
 }
 
+#[inline(never)]
+fn print_interpreter_enter(vm: &mut Vm, block_id: u64, offset: u64) {
+    let addr = vm.code.address_of(block_id, offset);
+    eprintln!("interpreter_enter: next_addr={addr:#x}, block.id={block_id}, block.offset={offset}",);
+}
+
+fn print_interpreter_exit(vm: &mut Vm) {
+    eprintln!(
+        "interpreter_exit: (code={:?}, value={:x}), block={}, offset={}, fuel={}, icount={}",
+        ExceptionCode::from_u32(vm.cpu.exception.code),
+        vm.cpu.exception.value,
+        vm.cpu.block_id,
+        vm.cpu.block_offset,
+        vm.cpu.fuel.remaining,
+        vm.cpu.icount(),
+    );
+}
+
+#[inline(never)]
+fn print_jit_enter(vm: &mut Vm, next_addr: u64) {
+    eprintln!(
+        "jit_enter: next_addr={next_addr:#x}, fuel={}, icount={}",
+        vm.cpu.fuel.remaining,
+        vm.cpu.icount()
+    );
+}
+
+#[inline(never)]
+fn print_jit_exit(vm: &mut Vm, next_addr: u64) {
+    eprintln!(
+        "jit_exit: (code={:?}, value={:x}), block={}, offset={}, next_addr={next_addr:#x}, fuel={}, icount={}",
+        ExceptionCode::from_u32(vm.cpu.exception.code),
+        vm.cpu.exception.value,
+        vm.cpu.block_id,
+        vm.cpu.block_offset,
+        vm.cpu.fuel.remaining,
+        vm.cpu.icount(),
+    );
+}
+
 // Helper functions
 impl Vm {
     pub fn step(&mut self, steps: u64) -> VmExit {
@@ -740,42 +806,111 @@ impl Vm {
         exit
     }
 
-    pub fn step_back(&mut self, _steps: u64) -> VmExit {
-        todo!()
+    /// Step backward `count` instructions by first restoring a nearby snapshot then continuing
+    /// execution until reaching correct address
+    pub fn step_back(&mut self, count: u64) -> Option<VmExit> {
+        let old_limit = self.icount_limit;
+
+        // Find the absolute instruction offset given the amount of steps we want to go back
+        let target = match self.cpu.icount().checked_sub(count) {
+            Some(target) => target,
+            None => return None,
+        };
+
+        // Find and restore a snapshot that was created before the target offset
+        match self.snapshots.range(..target).rev().next() {
+            Some((_, snapshot)) => self.restore(&snapshot.clone()),
+            None => return None,
+        }
+        tracing::debug!("Found snapshot at icount={}", self.cpu.icount());
+
+        let steps = target - self.cpu.icount();
+
+        // If the snapshot was far away create a new snapshot closer to improve performance if we
+        // need to step back again
+        if steps > 500 {
+            self.icount_limit = target - 100;
+            tracing::debug!("Creating nearby snapshot at icount={}", self.icount_limit);
+            match self.run() {
+                VmExit::InstructionLimit => {}
+                other => {
+                    tracing::warn!("Hit unexpected exit when stepping backwards: {other:?}");
+                    return Some(other);
+                }
+            }
+            self.save_snapshot();
+        }
+
+        // Execute forward until we reach the target address
+        self.icount_limit = target;
+        let exit = self.run();
+        self.icount_limit = old_limit;
+
+        Some(exit)
     }
 
     pub fn run_until(&mut self, addr: u64) -> VmExit {
-        let had_bp = self.code.breakpoints.contains(&addr);
-        if !had_bp {
-            self.code.breakpoints.insert(addr);
-        }
+        let added_bp = self.add_breakpoint(addr);
         let exit = self.run();
-        if !had_bp {
-            self.code.breakpoints.remove(&addr);
+        if added_bp {
+            self.remove_breakpoint(addr);
         }
         exit
     }
-}
 
-#[cold]
-#[inline(never)]
-fn corrupted_block_map(vm: &mut Vm, id: u64) {
-    vm.cpu.exception.code = ExceptionCode::InternalError as u32;
-    vm.cpu.exception.value = InternalError::CorruptedBlockMap as u64;
-    let pc = vm.cpu.read_pc();
-    eprintln!(
-        "Block map corrupted at: pc={pc:#x} id={id}\n{}",
-        std::backtrace::Backtrace::force_capture()
-    );
-}
+    /// Adds a breakpoint at `addr`.
+    ///
+    /// Returns a boolean representing whether a new breakpoint was added.
+    pub fn add_breakpoint(&mut self, addr: u64) -> bool {
+        if !self.code.breakpoints.insert(addr) {
+            // There is already a breakpoint at the target address.
+            return false;
+        }
 
-pub struct Snapshot {
-    cpu: CpuSnapshot,
-    mem: mem::Snapshot,
-    env: Box<dyn std::any::Any>,
-}
+        for block in self.code.blocks.iter_mut().filter(|x| x.start <= addr && addr < x.end) {
+            block.breakpoints += 1;
+        }
 
-impl Vm {
+        // Make sure that any JIT blocks containing this address are removed from fast lookup.
+        self.jit.remove_fast_lookup(addr);
+
+        true
+    }
+
+    /// Removes the breakpoint at `addr`.
+    ///
+    /// Returns a boolean representing whether a breakpoint was remove.
+    pub fn remove_breakpoint(&mut self, addr: u64) -> bool {
+        if !self.code.breakpoints.remove(&addr) {
+            // The breakpoint we are trying to remove does not exist.
+            return false;
+        }
+
+        for block in self.code.blocks.iter_mut().filter(|x| x.start <= addr && addr < x.end) {
+            block.breakpoints -= 1;
+        }
+
+        true
+    }
+
+    pub fn toggle_breakpoint(&mut self, addr: u64) -> bool {
+        if self.add_breakpoint(addr) {
+            return true;
+        }
+        self.remove_breakpoint(addr);
+        false
+    }
+
+    pub fn get_callstack(&self) -> Vec<u64> {
+        let pc = self.cpu.read_pc();
+        self.cpu.shadow_stack.as_slice().iter().map(|entry| entry.addr).chain(Some(pc)).collect()
+    }
+
+    pub fn save_snapshot(&mut self) {
+        let snapshot = Rc::new(self.snapshot());
+        self.snapshots.insert(self.cpu.icount(), snapshot);
+    }
+
     pub fn snapshot(&mut self) -> Snapshot {
         Snapshot {
             cpu: self.cpu.snapshot(),
@@ -789,12 +924,18 @@ impl Vm {
         self.cpu.mem.restore(snapshot.mem.clone());
         self.env.restore(&snapshot.env);
         self.update_context();
+
+        tracing::trace!(
+            "VM state restored: pc = {:#x}, block.id={}, block.offset={}",
+            self.cpu.read_pc(),
+            self.cpu.block_id,
+            self.cpu.block_offset
+        );
     }
 }
 
-pub fn get_linux_termination_reason(vm: &mut Vm) -> Option<linux::TerminationReason> {
-    vm.env
-        .as_any()
-        .downcast_ref::<crate::linux::Kernel>()
-        .and_then(|env| env.process.termination_reason)
+pub struct Snapshot {
+    pub cpu: Box<CpuSnapshot>,
+    pub mem: mem::Snapshot,
+    pub env: Box<dyn std::any::Any>,
 }

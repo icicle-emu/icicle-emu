@@ -4,6 +4,8 @@ use std::{cell::Cell, collections::HashMap, convert::TryInto};
 
 const DEBUG: bool = false;
 
+pub type OutputExprId = u32;
+
 #[derive(Clone)]
 pub struct ConstEval {
     /// The value written to the output in each expression.
@@ -29,11 +31,14 @@ impl ConstEval {
         }
     }
 
-    pub fn eval(&mut self, stmt: pcode::Instruction) -> Result<u32, ()> {
+    pub fn eval(&mut self, stmt: pcode::Instruction) -> Result<OutputExprId, ()> {
         let a = self.get_value(stmt.inputs.first());
         let b = self.get_value(stmt.inputs.second());
 
+        // Reserve slot for the output of the current operation.
         let id = self.values.len().try_into().unwrap();
+        self.values.push((pcode::VarNode::NONE, Value::empty()));
+
         let mut out = self.get_value_mut(stmt.output);
 
         if DEBUG {
@@ -61,7 +66,7 @@ impl ConstEval {
         if self.matches_existing(&value).is_none() {
             self.results.insert(value.clone(), stmt.output);
         }
-        self.values.push((stmt.output, value));
+        self.values[id as usize] = (stmt.output, value);
 
         if self.error.take() {
             return Err(());
@@ -109,14 +114,19 @@ impl ConstEval {
     }
 
     /// Get the statement index associated with an expression ID.
-    pub fn get_stmt_index(&self, id: u32) -> Option<u32> {
+    pub fn get_stmt_index(&self, id: OutputExprId) -> Option<u32> {
         let start: u32 = self.values.len().try_into().unwrap();
         id.checked_sub(start)
     }
 
     /// Get the value of the output at a particular expression ID.
-    pub fn get_value_at_expr_id(&self, id: u32) -> Value {
+    pub fn get_value_at_expr_id(&self, id: OutputExprId) -> Value {
         self.values[id as usize].1.clone()
+    }
+
+    /// Get the VarNode associated with the output at a particular expression ID.
+    pub fn get_output_of(&self, id: OutputExprId) -> pcode::VarNode {
+        self.values[id as usize].0
     }
 
     pub fn get_const(&mut self, var: pcode::Value) -> Option<u64> {

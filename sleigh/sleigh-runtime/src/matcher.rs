@@ -37,9 +37,14 @@ impl SequentialMatcher {
     }
 }
 
+#[derive(Debug)]
 pub struct MatchCase {
     /// The constructor id of the matched constructor.
     pub constructor: ConstructorId,
+
+    /// The rank assigned to this constructor, used to control the order the matching algorithm
+    /// checks for a match.
+    pub rank: usize,
 
     /// Constraints on the token bits at the current offset.
     pub token: Pattern,

@@ -459,3 +459,17 @@ fn unmap_allocated() {
     );
     assert_eq!(alloc_addr, Ok(0x4003ed000));
 }
+
+#[test]
+fn move_memory() {
+    let mut mmu = Mmu::new();
+    mmu.map_memory(0x01000, 0x04000, Mapping { perm: perm::NONE, value: 0 });
+    mmu.map_memory(0x04000, 0x08000, Mapping { perm: perm::NONE, value: 0 });
+    mmu.map_memory(0x08000, 0x10000, Mapping { perm: perm::NONE, value: 1 });
+
+    mmu.move_region(0x08000, 0x09000, 0x0).unwrap();
+
+    let mut buf = [0; 16];
+    mmu.read_bytes(0x0, &mut buf, perm::NONE).unwrap();
+    assert_eq!(buf, [1; 16]);
+}

@@ -4,6 +4,8 @@ use icicle_vm::cpu::Cpu;
 
 use crate::{initialize_vm_auto, FuzzConfig};
 
+pub use icicle_vm::injector::{add_path_tracer, PathTracerRef};
+
 pub struct CoverageEntry<T> {
     /// The the tag associated with the input.
     pub tag: T,
@@ -93,7 +95,8 @@ where
     source.visit(|tag, input| {
         new_cov.borrow_mut().clear();
         vm.restore(&snapshot);
-        runner.run_vm(&mut vm, &input, u64::MAX)?;
+        runner.set_input(&mut vm, &input)?;
+        vm.run();
         output.push(CoverageEntry { tag, new: new_cov.borrow().clone() });
         Ok(())
     })?;
@@ -101,61 +104,4 @@ where
 
     let combined_cov = Rc::try_unwrap(total_cov).unwrap().into_inner();
     Ok((combined_cov, output))
-}
-
-struct PathTracer {
-    /// A list of (block address, icount) pairs tracking all blocks hit by the emulator.
-    blocks: Vec<(u64, u64)>,
-}
-
-impl PathTracer {
-    fn new() -> Self {
-        Self { blocks: vec![] }
-    }
-}
-
-impl icicle_vm::cpu::Hook for PathTracer {
-    fn call(&mut self, cpu: &mut icicle_vm::cpu::Cpu, pc: u64) {
-        self.blocks.push((pc, cpu.icount()));
-    }
-
-    fn as_any(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
-}
-
-pub fn add_path_tracer(vm: &mut icicle_vm::Vm) -> anyhow::Result<PathTracerRef> {
-    let hook = vm.cpu.add_hook(Box::new(PathTracer::new()));
-    icicle_vm::injector::register_block_hook_injector(vm, 0, u64::MAX, hook);
-    Ok(PathTracerRef(hook))
-}
-
-pub struct PathTracerRef(pcode::HookId);
-
-impl PathTracerRef {
-    pub fn print_last_blocks(&self, vm: &mut icicle_vm::Vm, count: usize) -> String {
-        use std::fmt::Write;
-
-        let mut output = String::new();
-
-        for (addr, _) in self.get_last_blocks(vm).iter().rev().take(count) {
-            let location = vm
-                .env
-                .symbolize_addr(&mut vm.cpu, *addr)
-                .unwrap_or(icicle_vm::cpu::debug_info::SourceLocation::default());
-            writeln!(output, "{addr:#x}: {location}").unwrap();
-        }
-
-        output
-    }
-
-    pub fn get_last_blocks(&self, vm: &mut icicle_vm::Vm) -> Vec<(u64, u64)> {
-        let path_tracer = vm.cpu.get_hook_mut(self.0);
-        path_tracer.as_any().downcast_ref::<PathTracer>().unwrap().blocks.clone()
-    }
-
-    pub fn clear(&self, vm: &mut icicle_vm::Vm) {
-        let path_tracer = vm.cpu.get_hook_mut(self.0);
-        path_tracer.as_any().downcast_mut::<PathTracer>().unwrap().blocks.clear();
-    }
 }

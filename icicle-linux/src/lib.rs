@@ -1,6 +1,4 @@
 //! Emulated user mode for linux
-#![feature(map_first_last)]
-
 pub mod errno;
 pub mod fs;
 pub mod sys;
@@ -165,7 +163,7 @@ impl LinuxCpu for icicle_cpu::Cpu {
     }
 
     fn save_cpu_state(&mut self) -> Box<dyn Any> {
-        Box::new(self.snapshot())
+        self.snapshot()
     }
 
     fn restore_cpu_state(&mut self, state: &Box<dyn Any>) {
@@ -184,7 +182,7 @@ impl LinuxCpu for icicle_cpu::Cpu {
     }
 
     fn set_next_pc(&mut self, addr: u64) {
-        ValueSource::write(self, self.arch.reg_next_pc, addr);
+        ValueSource::write_var(self, self.arch.reg_next_pc, addr);
     }
 
     fn sleigh(&self) -> &sleigh_runtime::SleighData {
@@ -1271,7 +1269,7 @@ impl Kernel {
             // This is the root level process, so fully exit.
             return match reason {
                 TerminationReason::Exit(_) => Some(VmExit::Halt),
-                TerminationReason::Killed(_) => Some(VmExit::Halt),
+                TerminationReason::Killed(_) => Some(VmExit::Killed),
             };
         }
 
@@ -1608,10 +1606,6 @@ impl icicle_cpu::Environment for Kernel {
         }
         // @todo: check exported library functions?
         None
-    }
-
-    fn as_any(&mut self) -> &mut dyn Any {
-        self
     }
 }
 

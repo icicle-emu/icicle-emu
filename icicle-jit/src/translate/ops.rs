@@ -60,6 +60,23 @@ impl<'a, 'b> Ctx<'a, 'b> {
         (fn_ptr, data_ptr)
     }
 
+    pub fn call_hook(&mut self, id: pcode::HookId) {
+        // Currently we assume all hooks need state to be flushed to memory.
+        self.trans.flush_state();
+
+        let current_pc = self.trans.builder.ins().iconst(types::I64, self.trans.last_addr as i64);
+
+        // Fuzzware assumes PC is flushed to memory before calling the hook (even though
+        // the correct value is available as a parameter), so write it here now.
+        let reg_pc = self.trans.ctx.reg_pc;
+        let pc_sized = self.trans.resize_int(current_pc, 8, reg_pc.size);
+        self.trans.vm_ptr.store_var(&mut self.trans.builder, reg_pc, pc_sized);
+
+        let (fn_ptr, data_ptr) = self.get_hook(id);
+        let args = [data_ptr, self.trans.vm_ptr.0, current_pc];
+        self.trans.builder.ins().call_indirect(self.trans.hook_sig, fn_ptr, &args);
+    }
+
     fn read_int_inputs(&mut self) -> (Value, Value) {
         let a = self.trans.read_int(self.instruction.inputs.first());
         let b = self.trans.read_int(self.instruction.inputs.second());
@@ -133,7 +150,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
             // 128-bit division is not currently supported in cranelift
             self.trans.interpret(self.instruction.clone());
             // Check for div by 0 exception
-            self.trans.maybe_exit_jit();
+            self.trans.maybe_exit_jit(None);
             return;
         }
 
@@ -145,8 +162,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let err_block = self.trans.builder.create_block();
         self.trans.builder.set_cold_block(err_block);
 
-        self.trans.builder.ins().brnz(b, ok_block, &[]);
-        self.trans.builder.ins().jump(err_block, &[]);
+        self.trans.builder.ins().brif(b, ok_block, &[], err_block, &[]);
 
         // err:
         {
@@ -179,10 +195,8 @@ impl<'a, 'b> Ctx<'a, 'b> {
             self.trans.resize_int(tmp, inputs[0].size(), output.size)
         };
 
-        let shift = {
-            let tmp = self.trans.read_int(inputs[1]);
-            self.trans.resize_int(tmp, inputs[1].size(), 2)
-        };
+        let raw_shift = self.trans.read_int(inputs[1]);
+        let shift = self.trans.resize_int(raw_shift, inputs[1].size(), 2);
 
         // Oversized shifts are not masked in p-code, so check whether this shift will overflow, and
         // correct the result.
@@ -191,9 +205,10 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let max_shift = ty.bits() - 1;
         let overflow = match inputs[1] {
             pcode::Value::Var(_) => {
-                let max_shift = self.trans.builder.ins().iconst(types::I16, max_shift as i64);
+                let max_shift =
+                    self.trans.builder.ins().iconst(sized_int(inputs[1].size()), max_shift as i64);
                 let overflow =
-                    self.trans.builder.ins().icmp(IntCC::UnsignedGreaterThan, shift, max_shift);
+                    self.trans.builder.ins().icmp(IntCC::UnsignedGreaterThan, raw_shift, max_shift);
                 Overflow::Unknown(overflow)
             }
             pcode::Value::Const(value, _) => match value as u32 > max_shift {
@@ -209,7 +224,6 @@ impl<'a, 'b> Ctx<'a, 'b> {
     pub fn emit_int_cmp(&mut self, op: fn(&mut Translator, Value, Value) -> Value) {
         let (a, b) = self.read_int_inputs();
         let result = op(&mut self.trans, a, b);
-        let result = self.trans.builder.ins().bint(types::I8, result);
         self.trans.write(self.instruction.output, result);
     }
 
@@ -217,8 +231,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let inputs = self.instruction.inputs.get();
         let a = self.trans.read_bool(inputs[0]);
         let b = self.trans.read_bool(inputs[1]);
-        let mut result = op(&mut self.trans, a, b);
-        result = self.trans.builder.ins().bint(types::I8, result);
+        let result = op(&mut self.trans, a, b);
         self.trans.write(self.instruction.output, result);
     }
 
@@ -228,12 +241,14 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let b = self.trans.read_float(inputs[1]);
         let result = op(&mut self.trans, a, b);
         self.trans.write(self.instruction.output, result);
+        self.trans.invalidate_var(self.instruction.output);
     }
 
     pub fn emit_float_unary_op(&mut self, op: fn(&mut Translator, Value) -> Value) {
         let x = self.trans.read_float(self.instruction.inputs.first());
         let result = op(&mut self.trans, x);
         self.trans.write(self.instruction.output, result);
+        self.trans.invalidate_var(self.instruction.output);
     }
 
     pub fn emit_float_is_nan(&mut self) {
@@ -246,10 +261,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
         };
 
         let x = self.trans.read_float(input);
-        let result = {
-            let x = self.trans.builder.ins().fcmp(FloatCC::Unordered, x, tmp);
-            self.trans.builder.ins().bint(types::I8, x)
-        };
+        let result = self.trans.builder.ins().fcmp(FloatCC::Unordered, x, tmp);
         self.trans.write(self.instruction.output, result);
     }
 
@@ -258,7 +270,6 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let a = self.trans.read_float(inputs[0]);
         let b = self.trans.read_float(inputs[1]);
         let result = op(&mut self.trans, a, b);
-        let result = self.trans.builder.ins().bint(types::I8, result);
         self.trans.write(self.instruction.output, result);
     }
 
@@ -478,8 +489,7 @@ fn check_for_signed_shift_right_bug(
     let err_block = trans.builder.create_block();
 
     trans.builder.set_cold_block(err_block);
-    trans.builder.ins().brnz(tmp, err_block, &[]);
-    trans.builder.ins().jump(ok_block, &[]);
+    trans.builder.ins().brif(tmp, err_block, &[], ok_block, &[]);
 
     // err:
     {
@@ -524,20 +534,38 @@ pub(super) fn int_signed_less_equal(trans: &mut Translator, a: Value, b: Value) 
     trans.builder.ins().icmp(IntCC::SignedLessThanOrEqual, a, b)
 }
 
-/// carry if: a + b < b
 pub(super) fn int_carry(trans: &mut Translator, a: Value, b: Value) -> Value {
+    // @fixme: this is broken in cranelift
+    // let (_, carry) = trans.builder.ins().iadd_cout(a, b);
+    // carry
+
     let a = trans.builder.ins().iadd(a, b);
     trans.builder.ins().icmp(IntCC::UnsignedLessThan, a, b)
 }
 
-/// signed carry when: overflow(a - (-b))
+/// Overflow on addition.
 pub(super) fn int_signed_carry(trans: &mut Translator, a: Value, b: Value) -> Value {
-    let b = trans.builder.ins().ineg(b);
-    trans.builder.ins().icmp(IntCC::Overflow, a, b)
+    // let b = trans.builder.ins().ineg(b);
+    // trans.builder.ins().icmp(IntCC::Overflow, a, b)
+
+    // Check that we end up with the correct sign assuming signed addition.
+    // @fixme: Cranelift removed `IntCC::Overflow` so this results in sub-optimal codegen.
+    let result = trans.builder.ins().iadd(a, b);
+    let result_lt_a = trans.builder.ins().icmp(IntCC::SignedLessThan, result, a);
+    let b_is_neg = trans.builder.ins().icmp_imm(IntCC::SignedLessThan, b, 0);
+    trans.builder.ins().bxor(result_lt_a, b_is_neg)
 }
 
+/// Overflow on subtraction
 pub(super) fn int_signed_borrow(trans: &mut Translator, a: Value, b: Value) -> Value {
-    trans.builder.ins().icmp(IntCC::Overflow, a, b)
+    // trans.builder.ins().icmp(IntCC::Overflow, a, b)
+
+    // Check that we end up with the correct sign assuming signed subtraction.
+    // @fixme: Cranelift removed `IntCC::Overflow` so this results in sub-optimal codegen.
+    let result = trans.builder.ins().isub(a, b);
+    let result_gt_a = trans.builder.ins().icmp(IntCC::SignedGreaterThan, result, a);
+    let b_is_neg = trans.builder.ins().icmp_imm(IntCC::SignedLessThan, b, 0);
+    trans.builder.ins().bxor(result_gt_a, b_is_neg)
 }
 
 pub(super) fn float_negate(trans: &mut Translator, x: Value) -> Value {
@@ -573,8 +601,6 @@ pub(super) fn int_negate(trans: &mut Translator, x: Value) -> Value {
 }
 
 pub(super) fn bool_not(trans: &mut Translator, input: Value) -> Value {
-    // @fixme: booleans in cranelift are buggy, so we just treat this is an integer and make sure to
-    // mask the result.
     let x = trans.builder.ins().bnot(input);
     trans.builder.ins().band_imm(x, 0b1)
 }
@@ -599,12 +625,10 @@ pub(super) fn float_not_equal(trans: &mut Translator, a: Value, b: Value) -> Val
 mod test {
     use std::cell::RefCell;
 
-    use icicle_cpu::{Arch, Cpu};
+    use icicle_cpu::{Arch, Cpu, ValueSource};
 
-    fn compile_instruction(
-        jit: &mut crate::JIT,
-        inst: pcode::Instruction,
-    ) -> unsafe extern "sysv64" fn(*mut Cpu, u64) -> u64 {
+    fn compile_instruction(jit: &mut crate::JIT, inst: pcode::Instruction) -> crate::JitFunction {
+        jit.il_dump = Some(String::new());
         jit.compile(&crate::CompilationTarget {
             blocks: &[icicle_cpu::lifter::Block {
                 pcode: {
@@ -631,12 +655,13 @@ mod test {
 
     struct Checker {
         cpu: RefCell<Box<Cpu>>,
+        jit_ctx: RefCell<crate::VmCtx>,
         jit: crate::JIT,
         inst: pcode::Instruction,
         a: pcode::VarNode,
         b: pcode::VarNode,
         out: pcode::VarNode,
-        jit_fn: unsafe extern "sysv64" fn(*mut Cpu, u64) -> u64,
+        jit_fn: crate::JitFunction,
     }
 
     impl Drop for Checker {
@@ -657,35 +682,53 @@ mod test {
             let inst = pcode::Instruction::from((out, op, (a, b)));
             let jit_fn = compile_instruction(&mut jit, inst);
 
-            Self { cpu: RefCell::new(cpu), jit, inst, a, b, out, jit_fn }
+            Self {
+                cpu: RefCell::new(cpu),
+                jit_ctx: RefCell::new(crate::VmCtx::new()),
+                jit,
+                inst,
+                a,
+                b,
+                out,
+                jit_fn,
+            }
+        }
+
+        fn eval(&self, a: u32, b: u32) -> (u32, u32) {
+            let mut cpu = self.cpu.borrow_mut();
+
+            cpu.write_var(self.a, a);
+            cpu.write_var(self.b, b);
+            cpu.write_var(self.out, 0xaaaa_aaaa_u32);
+            unsafe { cpu.interpret_unchecked(self.inst) };
+            let interpreter_out = cpu.read_var::<u32>(self.out);
+
+            cpu.write_var(self.a, a);
+            cpu.write_var(self.b, b);
+            cpu.write_var(self.out, 0xaaaa_aaaa_u32);
+
+            let mut jit_ctx = self.jit_ctx.borrow_mut();
+            jit_ctx.tlb_ptr = cpu.mem.tlb.as_mut();
+            unsafe {
+                (self.jit_fn)((*cpu).as_mut() as *mut Cpu, &mut jit_ctx, 0x0);
+            }
+            let jit_out = cpu.read_var::<u32>(self.out);
+            (interpreter_out, jit_out)
         }
     }
 
     impl quickcheck::Testable for Checker {
         fn result(&self, gen: &mut quickcheck::Gen) -> quickcheck::TestResult {
-            let mut cpu = self.cpu.borrow_mut();
-
             let a: u32 = quickcheck::Arbitrary::arbitrary(gen);
             let b: u32 = quickcheck::Arbitrary::arbitrary(gen);
 
-            cpu.write_reg(self.a, a);
-            cpu.write_reg(self.b, b);
-            cpu.write_reg(self.out, 0xaaaa_aaaa_u32);
-            unsafe { cpu.interpret_unchecked(self.inst) };
-            let interpreter_out = cpu.read_reg::<u32>(self.out);
-
-            cpu.write_reg(self.a, a);
-            cpu.write_reg(self.b, b);
-            cpu.write_reg(self.out, 0xaaaa_aaaa_u32);
-            unsafe {
-                (self.jit_fn)((*cpu).as_mut() as *mut Cpu, 0x0);
-            }
-            let jit_out = cpu.read_reg::<u32>(self.out);
+            let (interpreter_out, jit_out) = self.eval(a, b);
 
             if interpreter_out != jit_out {
                 quickcheck::TestResult::error(format!(
-                    "{a:#x} {:?} {b:#x}: Interpreter: {interpreter_out:#x}, JIT: {jit_out:#x}",
+                    "{a:#x} {:?} {b:#x}: Interpreter: {interpreter_out:#x}, JIT: {jit_out:#x}\nclif: {}",
                     self.inst.op,
+                    self.jit.il_dump.as_ref().map_or("", String::as_str)
                 ))
             }
             else {
@@ -716,6 +759,10 @@ mod test {
 
     #[test]
     fn ushr() {
+        let checker = Checker::new(pcode::Op::IntRight);
+        let (int, jit) = checker.eval(0x67879a2f, 0xe29e001b);
+        assert_eq!(int, jit);
+
         quickcheck::QuickCheck::new().quickcheck(Checker::new(pcode::Op::IntRight));
     }
 

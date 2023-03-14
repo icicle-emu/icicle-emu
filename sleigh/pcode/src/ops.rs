@@ -177,15 +177,20 @@ macro_rules! impl_value_from {
 impl_value_from!(u8, u16, u32, u64, i8, i16, i32, i64);
 
 /// Represents a sequence of P-code operations.
-#[derive(Default)]
 pub struct Block {
     pub instructions: Vec<Instruction>,
     pub next_tmp: VarId,
 }
 
+impl Default for Block {
+    fn default() -> Self {
+        Self { instructions: Default::default(), next_tmp: -1 }
+    }
+}
+
 impl Block {
     pub fn new() -> Self {
-        Self { instructions: vec![], next_tmp: -1 }
+        Self::default()
     }
 
     #[inline]
@@ -254,6 +259,33 @@ impl Block {
 
     pub fn recompute_next_tmp(&mut self) {
         self.next_tmp = self.instructions.iter().map(|x| x.output.id).min().map_or(-1, |x| x - 1)
+    }
+
+    /// Returns the address of the first instruction marker in the block (or None if there is no
+    /// instruction marker).
+    pub fn first_addr(&self) -> Option<u64> {
+        self.instructions
+            .iter()
+            .filter(|x| matches!(x.op, Op::InstructionMarker))
+            .map(|x| x.inputs.first().as_u64())
+            .next()
+    }
+
+    /// Returns the address of the instruction containing the operation at `offset`.
+    pub fn address_of(&self, offset: usize) -> Option<u64> {
+        self.instructions
+            .iter()
+            .take(offset)
+            .filter(|x| matches!(x.op, Op::InstructionMarker))
+            .last()
+            .map(|x| x.inputs.first().as_u64())
+    }
+
+    /// Returns the pcode offset within the current block of the instruction that starts at `addr`.
+    pub fn offset_of(&self, addr: u64) -> Option<usize> {
+        self.instructions.iter().position(|inst| {
+            matches!(inst.op, Op::InstructionMarker) && inst.inputs.first().as_u64() == addr
+        })
     }
 }
 
@@ -332,6 +364,7 @@ impl Inputs {
 }
 
 impl From<[Value; 2]> for Inputs {
+    #[inline]
     fn from([a, b]: [Value; 2]) -> Self {
         Self::new(a, b)
     }
@@ -341,6 +374,7 @@ impl<T> From<T> for Inputs
 where
     T: Into<Value>,
 {
+    #[inline]
     fn from(v: T) -> Self {
         Self::new(v, Value::invalid())
     }
@@ -386,6 +420,7 @@ where
     T: Into<Value>,
     U: Into<Value>,
 {
+    #[inline]
     fn from((output, op, a, b): (VarNode, Op, T, U)) -> Self {
         Self { op, inputs: Inputs::new(a, b), output }
     }
@@ -395,6 +430,7 @@ impl<I> From<(VarNode, Op, I)> for Instruction
 where
     I: Into<Inputs>,
 {
+    #[inline]
     fn from((output, op, inputs): (VarNode, Op, I)) -> Self {
         Self { op, inputs: inputs.into(), output }
     }
@@ -404,12 +440,14 @@ impl<I> From<(Op, I)> for Instruction
 where
     I: Into<Inputs>,
 {
+    #[inline]
     fn from((op, inputs): (Op, I)) -> Self {
         Self { op, inputs: inputs.into(), output: VarNode::NONE }
     }
 }
 
 impl From<Op> for Instruction {
+    #[inline]
     fn from(op: Op) -> Self {
         Self { op, inputs: Inputs::new(Value::invalid(), Value::invalid()), output: VarNode::NONE }
     }
@@ -497,6 +535,27 @@ pub enum Op {
 
     InstructionMarker,
     Invalid,
+}
+
+impl Op {
+    pub fn has_side_effects(&self) -> bool {
+        match self {
+            Op::TracerLoad(_)
+            | Op::TracerStore(_)
+            | Op::Load(_)
+            | Op::Store(_)
+            | Op::PcodeOp(_)
+            | Op::Hook(_)
+            | Op::Arg(_)
+            | Op::Branch(_)
+            | Op::PcodeBranch(_)
+            | Op::PcodeLabel(_)
+            | Op::Exception
+            | Op::InstructionMarker
+            | Op::Invalid => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]

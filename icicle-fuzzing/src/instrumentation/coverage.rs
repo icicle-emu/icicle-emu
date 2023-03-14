@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use icicle_vm::{
-    cpu::{lifter::Block, BlockGroup, BlockKey, BlockTable, Cpu, StoreRef},
-    CodeInjector, Vm,
+    cpu::{lifter::Block, BlockGroup, BlockKey, BlockTable, Cpu, HookHandler, StoreRef},
+    CodeInjector, InjectorRef, Vm,
 };
 use pcode::Op;
 
@@ -74,7 +74,7 @@ impl<F> AFLHitCountsBuilder<F> {
             context = Some(ContextState::new(&mut vm.cpu, self.context_bits));
         }
 
-        let bitmap_mem_id = vm.cpu.trace.register_store(Box::new((bitmap, size as usize)));
+        let bitmap_mem_id = vm.cpu.trace.register_store((bitmap, size as usize));
 
         let injector = AFLHitCountsInjector {
             bitmap_mem_id,
@@ -84,7 +84,7 @@ impl<F> AFLHitCountsBuilder<F> {
             context,
             filter: self.filter,
         };
-        vm.add_injector(Box::new(injector));
+        vm.add_injector(injector);
 
         bitmap_mem_id
     }
@@ -112,7 +112,7 @@ impl ContextState {
             .expect("AFL hit counts have already been registered");
 
         let store = vec![0_u8; u16::MAX as usize];
-        let context_store = cpu.trace.register_store(Box::new(store.into_boxed_slice()));
+        let context_store = cpu.trace.register_store(store.into_boxed_slice());
         Self { var, context_bits, mapping: HashMap::new(), next: 0, context_store }
     }
 
@@ -219,7 +219,7 @@ impl<F> AFLHitCountsInjector<F> {
     }
 }
 
-impl<F: FnMut(&Block) -> bool> CodeInjector for AFLHitCountsInjector<F> {
+impl<F: FnMut(&Block) -> bool + 'static> CodeInjector for AFLHitCountsInjector<F> {
     fn inject(&mut self, cpu: &mut Cpu, group: &BlockGroup, code: &mut BlockTable) {
         if !(self.filter)(&code.blocks[group.blocks.0]) {
             return;
@@ -245,6 +245,11 @@ pub fn register_block_coverage(
     BlockCoverageBuilder::new().filter(filter).finish(vm, bitmap, size)
 }
 
+/// A builder struct for adding block coverage instrumentation, compatible with an AFL-style
+/// frontend.
+///
+/// If AFL compatability is not required, then [ExactBlockCoverageInjector] will likely perform
+/// better.
 pub struct BlockCoverageBuilder<F> {
     filter: F,
     enable_context: bool,
@@ -279,7 +284,7 @@ impl<F> BlockCoverageBuilder<F> {
 
         tracing::debug!("registering block coverage: map={bitmap:#p}, {size:#x} bytes");
 
-        let bitmap_mem_id = vm.cpu.trace.register_store(Box::new((bitmap, size as usize)));
+        let bitmap_mem_id = vm.cpu.trace.register_store((bitmap, size as usize));
 
         let mut context = None;
         if self.enable_context {
@@ -289,7 +294,7 @@ impl<F> BlockCoverageBuilder<F> {
 
         let injector =
             BlockCoverageInjector { bitmap_mem_id, size_mask, context, filter: self.filter };
-        vm.add_injector(Box::new(injector));
+        vm.add_injector(injector);
 
         bitmap_mem_id
     }
@@ -302,7 +307,7 @@ struct BlockCoverageInjector<F> {
     filter: F,
 }
 
-impl<F: FnMut(&Block) -> bool> CodeInjector for BlockCoverageInjector<F> {
+impl<F: FnMut(&Block) -> bool + 'static> CodeInjector for BlockCoverageInjector<F> {
     fn inject(&mut self, cpu: &mut Cpu, group: &BlockGroup, code: &mut BlockTable) {
         if !(self.filter)(&mut code.blocks[group.blocks.0]) {
             return;
@@ -331,64 +336,143 @@ impl<F: FnMut(&Block) -> bool> CodeInjector for BlockCoverageInjector<F> {
     }
 }
 
-pub fn register_block_hook_injector(
-    vm: &mut Vm,
-    start: u64,
-    end: u64,
-    hook: pcode::HookId,
-) -> usize {
-    let injector = BlockHookInjector { hook, start, end };
-    vm.add_injector(Box::new(injector))
+/// A coverage instrumentation technique that avoids collisions.
+pub struct ExactBlockCoverageInjector {
+    /// The bitmap that stores the block coverage.
+    pub store: StoreRef,
+    /// A mapping from block address to the bit allocated in the store for the block.
+    pub mapping: HashMap<u64, usize>,
 }
 
-struct BlockHookInjector {
-    hook: pcode::HookId,
-    start: u64,
-    end: u64,
-}
-
-impl CodeInjector for BlockHookInjector {
-    fn inject(&mut self, _cpu: &mut Cpu, group: &BlockGroup, code: &mut BlockTable) {
-        let block = &mut code.blocks[group.blocks.0];
-        if block.start < self.start || block.start >= self.end {
-            return;
-        }
-        block.pcode.instructions.insert(0, Op::Hook(self.hook).into());
-        code.modified.insert(group.blocks.0);
+impl ExactBlockCoverageInjector {
+    pub fn register(vm: &mut Vm) -> (InjectorRef, StoreRef) {
+        let store = vm.cpu.trace.register_store(vec![0_u64; 128]);
+        let injector = vm.add_injector(Self { store, mapping: HashMap::new() });
+        (injector, store)
     }
 }
 
-pub fn register_instruction_hook_injector(vm: &mut Vm, addr: u64, hook: pcode::HookId) -> usize {
-    let injector = InstructionHookInjection { hook, addr, tmp_block: pcode::Block::new() };
-    vm.add_injector(Box::new(injector))
-}
+impl CodeInjector for ExactBlockCoverageInjector {
+    fn inject(&mut self, cpu: &mut Cpu, group: &BlockGroup, code: &mut BlockTable) {
+        let addr = group.start;
+        let next_index = self.mapping.len();
+        let index = *self.mapping.entry(addr).or_insert(next_index);
 
-struct InstructionHookInjection {
-    hook: pcode::HookId,
-    addr: u64,
-    tmp_block: pcode::Block,
-}
+        let (byte, bit) = (index / 8, index % 8);
 
-impl CodeInjector for InstructionHookInjection {
-    fn inject(&mut self, _cpu: &mut Cpu, group: &BlockGroup, code: &mut BlockTable) {
-        for id in group.range() {
-            let block = &mut code.blocks[id];
-            if !(block.start <= self.addr && self.addr < block.end) {
-                return;
-            }
-
-            self.tmp_block.clear();
-            for stmt in block.pcode.instructions.drain(..) {
-                if let Op::InstructionMarker = stmt.op {
-                    if stmt.inputs.first().as_u64() == self.addr {
-                        self.tmp_block.push(Op::Hook(self.hook));
-                        code.modified.insert(id);
-                    }
-                }
-                self.tmp_block.push(stmt);
-            }
-
-            std::mem::swap(&mut self.tmp_block.instructions, &mut block.pcode.instructions);
+        // Resize the underlying storage if required to store the bit for this block.
+        let store = &mut cpu.trace[self.store];
+        if store.data().len() <= byte {
+            let inner = store.as_mut_any().downcast_mut::<Vec<u64>>().unwrap();
+            inner.resize(icicle_vm::cpu::utils::align_up(byte as u64, 16) as usize, 0);
         }
+
+        // Inject code to set the target bit.
+        let block = &mut code.blocks[group.blocks.0];
+        let bitmap_id = self.store.get_store_id();
+        let tmp = block.pcode.alloc_tmp(1);
+        block.pcode.instructions.insert(0, (tmp, Op::Load(bitmap_id), byte as u64).into());
+        block.pcode.instructions.insert(1, (tmp, Op::IntOr, (tmp, 1_u8 << bit)).into());
+        block.pcode.instructions.insert(2, (Op::Store(bitmap_id), (byte as u64, tmp)).into());
+    }
+}
+
+/// A coverage instrumentation technique that avoids collisions while maintaining hit-counts for
+/// each block.
+pub struct ExactBlockCountCoverageInjector {
+    /// The bitmap that stores the block coverage.
+    pub store: StoreRef,
+    /// A mapping from block address to the byte allocated in the store for the block.
+    pub mapping: HashMap<u64, usize>,
+}
+
+impl ExactBlockCountCoverageInjector {
+    pub fn register(vm: &mut Vm) -> (InjectorRef, StoreRef) {
+        let store = vm.cpu.trace.register_store(vec![0_u64; 128]);
+        let injector = vm.add_injector(Self { store, mapping: HashMap::new() });
+        (injector, store)
+    }
+}
+
+impl CodeInjector for ExactBlockCountCoverageInjector {
+    fn inject(&mut self, cpu: &mut Cpu, group: &BlockGroup, code: &mut BlockTable) {
+        let addr = group.start;
+        let next_index = self.mapping.len();
+        let index = *self.mapping.entry(addr).or_insert(next_index);
+
+        // Resize the underlying storage if required to store the counter for this block.
+        let store = &mut cpu.trace[self.store];
+        if store.data().len() <= index {
+            let inner = store.as_mut_any().downcast_mut::<Vec<u64>>().unwrap();
+            inner.resize(icicle_vm::cpu::utils::align_up(index as u64 / 8, 16) as usize, 0);
+        }
+
+        // bitmap[index] += 1
+        let block = &mut code.blocks[group.blocks.0];
+        let bitmap_id = self.store.get_store_id();
+        let tmp = block.pcode.alloc_tmp(1);
+        block.pcode.instructions.insert(0, (tmp, Op::Load(bitmap_id), index as u64).into());
+        block.pcode.instructions.insert(1, (tmp, Op::IntAdd, (tmp, 1_u8)).into());
+        block.pcode.instructions.insert(2, (Op::Store(bitmap_id), (index as u64, tmp)).into());
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct ExactEdgeCoverageRef(pcode::HookId);
+
+impl ExactEdgeCoverageRef {
+    pub fn data_mut<'a>(&self, vm: &'a mut Vm) -> &'a mut EdgeHookData {
+        vm.cpu.get_hook_mut(self.0).data_mut::<EdgeHookData>().unwrap()
+    }
+
+    pub fn snapshot(&self, vm: &mut Vm) -> EdgeHookData {
+        self.data_mut(vm).clone()
+    }
+
+    pub fn restore(&self, vm: &mut Vm, snapshot: &EdgeHookData) {
+        let data = self.data_mut(vm);
+        data.prev = snapshot.prev;
+        data.edges.clear();
+        data.edges.extend(&snapshot.edges);
+    }
+
+    pub fn reset(&self, vm: &mut Vm) {
+        let data = self.data_mut(vm);
+        data.prev = 0;
+        data.edges.clear();
+    }
+}
+
+/// An exact edge-coverage technique that avoids collisions by using a hashmap. Since the
+/// instrumentation cannot be injected directly this is generally slower than AFL-style edge
+/// coverage.
+pub struct ExactEdgeCoverageInjector {
+    hook: pcode::HookId,
+}
+
+impl ExactEdgeCoverageInjector {
+    pub fn register(vm: &mut Vm) -> ExactEdgeCoverageRef {
+        let hook = vm.cpu.trace.add_hook(EdgeHookData::default().into());
+        vm.add_injector(Self { hook });
+        ExactEdgeCoverageRef(hook)
+    }
+}
+
+impl CodeInjector for ExactEdgeCoverageInjector {
+    fn inject(&mut self, _cpu: &mut Cpu, group: &BlockGroup, code: &mut BlockTable) {
+        code.blocks[group.blocks.0].pcode.instructions.insert(0, Op::Hook(self.hook).into());
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct EdgeHookData {
+    pub prev: u64,
+    pub edges: hashbrown::HashSet<(u64, u64)>,
+}
+
+impl HookHandler for EdgeHookData {
+    fn call(data: &mut Self, _cpu: &mut Cpu, addr: u64) {
+        data.edges.insert((data.prev, addr));
+        data.prev = addr;
     }
 }

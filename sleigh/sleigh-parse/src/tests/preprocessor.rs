@@ -219,3 +219,17 @@ define endian = $(TEST1);
 
     assert!(result.is_err());
 }
+
+
+#[test]
+fn or_expr() {
+    let result = preprocess_to_string(
+        r#"
+@define Carry "F[0,1]"
+
+r = (r << 1) | $(Carry);
+"#,
+    );
+
+    assert_eq!(result.unwrap(), "r = ( r < < 1 ) | F [ 0 , 1 ] ;");
+}

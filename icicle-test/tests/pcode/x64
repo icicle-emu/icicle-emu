@@ -462,12 +462,12 @@ CMOVZ EAX,EBX
 CMOVZ ECX,dword ptr [RSI + -0x61b9d73e]
 <L0> (entry=0x8a):
 	$U3:8 = RSI + 0xffffffff9e4628c2:8
-	$U1:4 = ram[$U3:8]
+	$tmp0:4 = ram[$U3:8]
 	RCX = zext(ECX)
 	$U2:1 = !ZF
 	if $U2:1 jump 0x91:8
 <L1>:
-	ECX = $U1:4
+	ECX = $tmp0:4
 
 SHL EAX,0x1
 <L0> (entry=0x12000):
@@ -778,14 +778,14 @@ MOV EAX,dword ptr [0xffffffff]
 
 PSHUFD XMM0, XMM0, 0x4e
 <L0> (entry=0x652b47):
-	$U1:16 = XMM0
-	$U2:16 = XMM0 >> 0x40:1
-	XMM0_Da = $U2:4
-	$U2:16 = $U1:16 >> 0x60:1
-	XMM0_Db = $U2:4
-	$U2:16 = $U1:16
-	XMM0_Dc = $U2:4
-	$U2:16 = $U2:16 >> 0x20:1
+	$U1:4 = XMM0_Da
+	$U2:4 = XMM0_Db
+	$U3:4 = XMM0_Dc
+	$U4:4 = XMM0_Dd
+	XMM0_Da = $U3:4
+	XMM0_Db = $U4:4
+	$U35:4 = $U1:4
+	XMM0_Dc = $U35:4
 	XMM0_Dd = $U2:4
 
 PSHUFLW XMM0, XMM0, 0x1b
@@ -1900,20 +1900,22 @@ FPATAN
 
 FBLD tword ptr [RBP + 0x1000]
 <L0> (entry=0x0):
-	$U1:8 = RBP + 0x1000:8
-	ram[$U1:8] = ST0
-	ST0 = ST1
-	ST1 = ST2
-	ST2 = ST3
-	ST3 = ST4
-	ST4 = ST5
-	ST5 = ST6
-	ST6 = ST7
+	$U2:8 = RBP + 0x1000:8
+	ST7 = ST6
+	ST6 = ST5
+	ST5 = ST4
+	ST4 = ST3
+	ST3 = ST2
+	ST2 = ST1
+	ST1 = ST0
+	$U3:10 = ram[$U2:8]
+	ST0 = convert_bcd($U3:10)
 
 FBSTP tword ptr [RBP + 0x1000]
 <L0> (entry=0x0):
 	$U1:8 = RBP + 0x1000:8
-	ram[$U1:8] = ST0
+	$U2:10 = convert_bcd(ST0)
+	ram[$U1:8] = $U2:10
 	ST0 = ST1
 	ST1 = ST2
 	ST2 = ST3

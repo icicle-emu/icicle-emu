@@ -179,61 +179,6 @@ impl Optimizer {
     }
 }
 
-#[cfg(never)]
-impl ValueSource for Optimizer {
-    fn read_var<R: RegValue>(&self, value: VarNode) -> R {
-        let mut state = self.state.borrow_mut();
-        match state.const_eval.get_const(value.into()) {
-            Some(x) => R::from_u64(x),
-            None => {
-                state.const_valid = false;
-                R::from_u64(0)
-            }
-        }
-    }
-
-    fn write<R: RegValue>(&mut self, var: VarNode, value: R) {
-        let mut state = self.state.get_mut();
-        if var.size > 8 {
-            // Currently we don't support const-evaluation of values > 64 bits.
-            state.const_valid = false;
-            return;
-        }
-        state.const_eval.set_const(var.into(), value.to_dynamic().zxt());
-    }
-}
-
-#[cfg(never)]
-impl PcodeExecutor for Optimizer {
-    fn interrupt(&mut self, _: &str) {
-        self.state.get_mut().const_valid = false;
-    }
-
-    fn next_instruction(&mut self, _: u64, _k: u64) {
-        // @todo: avoid use of `single_instruction_only` mode, and instead use this as a barrier.
-    }
-
-    fn load_mem<const N: usize>(&mut self, _: MemId, _: u64) -> icicle_mem::MemResult<[u8; N]> {
-        // @todo: for certain targets there might be permanently constant memory that we can
-        // propagate through (e.g. FLASH on embedded devices).
-        self.state.get_mut().const_valid = false;
-        Ok([0; N])
-    }
-
-    fn store_mem<const N: usize>(
-        &mut self,
-        _: MemId,
-        _: u64,
-        _: [u8; N],
-    ) -> icicle_mem::MemResult<()> {
-        Ok(())
-    }
-
-    fn is_big_endian(&self) -> bool {
-        false
-    }
-}
-
 /// Simplifies an instruction based information from const propagation
 fn simplify(exec: &mut Optimizer, stmt: &Instruction) -> Result<Option<Instruction>, ()> {
     let state = exec.state.get_mut();
@@ -278,7 +223,12 @@ fn simplify(exec: &mut Optimizer, stmt: &Instruction) -> Result<Option<Instructi
         // exec.barrier();
     }
 
-    if has_side_effects(stmt.op) {
+    if external_state_modifications(stmt.op) {
+        // Need to flush const evaluation state, since the target operation may modify any register.
+        state.const_eval.clear();
+    }
+
+    if stmt.op.has_side_effects() {
         // If the instruction has side-effects then we need to retain the original instruction.
         return Ok(Some(updated_instruction));
     }
@@ -384,7 +334,7 @@ impl DeadStoreDetector {
                 self.live_across_block.clone_from(&self.live_reads);
             }
 
-            let is_live = self.is_live(stmt.output) || has_side_effects(stmt.op);
+            let is_live = self.is_live(stmt.output) || stmt.op.has_side_effects();
             if !is_live {
                 self.dead_code.insert(i);
                 continue;
@@ -448,21 +398,9 @@ impl DeadStoreDetector {
     }
 }
 
-fn has_side_effects(op: Op) -> bool {
+fn external_state_modifications(op: Op) -> bool {
     match op {
-        Op::TracerLoad(_)
-        | Op::TracerStore(_)
-        | Op::Load(_)
-        | Op::Store(_)
-        | Op::PcodeOp(_)
-        | Op::Hook(_)
-        | Op::Arg(_)
-        | Op::Branch(_)
-        | Op::PcodeBranch(_)
-        | Op::PcodeLabel(_)
-        | Op::Exception
-        | Op::InstructionMarker
-        | Op::Invalid => true,
+        Op::Hook(_) => true,
         _ => false,
     }
 }

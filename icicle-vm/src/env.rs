@@ -3,7 +3,7 @@ use std::{any::Any, path::PathBuf};
 use icicle_cpu::{
     debug_info::{DebugInfo, SourceLocation},
     elf::ElfLoader,
-    Cpu, Environment, VmExit,
+    Cpu, Environment, EnvironmentAny, VmExit,
 };
 
 use crate::{BuildError, Vm};
@@ -61,13 +61,9 @@ impl Environment for GenericEmbedded {
     }
 
     fn restore(&mut self, _: &Box<dyn Any>) {}
-
-    fn as_any(&mut self) -> &mut dyn Any {
-        self
-    }
 }
 
-pub fn build_auto(vm: &mut Vm) -> Result<Box<dyn Environment>, BuildError> {
+pub fn build_auto(vm: &mut Vm) -> Result<Box<dyn EnvironmentAny>, BuildError> {
     match vm.cpu.arch.triple.operating_system {
         target_lexicon::OperatingSystem::Linux => {
             let config = icicle_linux::KernelConfig::default();

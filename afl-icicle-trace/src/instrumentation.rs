@@ -1,4 +1,3 @@
-use anyhow::Context;
 use icicle_fuzzing::{
     cmplog::CmpMap,
     coverage::{AFLHitCountsBuilder, BlockCoverageBuilder},
@@ -9,7 +8,7 @@ use icicle_vm::cpu::lifter::Block;
 use crate::{is_cmplog_server, shared_mem, FuzzConfig};
 
 /// Keeps track of the instrumentation metadata associated wit the current fuzzing session.
-pub(crate) struct Instrumentation {
+pub struct Instrumentation {
     cov: (*mut u8, u32),
     cmplog_map: Option<&'static std::cell::UnsafeCell<CmpMap>>,
     path_tracer: Option<icicle_fuzzing::trace::PathTracerRef>,
@@ -40,7 +39,7 @@ impl Instrumentation {
     }
 }
 
-pub(crate) fn instrument_vm(
+pub fn instrument_vm(
     vm: &mut icicle_vm::Vm,
     config: &FuzzConfig,
 ) -> anyhow::Result<Instrumentation> {
@@ -60,8 +59,9 @@ pub(crate) fn instrument_vm(
             .filter(filter)
             .enable_context(config.context_bits != 0)
             .finish(vm, afl_area_ptr, afl_map_size as u32),
+        CoverageMode::BlockCounts => anyhow::bail!("Block counts not implemented"),
         CoverageMode::Edges => anyhow::bail!("Edge-only coverage not implemented"),
-        CoverageMode::HitCounts => AFLHitCountsBuilder::new()
+        CoverageMode::EdgeCounts => AFLHitCountsBuilder::new()
             .filter(filter)
             .with_context(config.context_bits)
             .finish(vm, afl_area_ptr, afl_map_size as u32),
@@ -74,10 +74,7 @@ pub(crate) fn instrument_vm(
             .finish(vm, map);
     }
 
-    if let Some(level) = std::env::var("AFL_COMPCOV_LEVEL").ok() {
-        let level = level
-            .parse::<u8>()
-            .with_context(|| format!("Invalid value for AFL_COMPCOV_LEVEL: {level}"))?;
+    if let Some(level) = config.compcov_level {
         icicle_fuzzing::compcov::CompCovBuilder::new()
             .filter(move |block| start_addr <= block.start && block.start <= end_addr)
             .level(level)
@@ -86,7 +83,7 @@ pub(crate) fn instrument_vm(
 
     let mut tracer = None;
     if config.track_path {
-        tracer = Some(path_tracer(vm, &config)?);
+        tracer = Some(icicle_fuzzing::trace::add_path_tracer(vm)?);
     }
 
     Ok(Instrumentation {
@@ -102,11 +99,4 @@ pub(crate) fn no_instrumentation(
     _config: &FuzzConfig,
 ) -> anyhow::Result<()> {
     Ok(())
-}
-
-pub(crate) fn path_tracer(
-    vm: &mut icicle_vm::Vm,
-    _config: &FuzzConfig,
-) -> anyhow::Result<icicle_fuzzing::trace::PathTracerRef> {
-    icicle_fuzzing::trace::add_path_tracer(vm)
 }

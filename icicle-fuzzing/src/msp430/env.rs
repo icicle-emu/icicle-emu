@@ -7,9 +7,9 @@ use icicle_vm::{
     cpu::{
         debug_info::{DebugInfo, SourceLocation},
         elf::ElfLoader,
-        mem::{perm, IoMemory, Mapping, MemError, MemResult},
+        mem::{perm, IoMemory, IoMemoryAny, Mapping, MemError, MemResult},
         utils::XorShiftRng,
-        Cpu, Environment, Exception, ExceptionCode,
+        Cpu, Environment, Exception, ExceptionCode, ValueSource,
     },
     hw, VmExit,
 };
@@ -122,13 +122,13 @@ impl Msp430 {
             return Ok(());
         }
 
-        let sp: u32 = cpu.read_reg(self.sp);
+        let sp: u32 = cpu.read_var(self.sp);
         if sp < 4 {
             return Err(MemError::Unmapped);
         }
 
         let pc: u32 = cpu.read_pc() as u32;
-        let sr: u32 = cpu.read_reg(self.sr);
+        let sr: u32 = cpu.read_var(self.sr);
 
         let block = cpu.block_id;
         let offset = cpu.block_offset;
@@ -139,8 +139,8 @@ impl Msp430 {
 
         let afl_prev_pc = match self.afl_prev_pc {
             Some(reg) => {
-                let prev = cpu.read_reg(reg);
-                cpu.write_reg::<u16>(reg, 0);
+                let prev = cpu.read_var(reg);
+                cpu.write_var::<u16>(reg, 0);
                 prev
             }
             None => 0,
@@ -154,11 +154,11 @@ impl Msp430 {
         cpu.mem.write_u16((sp - 4) as u64, packed as u16, perm::WRITE)?;
 
         // Ensure CPUOFF bit is cleared
-        cpu.write_reg(self.sr, sr & !CPUOFF_BIT);
+        cpu.write_var(self.sr, sr & !CPUOFF_BIT);
         self.flags.cpu_off = false;
 
         // Update stack pointer and jump to ISR handler.
-        cpu.write_reg(self.sp, sp - 4);
+        cpu.write_var(self.sp, sp - 4);
         let isr = cpu.mem.read_u16(isr_addr, perm::READ)? as u32;
         cpu.exception = Exception::new(ExceptionCode::ExternalAddr, isr as u64);
 
@@ -174,7 +174,7 @@ impl Msp430 {
         cpu.block_offset = interrupt.return_block.1;
 
         if let Some(reg) = self.afl_prev_pc {
-            cpu.write_reg(reg, interrupt.afl_prev_pc);
+            cpu.write_var(reg, interrupt.afl_prev_pc);
         }
 
         cpu.exception.clear();
@@ -237,7 +237,7 @@ impl Msp430 {
 
     /// Update CPU flags returning whether they were changed or not.
     fn update_flags(&mut self, cpu: &mut Cpu) -> bool {
-        let sr = cpu.read_reg(self.sr);
+        let sr = cpu.read_var(self.sr);
         let new = CpuFlags::from_status_reg(sr);
         if self.flags == new {
             return false;
@@ -407,7 +407,9 @@ impl Environment for Msp430 {
             }
 
             // Return from interrupt
-            ExceptionCode::ShadowStackInvalid | ExceptionCode::InvalidTarget
+            ExceptionCode::ShadowStackInvalid
+            | ExceptionCode::InvalidTarget
+            | ExceptionCode::InvalidInstruction
                 if cpu.exception.value == 0xfff0 =>
             {
                 if let Some(interrupt) = self.interrupt.take() {
@@ -431,9 +433,7 @@ impl Environment for Msp430 {
     fn snapshot(&mut self) -> Box<dyn std::any::Any> {
         let interrupt_enable_state: Vec<_> =
             self.interrupts.iter().map(|x| x.enabled.get()).collect();
-        let peripheral_state = self.unknown_peripheral_handler.snapshot();
         Box::new((
-            peripheral_state,
             self.interrupt_rng,
             interrupt_enable_state,
             self.flags,
@@ -443,18 +443,10 @@ impl Environment for Msp430 {
     }
 
     fn restore(&mut self, snapshot: &Box<dyn std::any::Any>) {
-        let (
-            peripheral_state,
-            interrupt_rng,
-            interrupt_enable_state,
-            flags,
-            next_interrupt,
-            interrupt,
-        ) = snapshot
-            .downcast_ref::<(Box<dyn std::any::Any>, XorShiftRng, Vec<bool>, CpuFlags, u64, Option<Interrupt>)>()
+        let (interrupt_rng, interrupt_enable_state, flags, next_interrupt, interrupt) = snapshot
+            .downcast_ref::<(XorShiftRng, Vec<bool>, CpuFlags, u64, Option<Interrupt>)>()
             .unwrap();
         self.interrupt_rng = *interrupt_rng;
-        self.unknown_peripheral_handler.restore(peripheral_state);
 
         for (interrupt, enabled) in self.interrupts.iter().zip(interrupt_enable_state) {
             interrupt.enabled.set(*enabled);
@@ -464,15 +456,11 @@ impl Environment for Msp430 {
         self.next_interrupt = *next_interrupt;
         self.interrupt = *interrupt;
     }
-
-    fn as_any(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
 }
 
 #[derive(Clone)]
 pub struct UnknownPeripheralHandler {
-    pub inner: Rc<RefCell<Box<dyn IoMemory>>>,
+    pub inner: Rc<RefCell<Box<dyn IoMemoryAny>>>,
 }
 
 impl UnknownPeripheralHandler {
@@ -496,10 +484,6 @@ impl IoMemory for UnknownPeripheralHandler {
 
     fn restore(&mut self, snapshot: &Box<dyn std::any::Any>) {
         self.inner.borrow_mut().restore(snapshot);
-    }
-
-    fn as_any(&mut self) -> &mut dyn std::any::Any {
-        self
     }
 }
 

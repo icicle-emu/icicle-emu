@@ -1,4 +1,8 @@
-use object::elf;
+use icicle_cpu::debug_info::SymbolKind;
+use object::{
+    elf,
+    write::{elf::SectionIndex, StringId},
+};
 
 use crate::{
     cpu::{
@@ -11,10 +15,9 @@ use crate::{
 pub fn dump_elf(vm: &mut Vm, path: impl AsRef<std::path::Path>) -> anyhow::Result<()> {
     let entry = vm.env.entry_point();
 
-    let mut regions = vec![];
+    let mut regions: Vec<MemoryRegion> = vec![];
     for (start, end, entry) in vm.cpu.mem.get_mapping().iter() {
         let len = (end - start) as usize;
-
         match entry {
             MemoryMapping::Physical(entry) => {
                 let offset = vm.cpu.mem.page_offset(start);
@@ -25,14 +28,43 @@ pub fn dump_elf(vm: &mut Vm, path: impl AsRef<std::path::Path>) -> anyhow::Resul
                 let perm = page.data().perm[offset];
                 let data = &page.data().data[offset..][..len];
 
-                regions.push(MemoryRegion {
-                    addr: start,
-                    len,
-                    writeable: perm & perm::WRITE != 0,
-                    executable: perm & perm::EXEC != 0,
-                    data: Some(data),
-                    file_offset: 0,
-                });
+                let writable = perm & perm::WRITE != 0;
+                let executable = perm & perm::EXEC != 0;
+
+                // Check if we can just extend the previous region with the new data.
+                match regions.last_mut() {
+                    Some(prev)
+                        if start == prev.addr + prev.len as u64
+                            && prev.writeable == writable
+                            && prev.executable == executable =>
+                    {
+                        // Pad data to the correct size if needed.
+                        let prev_data = match &mut prev.data {
+                            Some(data) if data.len() == prev.len => data,
+                            Some(data) => {
+                                data.resize(prev.len, 0);
+                                data
+                            }
+                            None => {
+                                prev.data = Some(vec![0; prev.len]);
+                                prev.data.as_mut().unwrap()
+                            }
+                        };
+                        // Then extend the previous region.
+                        prev_data.extend_from_slice(data);
+                        prev.len += len;
+                    }
+                    _ => {
+                        regions.push(MemoryRegion {
+                            addr: start,
+                            len,
+                            writeable: perm & perm::WRITE != 0,
+                            executable: perm & perm::EXEC != 0,
+                            data: Some(data.to_vec()),
+                            file_offset: 0,
+                        });
+                    }
+                }
             }
             MemoryMapping::Unallocated(entry) => {
                 let perm = entry.perm;
@@ -55,23 +87,32 @@ pub fn dump_elf(vm: &mut Vm, path: impl AsRef<std::path::Path>) -> anyhow::Resul
     Ok(())
 }
 
-struct MemoryRegion<'a> {
+struct MemoryRegion {
     addr: u64,
     len: usize,
     writeable: bool,
     executable: bool,
-    data: Option<&'a [u8]>,
+    data: Option<Vec<u8>>,
     file_offset: usize,
 }
 
-impl<'a> MemoryRegion<'a> {
-    pub fn file_size(&self) -> usize {
-        self.data.map_or(0, |x| x.len())
+impl std::fmt::Debug for MemoryRegion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemoryRegion")
+            .field("addr", &self.addr)
+            .field("len", &self.len)
+            .field("writeable", &self.writeable)
+            .field("executable", &self.executable)
+            .field("data", &format_args!("{:#x} bytes", self.data.as_ref().map_or(0, |x| x.len())))
+            .field("file_offset", &self.file_offset)
+            .finish()
     }
 }
 
-pub enum SymbolKind {
-    Function,
+impl MemoryRegion {
+    pub fn file_size(&self) -> usize {
+        self.data.as_ref().map_or(0, |x| x.len())
+    }
 }
 
 pub struct Symbol {
@@ -115,11 +156,53 @@ pub fn all_known_functions(vm: &Vm) -> Vec<Symbol> {
     symbols
 }
 
+#[derive(Default)]
+struct Section {
+    index: Option<SectionIndex>,
+    name: Option<StringId>,
+    file_offset: u64,
+    start: u64,
+    end: u64,
+}
+
+#[derive(Default)]
+struct SectionGroup {
+    sections: Vec<Section>,
+}
+
+impl SectionGroup {
+    pub fn add(&mut self, offset: usize, addr: u64, len: usize) {
+        match self.sections.last_mut() {
+            Some(prev) if prev.end == addr => {
+                prev.file_offset = prev.file_offset.min(offset as u64);
+                prev.end += len as u64;
+            }
+            _ => self.sections.push(Section {
+                index: None,
+                name: None,
+                file_offset: offset as u64,
+                start: addr,
+                end: addr + len as u64,
+            }),
+        }
+    }
+}
+
 fn build_elf(vm: &Vm, entry: u64, mem: &mut [MemoryRegion]) -> anyhow::Result<Vec<u8>> {
     use target_lexicon::Architecture;
 
     // @todo: get other known symbols here.
     let mut symbols = all_known_functions(vm);
+    if let Some(debug_info) = vm.env.debug_info() {
+        for (addr, _, name, kind) in debug_info.symbols_iter() {
+            symbols.push(Symbol {
+                name: name.as_bytes().to_vec(),
+                addr,
+                kind,
+                binding: elf::STB_LOCAL,
+            });
+        }
+    }
 
     // Local symbols must come first.
     symbols.sort_by_key(|x| if x.binding == elf::STB_LOCAL { 0 } else { 1 });
@@ -159,9 +242,10 @@ fn build_elf(vm: &Vm, entry: u64, mem: &mut [MemoryRegion]) -> anyhow::Result<Ve
     // Reserve program headers, note: we need one program header for each memory region.
     writer.reserve_program_headers(mem.len() as u32);
 
-    let mut text_offset = u64::MAX;
-    let mut text_start = u64::MAX;
-    let mut text_end = 0;
+    let mut text_sections = SectionGroup::default();
+    let mut rodata_sections = SectionGroup::default();
+    let mut data_sections = SectionGroup::default();
+    let mut bss_sections = SectionGroup::default();
 
     // Reserve file ranges for each memory region.
     for region in &mut *mem {
@@ -170,17 +254,38 @@ fn build_elf(vm: &Vm, entry: u64, mem: &mut [MemoryRegion]) -> anyhow::Result<Ve
             len => region.file_offset = writer.reserve(len, 0x2),
         }
 
-        if region.executable {
-            // @fixme this is broken if .text is not contiguous.
-            text_offset = text_offset.min(region.file_offset as u64);
-            text_start = text_start.min(region.addr);
-            text_end = text_end.max(region.addr + region.len as u64);
+        match (region.executable, region.writeable, region.file_size() != 0) {
+            (true, _, true) => text_sections.add(region.file_offset, region.addr, region.len),
+            (false, true, true) => data_sections.add(region.file_offset, region.addr, region.len),
+            (false, true, false) => bss_sections.add(region.file_offset, region.addr, region.len),
+            (false, false, true) => {
+                rodata_sections.add(region.file_offset, region.addr, region.len)
+            }
+            (_, _, false) => {} // Uninitialized data
         }
     }
+
     // Reserve sections and section headers.
-    let text_section_idx = writer.reserve_section_index();
-    // writer.reserve(0, 0);
-    let text_section_name = writer.add_section_name(b".text");
+    let mut sections = vec![];
+    macro_rules! add_section {
+        ($group:expr, $label:expr) => {
+            // Note: the lifetime of `names` extends to end of this function.
+            let mut names = vec![$label.as_bytes().to_vec()];
+            for i in 1..$group.sections.len() {
+                names.push(format!("{}.{i}", $label).into_bytes());
+            }
+            for (i, section) in $group.sections.iter_mut().enumerate() {
+                section.index = Some(writer.reserve_section_index());
+                section.name = Some(writer.add_section_name(&names[i]));
+            }
+            sections.extend($group.sections.iter());
+        };
+    }
+
+    add_section!(text_sections, ".text");
+    add_section!(rodata_sections, ".rodata");
+    add_section!(data_sections, ".data");
+    add_section!(bss_sections, ".bss");
 
     // Reserve entries in the symbol table
     let mut symbol_offsets = Vec::with_capacity(symbols.len());
@@ -190,8 +295,10 @@ fn build_elf(vm: &Vm, entry: u64, mem: &mut [MemoryRegion]) -> anyhow::Result<Ve
             local_symbols += 1;
         }
 
-        let section_idx =
-            (text_start < symbol.addr && symbol.addr < text_end).then(|| text_section_idx);
+        let section_idx = sections
+            .iter()
+            .find(|section| section.start <= symbol.addr && symbol.addr < section.end)
+            .and_then(|section| section.index);
 
         symbol_offsets.push(SymbolOffset {
             _index: writer.reserve_symbol_index(section_idx),
@@ -251,14 +358,20 @@ fn build_elf(vm: &Vm, entry: u64, mem: &mut [MemoryRegion]) -> anyhow::Result<Ve
         eprintln!("region@{:#0x} will be written to: {:#0x}", region.addr, region.file_offset);
 
         writer.pad_until(region.file_offset);
-        if let Some(data) = region.data {
+        if let Some(data) = &region.data {
             writer.write(data);
         }
     }
 
     writer.write_null_symbol();
     for (offset, symbol) in symbol_offsets.iter().zip(&symbols) {
-        let st_type = elf::STT_FUNC;
+        let st_type = match symbol.kind {
+            SymbolKind::Function => elf::STT_FUNC,
+            SymbolKind::Unknown => elf::STT_NOTYPE,
+            SymbolKind::File => elf::STT_FILE,
+            SymbolKind::Object => elf::STT_OBJECT,
+            SymbolKind::Null => elf::STT_NOTYPE,
+        };
         let st_bind = symbol.binding;
 
         let (section, st_shndx) = match offset.section {
@@ -286,18 +399,62 @@ fn build_elf(vm: &Vm, entry: u64, mem: &mut [MemoryRegion]) -> anyhow::Result<Ve
     // Write section headers
     writer.write_null_section_header();
 
-    writer.write_section_header(&object::write::elf::SectionHeader {
-        name: Some(text_section_name),
-        sh_type: elf::SHT_PROGBITS,
-        sh_flags: (elf::SHF_ALLOC | elf::SHF_EXECINSTR) as u64,
-        sh_addr: text_start,
-        sh_offset: text_offset,
-        sh_size: text_end - text_start,
-        sh_link: 0,
-        sh_info: 0,
-        sh_addralign: 0,
-        sh_entsize: 0,
-    });
+    for section in text_sections.sections {
+        writer.write_section_header(&object::write::elf::SectionHeader {
+            name: section.name,
+            sh_type: elf::SHT_PROGBITS,
+            sh_flags: (elf::SHF_ALLOC | elf::SHF_EXECINSTR) as u64,
+            sh_addr: section.start,
+            sh_offset: section.file_offset,
+            sh_size: section.end - section.start,
+            sh_link: 0,
+            sh_info: 0,
+            sh_addralign: 0,
+            sh_entsize: 0,
+        });
+    }
+    for section in rodata_sections.sections {
+        writer.write_section_header(&object::write::elf::SectionHeader {
+            name: section.name,
+            sh_type: elf::SHT_PROGBITS,
+            sh_flags: elf::SHF_ALLOC as u64,
+            sh_addr: section.start,
+            sh_offset: section.file_offset,
+            sh_size: section.end - section.start,
+            sh_link: 0,
+            sh_info: 0,
+            sh_addralign: 0,
+            sh_entsize: 0,
+        });
+    }
+    for section in data_sections.sections {
+        writer.write_section_header(&object::write::elf::SectionHeader {
+            name: section.name,
+            sh_type: elf::SHT_PROGBITS,
+            sh_flags: (elf::SHF_ALLOC | elf::SHF_WRITE) as u64,
+            sh_addr: section.start,
+            sh_offset: section.file_offset,
+            sh_size: section.end - section.start,
+            sh_link: 0,
+            sh_info: 0,
+            sh_addralign: 0,
+            sh_entsize: 0,
+        });
+    }
+    for section in bss_sections.sections {
+        writer.write_section_header(&object::write::elf::SectionHeader {
+            name: section.name,
+            sh_type: elf::SHT_NOBITS,
+            sh_flags: (elf::SHF_ALLOC | elf::SHF_WRITE) as u64,
+            sh_addr: section.start,
+            sh_offset: section.file_offset,
+            sh_size: section.end - section.start,
+            sh_link: 0,
+            sh_info: 0,
+            sh_addralign: 0,
+            sh_entsize: 0,
+        });
+    }
 
     writer.write_symtab_section_header(local_symbols);
     writer.write_symtab_shndx_section_header();

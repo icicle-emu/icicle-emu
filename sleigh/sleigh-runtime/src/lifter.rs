@@ -1,7 +1,7 @@
 use crate::{
     decoder::SubtableCtx,
     semantics::{Export, SemanticAction, Value, ValueSize},
-    ConstructorId, Instruction, SleighData,
+    AttachmentId, ConstructorId, Instruction, SleighData,
 };
 
 /// The size (in bytes) of the largest supported register for the runtime.
@@ -386,7 +386,7 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
         })
     }
 
-    fn evaluate_attachment(&mut self, value: i64, id: u32) -> Result<Operand> {
+    fn evaluate_attachment(&mut self, value: i64, id: AttachmentId) -> Result<Operand> {
         use crate::AttachmentRef;
 
         Ok(match self.subtable.data.get_attachment(id) {

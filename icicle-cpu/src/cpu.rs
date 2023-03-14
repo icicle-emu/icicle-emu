@@ -1,4 +1,7 @@
+use std::cell::UnsafeCell;
+
 use icicle_mem::{perm, MemResult, Mmu};
+use pcode::PcodeDisplay;
 
 use crate::{
     exec::{
@@ -8,7 +11,7 @@ use crate::{
     lifter::{BlockExit, Target},
     regs::{RegValue, Regs, ValueSource},
     trace::Trace,
-    ExceptionCode, VarSource,
+    ExceptionCode, InstHook, VarSource,
 };
 
 pub const SHADOW_STACK_SIZE: usize = 0x1000;
@@ -160,6 +163,21 @@ impl Arch {
             sleigh,
         }
     }
+
+    /// Converts bytes read from memory to a pointer sized integer for the current architecture by
+    /// zero extending and converting the endianness as necessary.
+    #[inline]
+    pub fn bytes_to_pointer<const N: usize>(&self, bytes: [u8; N]) -> u64 {
+        let size = (self.reg_pc.size as usize).min(N);
+
+        let mut buf = [0; 8];
+        buf[..size].copy_from_slice(&bytes[..size]);
+
+        match self.triple.endianness().unwrap() {
+            target_lexicon::Endianness::Little => u64::from_le_bytes(buf),
+            target_lexicon::Endianness::Big => u64::from_be_bytes(buf),
+        }
+    }
 }
 
 /// Used to control where the CPU should stop executing.
@@ -196,6 +214,11 @@ impl MemSize {
     }
 }
 
+pub trait RegHandler {
+    fn read(&mut self, cpu: &mut Cpu);
+    fn write(&mut self, cpu: &mut Cpu);
+}
+
 pub struct Cpu {
     pub regs: Regs,
     pub args: [u128; 8],
@@ -217,6 +240,9 @@ pub struct Cpu {
 
     pub trace: Trace,
 
+    /// Handlers perform special operations when reading / writing to registers.
+    reg_handlers: UnsafeCell<hashbrown::HashMap<i16, Box<dyn RegHandler>>>,
+
     pc_offset: isize,
     pc_size: MemSize,
 }
@@ -233,7 +259,7 @@ impl Cpu {
         let pc_offset = Regs::var_offset(arch.reg_pc);
         let pc_size = MemSize::bytes(arch.reg_pc.size);
 
-        box Cpu {
+        Box::new(Cpu {
             regs: Regs::new(),
             args: [0; 8],
             shadow_stack: ShadowStack::new(),
@@ -253,10 +279,11 @@ impl Cpu {
             arch,
 
             trace: Trace::default(),
+            reg_handlers: UnsafeCell::new(hashbrown::HashMap::new()),
 
             pc_offset,
             pc_size,
-        }
+        })
     }
 
     pub fn reset(&mut self) {
@@ -287,6 +314,10 @@ impl Cpu {
         self.fuel.start = new;
     }
 
+    pub fn add_reg_handler(&mut self, id: pcode::VarId, handler: Box<dyn RegHandler>) {
+        self.reg_handlers.get_mut().insert(id, handler);
+    }
+
     pub fn set_helper(&mut self, idx: u16, helper: PcodeOpHelper) {
         if self.helpers.len() <= idx as usize {
             let new_size = idx.checked_add(1).unwrap() as usize;
@@ -296,17 +327,19 @@ impl Cpu {
     }
 
     /// Safety: this should not be called while the CPU is running.
-    pub fn add_hook(&mut self, hook: Box<dyn Hook>) -> pcode::HookId {
-        self.trace.add_hook(hook)
+    pub fn add_hook(&mut self, hook: impl Into<InstHook>) -> pcode::HookId {
+        self.trace.add_hook(hook.into())
     }
 
     /// Gets a mutable reference to a block hook.
-    pub fn get_hook_mut(&mut self, id: pcode::HookId) -> &mut dyn Hook {
+    #[inline]
+    pub fn get_hook_mut(&mut self, id: pcode::HookId) -> &mut InstHook {
         let hooks = self.trace.hooks.get_mut();
-        &mut *hooks[id as usize]
+        &mut hooks[id as usize]
     }
 
-    pub fn get_hooks(&mut self) -> &[Box<dyn Hook>] {
+    #[inline]
+    pub fn get_hooks(&mut self) -> &mut [InstHook] {
         self.trace.hooks.get_mut()
     }
 
@@ -315,14 +348,22 @@ impl Cpu {
         self.icount + self.fuel.start - self.fuel.remaining
     }
 
-    #[inline(always)]
-    pub fn read_reg<R: RegValue>(&self, var: pcode::VarNode) -> R {
-        R::read(&self.regs, var)
+    /// Reads the register represented by `var`. For special registers, this may perform additional
+    /// operations.
+    pub fn read_reg(&mut self, var: pcode::VarNode) -> u64 {
+        if let Some(handler) = unsafe { (&mut *self.reg_handlers.get()).get_mut(&var.id) } {
+            handler.read(self);
+        }
+        self.read_dynamic(var.into()).zxt()
     }
 
-    #[inline(always)]
-    pub fn write_reg<R: RegValue>(&mut self, var: pcode::VarNode, val: R) {
-        R::write(&mut self.regs, var, val);
+    /// Writes `val` to the register represented by `var`. For special registers, this may perform
+    /// additional operations.
+    pub fn write_reg(&mut self, var: pcode::VarNode, val: u64) {
+        self.write_trunc(var, val);
+        if let Some(handler) = unsafe { (&mut *self.reg_handlers.get()).get_mut(&var.id) } {
+            handler.write(self);
+        }
     }
 
     #[inline(always)]
@@ -361,13 +402,13 @@ impl Cpu {
     #[inline(always)]
     pub fn set_isa_mode(&mut self, mode: u8) {
         if let Some(isa) = self.arch.reg_isa_mode {
-            self.write(isa, mode);
+            self.write_var(isa, mode);
         }
     }
 
     #[inline(always)]
     pub fn isa_mode(&self) -> u8 {
-        self.arch.reg_isa_mode.map(|var| self.read_reg(var)).unwrap_or(0)
+        self.arch.reg_isa_mode.map(|var| self.read_var(var)).unwrap_or(0)
     }
 
     /// Validates that `stmt` can be executed safely.
@@ -487,20 +528,23 @@ impl Cpu {
 
         let mut buf = [0; 8];
         self.mem.read_bytes(addr, &mut buf[..ptr_size as usize], perm::READ)?;
-
-        Ok(match self.arch.triple.endianness().unwrap() {
-            target_lexicon::Endianness::Little => u64::from_le_bytes(buf),
-            target_lexicon::Endianness::Big => u64::from_be_bytes(buf),
-        })
+        Ok(self.arch.bytes_to_pointer(buf))
     }
 }
 
 impl ValueSource for Cpu {
+    #[inline(always)]
     fn read_var<R: RegValue>(&self, var: pcode::VarNode) -> R {
+        if cfg!(debug_assertions) {
+            if var.size as usize != std::mem::size_of::<R>() {
+                eprintln!("invalid read to register: {}", var.display(&self.arch.sleigh));
+            }
+        }
         R::read(&self.regs, var)
     }
 
-    fn write<R: RegValue>(&mut self, var: pcode::VarNode, value: R) {
+    #[inline(always)]
+    fn write_var<R: RegValue>(&mut self, var: pcode::VarNode, value: R) {
         R::write(&mut self.regs, var, value)
     }
 }
@@ -514,7 +558,7 @@ impl<'a> ValueSource for UncheckedExecutor<'a> {
         unsafe { R::read_unchecked(&self.cpu.regs, var) }
     }
 
-    fn write<R: RegValue>(&mut self, var: pcode::VarNode, value: R) {
+    fn write_var<R: RegValue>(&mut self, var: pcode::VarNode, value: R) {
         unsafe { R::write_unchecked(&mut self.cpu.regs, var, value) }
     }
 }
@@ -599,8 +643,8 @@ pub struct CpuSnapshot {
 }
 
 impl Cpu {
-    pub fn snapshot(&self) -> CpuSnapshot {
-        CpuSnapshot {
+    pub fn snapshot(&self) -> Box<CpuSnapshot> {
+        Box::new(CpuSnapshot {
             regs: self.regs.clone(),
             args: self.args.clone(),
             shadow_stack: self.shadow_stack.clone(),
@@ -609,11 +653,12 @@ impl Cpu {
             icount: self.icount,
             block_id: self.block_id,
             block_offset: self.block_offset,
-        }
+        })
     }
 
     pub fn restore(&mut self, snapshot: &CpuSnapshot) {
         let valid_regs = self.arch.sleigh.num_registers();
+        tracing::trace!("restoring: {valid_regs} registers");
         self.regs.restore_from(&snapshot.regs, valid_regs);
 
         self.args = snapshot.args;
@@ -626,27 +671,6 @@ impl Cpu {
         // @fixme: Check if we can avoiding needing to save/restore these values.
         self.block_id = snapshot.block_id;
         self.block_offset = snapshot.block_offset;
-    }
-}
-
-pub trait Hook {
-    fn call(&mut self, cpu: &mut Cpu, pc: u64);
-    fn as_ptr(&self) -> Option<(extern "sysv64" fn(*mut Cpu, u64, *mut ()), *mut ())> {
-        None
-    }
-    fn as_any(&mut self) -> &mut dyn std::any::Any;
-}
-
-impl<F> Hook for F
-where
-    F: FnMut(&mut Cpu, u64) + 'static,
-{
-    fn call(&mut self, cpu: &mut Cpu, pc: u64) {
-        self(cpu, pc)
-    }
-
-    fn as_any(&mut self) -> &mut dyn std::any::Any {
-        self
     }
 }
 

@@ -119,9 +119,12 @@ pub fn backtrace(vm: &mut Vm) -> String {
     use std::fmt::Write;
 
     let mut buf = String::new();
-    for addr in vm.get_callstack().into_iter().rev() {
+    for (i, addr) in vm.get_callstack().into_iter().rev().enumerate() {
+        // For all return address subtract 1 so we get the address of the call not the return for
+        // the symbol.
+        let symbol_addr = if i == 0 { addr } else { addr - 1 };
         let location =
-            vm.env.symbolize_addr(&mut vm.cpu, addr).unwrap_or(SourceLocation::default());
+            vm.env.symbolize_addr(&mut vm.cpu, symbol_addr).unwrap_or(SourceLocation::default());
         writeln!(buf, "{addr:#012x}: {location}").unwrap();
     }
 
@@ -238,4 +241,40 @@ pub fn log_write(
             eprintln!("[{pc:#0x}] {label}@{addr:#x} = {value:#x} (icount={icount})");
         }),
     );
+}
+
+pub fn log_regs(
+    vm: &mut Vm,
+    label: impl Into<std::borrow::Cow<'static, str>>,
+    pc: u64,
+    reglist: &[impl AsRef<str>],
+) {
+    use std::io::Write;
+
+    let regs: Vec<_> = reglist
+        .iter()
+        .map(AsRef::as_ref)
+        .flat_map(|reg| match vm.cpu.arch.sleigh.get_reg(reg) {
+            Some(reg) => Some(reg.var),
+            None => {
+                tracing::error!("Unknown register: {reg}");
+                None
+            }
+        })
+        .collect();
+
+    let label = label.into();
+    vm.hook_address(pc, move |cpu: &mut icicle_cpu::Cpu, addr| {
+        let mut stdout = std::io::stdout().lock();
+
+        let _ = write!(&mut stdout, "[{addr:#0x}] {label}: ");
+        for reg in &regs {
+            let value = cpu.read_reg(*reg);
+            let _ = write!(&mut stdout, "{} = {value:#x} ", reg.display(&cpu.arch.sleigh));
+        }
+
+        let icount = cpu.icount();
+        let _ = writeln!(&mut stdout, "({icount})");
+        let _ = stdout.flush();
+    });
 }

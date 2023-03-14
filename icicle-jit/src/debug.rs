@@ -58,7 +58,7 @@ impl<'a> codegen::write::FuncWriter for IcicleDecorator<'a> {
         inst: codegen::ir::Inst,
         indent: usize,
     ) -> std::fmt::Result {
-        let srcloc = func.srclocs[inst];
+        let srcloc = func.srcloc(inst);
         if !srcloc.is_default() && self.seen.insert(srcloc.bits()) {
             match self.get_pcode(srcloc.bits()) {
                 Location::Instruction(stmt) => w.write_fmt(format_args!("    ; {:?}\n", stmt))?,

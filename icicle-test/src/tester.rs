@@ -127,7 +127,8 @@ impl Tester for icicle_vm::Vm {
             VmExit::InstructionLimit
                 | VmExit::UnhandledException((ExceptionCode::ShadowStackInvalid, _))
         ) {
-            anyhow::bail!("Unexpected exit: {exit:?}");
+            let offset = self.cpu.block_offset;
+            anyhow::bail!("Unexpected exit: {exit:?} (offset={offset})");
         }
 
         Ok(())
@@ -138,9 +139,12 @@ impl Tester for icicle_vm::Vm {
             Assignment::Mem { addr, perm, value } => {
                 let start = utils::align_down(*addr, 0x1000);
                 let end = utils::align_up(start + value.len() as u64, 0x1000);
+
                 self.cpu.mem.unmap_memory(start, end);
+
                 let mapping = mem::Mapping { perm: *perm, value: 0x0 };
-                self.cpu.mem.map_memory(*addr, end, mapping);
+                anyhow::ensure!(self.cpu.mem.map_memory(start, end, mapping), "failed to map memory");
+
                 self.cpu.mem.write_bytes(*addr, value, perm::NONE)?;
             }
             &Assignment::Register { name, value } => {

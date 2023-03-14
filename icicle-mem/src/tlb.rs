@@ -10,7 +10,8 @@ use crate::{
 /// The number of bits required to represent any address.
 pub const ADDRESS_BITS: usize = 64;
 
-/// The number of bits required to
+/// The number of bits required use for indexing into the TLB. The more bits, the more storage is
+/// required but the fewer number of potential collections.
 pub const TLB_INDEX_BITS: usize = 10;
 pub const TLB_ENTRIES: usize = 1 << TLB_INDEX_BITS;
 

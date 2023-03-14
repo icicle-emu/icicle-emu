@@ -1,27 +1,27 @@
 use std::{any::Any, cell::UnsafeCell};
 
-use crate::Hook;
+use crate::Cpu;
 
 #[derive(Default)]
 pub struct Trace {
     /// Functions that can be directly called from pcode.
     // @fixme: improve the safety of this.
-    pub hooks: UnsafeCell<Vec<Box<dyn Hook>>>,
+    pub(crate) hooks: UnsafeCell<Vec<InstHook>>,
 
     /// Storage locations that can be accessed with pcode operations.
-    pub storage: Vec<Box<dyn TraceStore>>,
+    pub(crate) storage: Vec<Box<dyn TraceStoreAny>>,
 }
 
 impl Trace {
     /// Register a new storage location.
-    pub fn register_store(&mut self, store: Box<dyn TraceStore>) -> StoreRef {
-        self.storage.push(store);
+    pub fn register_store(&mut self, store: impl TraceStore + 'static) -> StoreRef {
+        self.storage.push(Box::new(store));
         StoreRef(self.storage.len() - 1)
     }
 
     /// Register a new callback function, returning an ID that can be later used to call the
     /// function from pcode.
-    pub fn add_hook(&mut self, hook: Box<dyn Hook>) -> pcode::HookId {
+    pub fn add_hook(&mut self, hook: InstHook) -> pcode::HookId {
         let hooks = self.hooks.get_mut();
         let id = hooks.len().try_into().expect("Exceeded maximum number of hooks");
         hooks.push(hook);
@@ -43,14 +43,16 @@ impl Trace {
 }
 
 impl std::ops::Index<StoreRef> for Trace {
-    type Output = dyn TraceStore;
+    type Output = dyn TraceStoreAny;
 
+    #[inline]
     fn index(&self, index: StoreRef) -> &Self::Output {
         &*self.storage[index.0]
     }
 }
 
 impl std::ops::IndexMut<StoreRef> for Trace {
+    #[inline]
     fn index_mut(&mut self, index: StoreRef) -> &mut Self::Output {
         &mut *self.storage[index.0]
     }
@@ -73,8 +75,21 @@ pub trait TraceStore {
         slice.copy_from_slice(&value.to_le_bytes()[..len]);
         Some(())
     }
+}
 
-    fn as_any(&mut self) -> &mut dyn Any;
+pub trait TraceStoreAny: TraceStore {
+    fn as_any(&self) -> &dyn Any;
+    fn as_mut_any(&mut self) -> &mut dyn Any;
+}
+
+impl<T: TraceStore + 'static> TraceStoreAny for T {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_mut_any(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
 impl TraceStore for (*mut u8, usize) {
@@ -84,10 +99,6 @@ impl TraceStore for (*mut u8, usize) {
 
     fn data_mut(&mut self) -> &mut [u8] {
         unsafe { std::slice::from_raw_parts_mut(self.0, self.1) }
-    }
-
-    fn as_any(&mut self) -> &mut dyn Any {
-        self
     }
 }
 
@@ -99,10 +110,6 @@ impl<T: bytemuck::Pod + bytemuck::Zeroable> TraceStore for &'static std::cell::U
     fn data_mut(&mut self) -> &mut [u8] {
         bytemuck::bytes_of_mut(unsafe { self.get().as_mut().unwrap() })
     }
-
-    fn as_any(&mut self) -> &mut dyn Any {
-        self
-    }
 }
 
 impl TraceStore for Vec<u8> {
@@ -113,9 +120,15 @@ impl TraceStore for Vec<u8> {
     fn data_mut(&mut self) -> &mut [u8] {
         self.as_mut()
     }
+}
 
-    fn as_any(&mut self) -> &mut dyn Any {
-        self
+impl TraceStore for Vec<u64> {
+    fn data(&self) -> &[u8] {
+        bytemuck::cast_slice(self.as_ref())
+    }
+
+    fn data_mut(&mut self) -> &mut [u8] {
+        bytemuck::cast_slice_mut(self.as_mut())
     }
 }
 
@@ -127,17 +140,124 @@ impl TraceStore for Box<[u8]> {
     fn data_mut(&mut self) -> &mut [u8] {
         self.as_mut()
     }
-
-    fn as_any(&mut self) -> &mut dyn Any {
-        self
-    }
 }
 
 #[derive(Copy, Clone)]
 pub struct StoreRef(usize);
 
 impl StoreRef {
+    #[inline]
     pub fn get_store_id(&self) -> u16 {
         self.0 as u16 + 1
+    }
+}
+
+pub type HookTrampoline = extern "C" fn(*mut (), *mut Cpu, u64);
+
+pub struct InstHook {
+    func: HookTrampoline,
+    data: *mut (),
+    drop: fn(*mut ()),
+    type_id: std::any::TypeId,
+}
+
+impl Drop for InstHook {
+    fn drop(&mut self) {
+        if self.data != std::ptr::null_mut() {
+            (self.drop)(self.data);
+            self.data = std::ptr::null_mut();
+        }
+    }
+}
+
+impl InstHook {
+    pub fn new<H: HookHandler>(data: H) -> Self {
+        Self {
+            func: Self::trampoline::<H>,
+            data: Box::into_raw(Box::new(data)).cast(),
+            drop: Self::drop_data::<H>,
+            type_id: std::any::TypeId::of::<H>(),
+        }
+    }
+
+    #[inline]
+    pub fn call(&mut self, cpu: &mut Cpu, pc: u64) {
+        (self.func)(self.data, cpu, pc)
+    }
+
+    #[inline]
+    pub fn get_ptr(&self) -> (HookTrampoline, *mut ()) {
+        (self.func, self.data)
+    }
+
+    #[inline]
+    pub fn data_mut<T: 'static>(&mut self) -> Option<&mut T> {
+        if self.type_id == std::any::TypeId::of::<T>() {
+            unsafe { self.data.cast::<T>().as_mut() }
+        }
+        else {
+            None
+        }
+    }
+
+    fn drop_data<H: HookHandler>(data: *mut ()) {
+        unsafe { Box::from_raw(data.cast::<H>()) };
+    }
+
+    #[inline(always)]
+    extern "C" fn trampoline<H: HookHandler>(data: *mut (), cpu: *mut Cpu, addr: u64) {
+        unsafe { H::call(&mut *data.cast::<H>(), &mut *cpu, addr) }
+    }
+}
+
+pub trait HookHandler: Sized + 'static {
+    fn call(data: &mut Self, cpu: &mut Cpu, addr: u64);
+}
+
+impl<F> HookHandler for F
+where
+    F: FnMut(&mut Cpu, u64) + 'static,
+{
+    #[inline(always)]
+    fn call(func: &mut Self, cpu: &mut Cpu, addr: u64) {
+        func(cpu, addr)
+    }
+}
+
+impl<H: HookHandler> From<H> for InstHook {
+    fn from(callback: H) -> Self {
+        InstHook::new::<H>(callback)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn call_simple() {
+        let data = std::rc::Rc::new(std::cell::Cell::new(false));
+        {
+            let data = data.clone();
+            let mut hook = InstHook::new(move |_: &mut crate::Cpu, _addr: u64| data.set(true));
+            hook.call(&mut crate::Cpu::new_boxed(crate::Arch::none()), 0);
+        }
+        assert!(data.get())
+    }
+
+    #[test]
+    fn get_data() {
+        struct HookData(bool);
+
+        impl HookHandler for HookData {
+            fn call(data: &mut Self, _: &mut Cpu, _: u64) {
+                data.0 = true;
+            }
+        }
+
+        let mut hook = InstHook::new(HookData(false));
+        hook.call(&mut crate::Cpu::new_boxed(crate::Arch::none()), 0);
+
+        assert!(hook.data_mut::<HookData>().unwrap().0)
     }
 }

@@ -1,5 +1,3 @@
-#![feature(box_syntax)]
-
 mod debug;
 pub mod runtime;
 mod translate;
@@ -11,7 +9,7 @@ use cranelift::{codegen::Context as CodeContext, prelude::*};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module, ModuleResult};
 
-use icicle_cpu::{lifter::Block as IcicleBlock, Cpu};
+use icicle_cpu::{lifter::Block as IcicleBlock, Cpu, HookTrampoline};
 
 use crate::translate::TranslatorCtx;
 
@@ -34,7 +32,7 @@ impl VmCtx {
     }
 }
 
-pub type JitFunction = unsafe extern "sysv64" fn(*mut Cpu, &mut VmCtx, u64) -> u64;
+pub type JitFunction = unsafe extern "C" fn(*mut Cpu, &mut VmCtx, u64) -> u64;
 
 pub(crate) struct MemHandler<T> {
     pub load8: T,
@@ -65,12 +63,11 @@ type TracerMemEntry = *mut u8;
 
 const MAX_HOOKS: usize = 64;
 
-extern "sysv64" fn null_hook(_: *mut Cpu, _: u64, _: *mut ()) {}
+extern "C" fn null_hook(_: *mut (), _: *mut Cpu, _: u64) {}
 
 #[repr(C)]
 pub struct HookData {
-    // @fixme: calling convention?
-    pub fn_ptr: extern "sysv64" fn(*mut Cpu, u64, *mut ()),
+    pub fn_ptr: HookTrampoline,
     pub data_ptr: *mut (),
 }
 
@@ -102,6 +99,9 @@ impl<'a> CompilationTarget<'a> {
 const FAST_LOOKUP_TABLE_SIZE: usize = 0x10000;
 
 pub struct JIT {
+    /// The endianness of the guest architecture
+    endianness: Endianness,
+
     /// The function builder context, which is reused across multiple FunctionBuilder instances.
     builder_ctx: FunctionBuilderContext,
 
@@ -141,21 +141,25 @@ pub struct JIT {
 
     /// Number of dead compilation units.
     pub dead: usize,
+
+    /// A list of declared functions (used for debugging).
+    declared_functions: Vec<(FuncId, u64)>,
 }
 
 impl JIT {
     pub fn new(cpu: &icicle_cpu::Cpu) -> Self {
-        let (module, functions) = init_module();
-
         let endianness = match cpu.arch.sleigh.big_endian {
             false => Endianness::Little,
             true => Endianness::Big,
         };
+
+        let (module, functions) = init_module(endianness);
         let mut translator_ctx = TranslatorCtx::new(cpu.arch.reg_pc, endianness);
         translator_ctx.disable_jit_mem = std::env::var_os("ICICLE_DISABLE_JIT_MEM").is_some();
         translator_ctx.enable_shadow_stack = cpu.enable_shadow_stack;
 
         Self {
+            endianness,
             builder_ctx: FunctionBuilderContext::new(),
             code_ctx: cranelift_codegen::Context::new(),
             translator_ctx,
@@ -164,11 +168,17 @@ impl JIT {
             il_dump: None,
             jit_hit: 0,
             jit_miss: 0,
-            active: box [(u64::MAX, runtime::call_bad_lookup_error()); FAST_LOOKUP_TABLE_SIZE],
+            // Exploit the fact that `vec![]` has a specialized implementation using `#[rustc_box]`
+            active: vec![(u64::MAX, runtime::call_bad_lookup_error()); FAST_LOOKUP_TABLE_SIZE]
+                .into_boxed_slice()
+                .try_into()
+                .ok()
+                .unwrap(),
             compiled: vec![],
             entry_points: HashMap::new(),
             block_mapping: HashMap::new(),
             dead: 0,
+            declared_functions: vec![],
         }
     }
 
@@ -177,9 +187,11 @@ impl JIT {
 
         self.code_ctx.clear();
         self.active.fill((u64::MAX, runtime::call_bad_lookup_error()));
+        self.compiled.clear();
         self.entry_points.clear();
         self.block_mapping.clear();
         self.dead = 0;
+        self.declared_functions.clear();
     }
 
     /// Safety: This invalidates any references to the JITed functions.
@@ -188,7 +200,7 @@ impl JIT {
         self.clear();
 
         // Redefine a new module
-        let (mut module, functions) = init_module();
+        let (mut module, functions) = init_module(self.endianness);
         std::mem::swap(&mut self.module, &mut module);
         self.functions = functions;
 
@@ -238,7 +250,7 @@ impl JIT {
 
     pub fn compile(&mut self, target: &CompilationTarget) -> ModuleResult<()> {
         let (func, _size) = self.translate_and_define(target, false)?;
-        self.module.finalize_definitions();
+        self.module.finalize_definitions()?;
 
         for addr in target.entry_points() {
             let jit_fn = self.get_jit_func(func);
@@ -261,12 +273,12 @@ impl JIT {
 
         let disasm = self
             .code_ctx
-            .mach_compile_result
+            .compiled_code()
             .as_ref()
             .and_then(|x| x.disasm.clone())
             .unwrap_or_else(|| "unknown".into());
 
-        self.module.finalize_definitions();
+        self.module.finalize_definitions()?;
         let jit_fn = self.get_jit_func(func);
 
         Ok((jit_fn, size, self.il_dump.take().unwrap(), disasm))
@@ -287,7 +299,7 @@ impl JIT {
     ) -> ModuleResult<(FuncId, u32)> {
         self.module.clear_context(&mut self.code_ctx);
         self.code_ctx.want_disasm = want_disasm;
-        self.code_ctx.func.signature.call_conv = isa::CallConv::SystemV;
+        self.code_ctx.func.signature.call_conv = self.module.isa().default_call_conv();
 
         let mut builder = FunctionBuilder::new(&mut self.code_ctx.func, &mut self.builder_ctx);
 
@@ -298,7 +310,7 @@ impl JIT {
         }
 
         translate::translate(
-            &self.module,
+            &mut self.module,
             builder,
             &mut self.translator_ctx,
             &self.functions,
@@ -324,11 +336,26 @@ impl JIT {
             })?
             .size;
 
+        for address in target.entry_points() {
+            self.declared_functions.push((func, address));
+        }
+
         Ok((func, size))
+    }
+
+    pub fn dump_jit_mapping(&self, path: &std::path::Path) -> std::io::Result<()> {
+        use std::io::Write;
+
+        let mut writer = std::io::BufWriter::new(std::fs::File::create(path)?);
+        for (func_id, addr) in &self.declared_functions {
+            writeln!(writer, "{func_id},{addr:#x}")?;
+        }
+
+        Ok(())
     }
 }
 
-fn init_module() -> (JITModule, RuntimeFunctions) {
+fn init_module(endianness: Endianness) -> (JITModule, RuntimeFunctions) {
     let mut flag_builder = cranelift_codegen::settings::builder();
 
     // We will never relocate the JITed code, so we don't use position-independent-code to avoid
@@ -338,6 +365,9 @@ fn init_module() -> (JITModule, RuntimeFunctions) {
     // Required since we use u128's as part of runtime functions (load/store).
     flag_builder.set("enable_llvm_abi_extensions", "true").unwrap();
 
+    // Always enable frame pointers to make debugging easier.
+    flag_builder.set("preserve_frame_pointers", "true").unwrap();
+
     // The verifier is quite slow, but generally we want it enabled for now to catch bugs while
     // the JIT is being developed and we keep upgrading cranelift versions.
     //
@@ -346,36 +376,62 @@ fn init_module() -> (JITModule, RuntimeFunctions) {
         flag_builder.set("enable_verifier", &value).unwrap();
     }
 
-    // We don't currently get any really benefits from setting optimizations here, since the
-    // code we generate involves many memory operations, but it does help a bit.
-    flag_builder.set("opt_level", "speed_and_size").unwrap();
+    // We use a default optmization level of `none` since Cranelift's current optimizations appear
+    // to have little runtime impact, but result in slower compilation time.
+    let opt_level = std::env::var("OPT_LEVEL").unwrap_or_else(|_| "none".to_string());
+    flag_builder.set("opt_level", &opt_level).unwrap();
+
+    if let Ok(value) = std::env::var("CRANELIFT_USE_EGRAPHS") {
+        flag_builder.set("use_egraphs", &value).unwrap();
+    }
+
+    let flags = settings::Flags::new(flag_builder);
+    tracing::trace!("cranelift flags: {}", flags.to_string());
 
     let isa_builder = cranelift_native::builder().expect("host machine is not supported");
-    let isa = isa_builder.finish(settings::Flags::new(flag_builder)).expect("failed to create isa");
+    let isa = isa_builder.finish(flags).expect("failed to create isa");
     let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
 
     macro_rules! define_fn_symbol {
-        ($func:path) => {{
-            builder.symbol(stringify!($func), $func as *const u8);
+        ($func:path) => {{ define_fn_symbol!(stringify!($func), $func) }};
+        ($name:expr, $func:path) => {{
+            builder.symbol($name, $func as *const u8);
         }};
     }
 
-    define_fn_symbol!(runtime::load8);
-    define_fn_symbol!(runtime::load16);
-    define_fn_symbol!(runtime::load32);
-    define_fn_symbol!(runtime::load64);
-    define_fn_symbol!(runtime::load128);
-    define_fn_symbol!(runtime::store8);
-    define_fn_symbol!(runtime::store16);
-    define_fn_symbol!(runtime::store32);
-    define_fn_symbol!(runtime::store64);
-    define_fn_symbol!(runtime::store128);
+    define_fn_symbol!("load8", runtime::load8);
+    define_fn_symbol!("store8", runtime::store8);
+    match endianness {
+        Endianness::Big => {
+            define_fn_symbol!("load16", runtime::load16be);
+            define_fn_symbol!("load32", runtime::load32be);
+            define_fn_symbol!("load64", runtime::load64be);
+            define_fn_symbol!("load128", runtime::load128be);
+
+            define_fn_symbol!("store16", runtime::store16be);
+            define_fn_symbol!("store32", runtime::store32be);
+            define_fn_symbol!("store64", runtime::store64be);
+            define_fn_symbol!("store128", runtime::store128be);
+        }
+        Endianness::Little => {
+            define_fn_symbol!("load16", runtime::load16le);
+            define_fn_symbol!("load32", runtime::load32le);
+            define_fn_symbol!("load64", runtime::load64le);
+            define_fn_symbol!("load128", runtime::load128le);
+
+            define_fn_symbol!("store16", runtime::store16le);
+            define_fn_symbol!("store32", runtime::store32le);
+            define_fn_symbol!("store64", runtime::store64le);
+            define_fn_symbol!("store128", runtime::store128le);
+        }
+    }
+
     define_fn_symbol!(runtime::push_shadow_stack);
     define_fn_symbol!(runtime::pop_shadow_stack);
     define_fn_symbol!(runtime::run_interpreter);
 
     let mut module = JITModule::new(builder);
-    tracing::info!(
+    tracing::debug!(
         "JIT module created with isa={:?}, calling conv={:?}",
         module.isa(),
         module.isa().default_call_conv()
@@ -388,43 +444,45 @@ fn init_module() -> (JITModule, RuntimeFunctions) {
 }
 
 fn declare_runtime_functions(module: &mut JITModule) -> ModuleResult<RuntimeFunctions> {
-    use types::{I128, I16, I32, I64, I8};
+    use types::{I16, I32, I64, I8};
+
+    let call_conv = module.isa().default_call_conv();
 
     macro_rules! import_fn {
-        ($func:path, ($($arg_ty:expr),*) -> ($($ret_ty:expr),*)) => {{
-            let mut sig = Signature::new(isa::CallConv::SystemV);
+        ($name:expr, ($($arg_ty:expr),*) -> ($($ret_ty:expr),*)) => {{
+            let mut sig = Signature::new(call_conv);
             for arg in &[$($arg_ty),*] {
                 sig.params.push(AbiParam::new(*arg));
             }
             for ret in &[$($ret_ty),*] {
                 sig.returns.push(AbiParam::new(*ret));
             }
-            module.declare_function(stringify!($func), Linkage::Import, &sig)?
+            module.declare_function($name, Linkage::Import, &sig)?
         }};
     }
 
     Ok(RuntimeFunctions {
         mmu: MemHandler {
-            load8: import_fn!(runtime::load8, (I64, I64) -> (I8)),
-            load16: import_fn!(runtime::load16, (I64, I64) -> (I16)),
-            load32: import_fn!(runtime::load32, (I64, I64) -> (I32)),
-            load64: import_fn!(runtime::load64, (I64, I64) -> (I64)),
-            load128: import_fn!(runtime::load128, (I64, I64) -> (I128)),
+            load8: import_fn!("load8", (I64, I64) -> (I8)),
+            load16: import_fn!("load16", (I64, I64) -> (I16)),
+            load32: import_fn!("load32", (I64, I64) -> (I32)),
+            load64: import_fn!("load64", (I64, I64) -> (I64)),
+            load128: import_fn!("load128", (I64, I64, I64) -> ()),
 
-            store8: import_fn!(runtime::store8, (I64, I64, I8) -> ()),
-            store16: import_fn!(runtime::store16, (I64, I64, I16) -> ()),
-            store32: import_fn!(runtime::store32, (I64, I64, I32) -> ()),
-            store64: import_fn!(runtime::store64, (I64, I64, I64) -> ()),
-            store128: import_fn!(runtime::store128, (I64, I64, I128) -> ()),
+            store8: import_fn!("store8", (I64, I64, I8) -> ()),
+            store16: import_fn!("store16", (I64, I64, I16) -> ()),
+            store32: import_fn!("store32", (I64, I64, I32) -> ()),
+            store64: import_fn!("store64", (I64, I64, I64) -> ()),
+            store128: import_fn!("store128", (I64, I64, I64, I64) -> ()),
         },
 
-        push_shadow_stack: import_fn!(runtime::push_shadow_stack, (I64, I64) -> ()),
-        pop_shadow_stack: import_fn!(runtime::pop_shadow_stack, (I64, I64) -> ()),
+        push_shadow_stack: import_fn!("runtime::push_shadow_stack", (I64, I64) -> ()),
+        pop_shadow_stack: import_fn!("runtime::pop_shadow_stack", (I64, I64) -> ()),
 
-        run_interpreter: import_fn!(runtime::run_interpreter, (I64, I64, I64, I64, I64) -> ()),
+        run_interpreter: import_fn!("runtime::run_interpreter", (I64, I64, I64, I64, I64) -> ()),
 
         hook_signature: {
-            let mut sig = Signature::new(isa::CallConv::SystemV);
+            let mut sig = Signature::new(call_conv);
             sig.params.push(AbiParam::new(I64)); // cpu_ptr
             sig.params.push(AbiParam::new(I64)); // pc
             sig.params.push(AbiParam::new(I64)); // data_ptr

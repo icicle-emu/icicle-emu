@@ -15,6 +15,7 @@ pub const HELPERS: &[(&str, PcodeOpHelper)] = &[
     ("count_leading_ones", count_leading_ones),
     ("countLeadingOnes", count_leading_ones),
     ("bcd_add", bcd_add),
+    ("UnsignedSaturate", unsigned_saturate),
 ];
 
 fn enable_interrupts(_cpu: &mut Cpu, _: VarNode, _: [Value; 2]) {
@@ -60,15 +61,47 @@ fn count_leading_ones(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
 }
 
 fn bcd_add(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
-    if args[0].size() != 2 || args[1].size() != 2 || dst.size != 2 {
+    let size = dst.size;
+
+    if args[0].size() != size || args[1].size() != size {
         cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
         cpu.exception.value = args[0].size() as u64;
         return;
     }
-    let a = cpu.read::<u16>(args[0]);
-    let b = cpu.read::<u16>(args[1]);
-    let result = bcd_add16(a, b);
-    cpu.write(dst, result);
+
+    match size {
+        1 => {
+            let a = cpu.read::<u8>(args[0]);
+            let b = cpu.read::<u8>(args[1]);
+            let result = bcd_add8(a, b);
+            cpu.write_var(dst, result);
+        }
+        2 => {
+            let a = cpu.read::<u16>(args[0]);
+            let b = cpu.read::<u16>(args[1]);
+            let result = bcd_add16(a, b);
+            cpu.write_var(dst, result);
+        }
+        _ => {
+            cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
+            cpu.exception.value = args[0].size() as u64;
+        }
+    }
+}
+
+fn bcd_add8(a: u8, b: u8) -> u8 {
+    let mut result = 0;
+    let mut carry = 0;
+    for digit in 0..2 {
+        let (result_digit, next_carry) = bcd_add_digit(
+            ((a >> (4 * digit)) & 0xF) as u8,
+            ((b >> (4 * digit)) & 0xF) as u8,
+            carry,
+        );
+        carry = next_carry;
+        result |= result_digit << (4 * digit);
+    }
+    result
 }
 
 fn bcd_add16(a: u16, b: u16) -> u16 {
@@ -94,6 +127,17 @@ fn bcd_add_digit(a: u8, b: u8, carry: u8) -> (u8, u8) {
     }
 }
 
+fn unsigned_saturate(cpu: &mut Cpu, dst: pcode::VarNode, args: [Value; 2]) {
+    if args[1].size() != 2 {
+        cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
+        cpu.exception.value = args[1].size() as u64;
+        return;
+    }
+    let bits = cpu.read::<u16>(args[1]);
+    let max = (1 << bits) - 1;
+    let value: u64 = cpu.read_dynamic(args[0]).zxt();
+    cpu.write_trunc(dst, value.min(max));
+}
 pub mod x86 {
     use super::*;
 
@@ -120,7 +164,7 @@ pub mod x86 {
     ];
 
     fn rdtsc(cpu: &mut Cpu, dst: VarNode, _: [Value; 2]) {
-        cpu.write(dst, 0_u64);
+        cpu.write_var(dst, 0_u64);
     }
 
     // Basic processor information
@@ -128,16 +172,16 @@ pub mod x86 {
         tracing::debug!("cpuid(BASIC_INFO)");
         if true {
             // Pretend to be an Intel CPU
-            cpu.write(dst.slice(0, 4), 0_u32);
-            cpu.write(dst.slice(4, 4), u32::from_le_bytes(*b"Genu"));
-            cpu.write(dst.slice(8, 4), u32::from_le_bytes(*b"ineI"));
-            cpu.write(dst.slice(12, 4), u32::from_le_bytes(*b"ntel"));
+            cpu.write_var(dst.slice(0, 4), 0_u32);
+            cpu.write_var(dst.slice(4, 4), u32::from_le_bytes(*b"Genu"));
+            cpu.write_var(dst.slice(8, 4), u32::from_le_bytes(*b"ineI"));
+            cpu.write_var(dst.slice(12, 4), u32::from_le_bytes(*b"ntel"));
         }
         else {
-            cpu.write(dst.slice(0, 4), 0_u32);
-            cpu.write(dst.slice(4, 4), u32::from_le_bytes(*b"Icic"));
-            cpu.write(dst.slice(8, 4), u32::from_le_bytes(*b"leCo"));
-            cpu.write(dst.slice(12, 4), u32::from_le_bytes(*b"reVm"));
+            cpu.write_var(dst.slice(0, 4), 0_u32);
+            cpu.write_var(dst.slice(4, 4), u32::from_le_bytes(*b"Icic"));
+            cpu.write_var(dst.slice(8, 4), u32::from_le_bytes(*b"leCo"));
+            cpu.write_var(dst.slice(12, 4), u32::from_le_bytes(*b"reVm"));
         }
     }
 
@@ -152,10 +196,10 @@ pub mod x86 {
 
         let eax: u32 =
             (extended_family << 20) | (extended_model << 16) | (family << 8) | (model << 4);
-        cpu.write(dst.slice(0, 4), eax);
-        cpu.write(dst.slice(4, 4), 0_u32);
-        cpu.write(dst.slice(8, 4), 0_u32);
-        cpu.write(dst.slice(12, 4), 0_u32);
+        cpu.write_var(dst.slice(0, 4), eax);
+        cpu.write_var(dst.slice(4, 4), 0_u32);
+        cpu.write_var(dst.slice(8, 4), 0_u32);
+        cpu.write_var(dst.slice(12, 4), 0_u32);
     }
 
     // Return structured extended feature enumeration info leaf
@@ -166,25 +210,25 @@ pub mod x86 {
         match count {
             // Returns extended feature flags in EBX, ECX, and EDX
             0x0 => {
-                cpu.write(dst.slice(0, 4), u32::MAX);
-                cpu.write(dst.slice(4, 4), cpuid::EXTENDED_FEATURES_EBX);
-                cpu.write(dst.slice(8, 4), cpuid::EXTENDED_FEATURES_EDX);
-                cpu.write(dst.slice(12, 4), cpuid::EXTENDED_FEATURES_ECX);
+                cpu.write_var(dst.slice(0, 4), u32::MAX);
+                cpu.write_var(dst.slice(4, 4), cpuid::EXTENDED_FEATURES_EBX);
+                cpu.write_var(dst.slice(8, 4), cpuid::EXTENDED_FEATURES_EDX);
+                cpu.write_var(dst.slice(12, 4), cpuid::EXTENDED_FEATURES_ECX);
             }
 
             // Returns extended feature flags in EAX
             0x1 => {
                 // We don't support AVX-512 BFLOAT16 operations
-                cpu.write(dst.slice(0, 4), 0_u32);
-                cpu.write(dst.slice(4, 4), 0_u32);
-                cpu.write(dst.slice(8, 4), 0_u32);
-                cpu.write(dst.slice(12, 4), 0_u32);
+                cpu.write_var(dst.slice(0, 4), 0_u32);
+                cpu.write_var(dst.slice(4, 4), 0_u32);
+                cpu.write_var(dst.slice(8, 4), 0_u32);
+                cpu.write_var(dst.slice(12, 4), 0_u32);
             }
             _ => {
-                cpu.write(dst.slice(0, 4), 0_u32);
-                cpu.write(dst.slice(4, 4), 0_u32);
-                cpu.write(dst.slice(8, 4), 0_u32);
-                cpu.write(dst.slice(12, 4), 0_u32);
+                cpu.write_var(dst.slice(0, 4), 0_u32);
+                cpu.write_var(dst.slice(4, 4), 0_u32);
+                cpu.write_var(dst.slice(8, 4), 0_u32);
+                cpu.write_var(dst.slice(12, 4), 0_u32);
             }
         }
     }
@@ -196,18 +240,18 @@ pub mod x86 {
         match index {
             // Hypervisor
             0x4000_0000 => {
-                cpu.write(dst.slice(0, 4), 0_u32);
-                cpu.write(dst.slice(4, 4), 0_u32);
-                cpu.write(dst.slice(8, 4), 0_u32);
-                cpu.write(dst.slice(12, 4), 0_u32);
+                cpu.write_var(dst.slice(0, 4), 0_u32);
+                cpu.write_var(dst.slice(4, 4), 0_u32);
+                cpu.write_var(dst.slice(8, 4), 0_u32);
+                cpu.write_var(dst.slice(12, 4), 0_u32);
             }
 
             // Get Highest Extended Function Implemented
             0x8000_0000 => {
-                cpu.write(dst.slice(0, 4), 0_u32);
-                cpu.write(dst.slice(4, 4), 0_u32);
-                cpu.write(dst.slice(8, 4), 0_u32);
-                cpu.write(dst.slice(12, 4), 0_u32);
+                cpu.write_var(dst.slice(0, 4), 0_u32);
+                cpu.write_var(dst.slice(4, 4), 0_u32);
+                cpu.write_var(dst.slice(8, 4), 0_u32);
+                cpu.write_var(dst.slice(12, 4), 0_u32);
             }
             unknown => {
                 tracing::warn!("Unknown CPUID index: {:0x}", unknown);
@@ -223,7 +267,7 @@ pub mod x86 {
         let result = ((src >> 63) & 0b01) as u32 | ((src >> 126) & 0b10) as u32;
 
         // workaround SLEIGH bug? should zero extend to 64-bits
-        cpu.write(VarNode::new(dst.id, 8), result as u64);
+        cpu.write_var(VarNode::new(dst.id, 8), result as u64);
     }
 
     // Insert word
@@ -232,7 +276,7 @@ pub mod x86 {
         let offset = 2 * (cpu.args[0] as u64).min(7);
         let src: u64 = cpu.read_dynamic(args[1]).zxt();
 
-        cpu.write(dst.slice(offset as u8, 2), src as u16);
+        cpu.write_var(dst.slice(offset as u8, 2), src as u16);
     }
 
     // Shuffle packed low words
@@ -243,7 +287,7 @@ pub mod x86 {
         for offset in 0..4 {
             let shift = (count >> (offset * 2) & 0b11) * 16;
             let value = (src >> shift) & 0xffff;
-            cpu.write(dst.slice(offset * 2, 2), value as u16);
+            cpu.write_var(dst.slice(offset * 2, 2), value as u16);
         }
     }
 
@@ -257,8 +301,8 @@ pub mod x86 {
         let lo = cpu.read::<u64>(args[0].slice(a, 8));
         let hi = cpu.read::<u64>(args[1].slice(b, 8));
 
-        cpu.write(dst.slice(0, 8), lo);
-        cpu.write(dst.slice(8, 8), hi);
+        cpu.write_var(dst.slice(0, 8), lo);
+        cpu.write_var(dst.slice(8, 8), hi);
     }
 
     // Multiply and Add Packed Integers
@@ -270,7 +314,7 @@ pub mod x86 {
             let hi = cpu.read::<i16>(args[0].slice(i + 2, 2)) as i32
                 * cpu.read::<i16>(args[1].slice(i + 2, 2)) as i32;
 
-            cpu.write(dst.slice(i, 4), lo.wrapping_add(hi));
+            cpu.write_var(dst.slice(i, 4), lo.wrapping_add(hi));
         }
     }
 
@@ -285,7 +329,7 @@ pub mod x86 {
         // Input is an 80-bit floating point number, but we treat it as a f64.
         let x = f64::from_bits(cpu.read::<u64>(args[0].slice(0, 8)));
         let result = x.sin();
-        cpu.write(dst.truncate(8), result.to_bits());
+        cpu.write_var(dst.truncate(8), result.to_bits());
     }
 
     /// Compute the approximate of the cosine of the source operand and store it in the destination
@@ -293,7 +337,7 @@ pub mod x86 {
         // Input is an 80-bit floating point number, but we treat it as a f64.
         let x = f64::from_bits(cpu.read::<u64>(args[0].truncate(8)));
         let result = x.cos();
-        cpu.write(dst.truncate(8), result.to_bits());
+        cpu.write_var(dst.truncate(8), result.to_bits());
     }
 
     /// Compute the approximate of the tangent of the source operand and store it in the destination
@@ -301,7 +345,7 @@ pub mod x86 {
         // Input is an 80-bit floating point number, but we treat it as a f64.
         let x = f64::from_bits(cpu.read::<u64>(args[0].truncate(8)));
         let result = x.tan();
-        cpu.write(dst.truncate(8), result.to_bits());
+        cpu.write_var(dst.truncate(8), result.to_bits());
     }
 
     /// Compute ST0 = 2^(ST0) - 1
@@ -309,7 +353,7 @@ pub mod x86 {
         // Input is an 80-bit floating point number, but we treat it as a f64.
         let st0 = f64::from_bits(cpu.read::<u64>(args[0].truncate(8)));
         let result = st0.exp2() - 1.0;
-        cpu.write(dst.truncate(8), result.to_bits());
+        cpu.write_var(dst.truncate(8), result.to_bits());
     }
 
     /// Compute ST0 = ST0 * 2^(trunc(ST1))
@@ -318,7 +362,7 @@ pub mod x86 {
         let st0 = f64::from_bits(cpu.read::<u64>(args[0].truncate(8)));
         let st1 = f64::from_bits(cpu.read::<u64>(args[1].truncate(8)));
         let result = st0 * st1.trunc().exp2();
-        cpu.write(dst.truncate(8), result.to_bits());
+        cpu.write_var(dst.truncate(8), result.to_bits());
     }
 
     pub mod cpuid {

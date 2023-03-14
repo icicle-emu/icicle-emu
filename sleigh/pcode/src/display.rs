@@ -55,102 +55,98 @@ where
         let out = self.output.display(ctx);
 
         match self.op {
-            Op::Copy => write!(f, "{} = {}", out, a),
-            Op::Subpiece(offset) => write!(f, "{} = {}[{}]", out, a, offset),
-            Op::ZeroExtend => write!(f, "{} = zext({})", out, a),
-            Op::SignExtend => write!(f, "{} = sext({})", out, a),
+            Op::Copy => write!(f, "{out} = {a}"),
+            Op::Subpiece(offset) => write!(f, "{out} = {a}[{offset}]"),
+            Op::ZeroExtend => write!(f, "{out} = zext({a})"),
+            Op::SignExtend => write!(f, "{out} = sext({a})"),
 
-            Op::IntToFloat => write!(f, "{} = int2float({})", out, a),
-            Op::FloatToFloat => write!(f, "{} = float2float({})", out, a),
-            Op::FloatToInt => write!(f, "{} = float2int({})", out, a),
+            Op::IntToFloat => write!(f, "{out} = int2float({a})"),
+            Op::FloatToFloat => write!(f, "{out} = float2float({a})"),
+            Op::FloatToInt => write!(f, "{out} = float2int({a})"),
 
-            Op::IntAdd => write!(f, "{} = {} + {}", out, a, b),
-            Op::IntSub => write!(f, "{} = {} - {}", out, a, b),
-            Op::IntXor => write!(f, "{} = {} ^ {}", out, a, b),
-            Op::IntOr => write!(f, "{} = {} | {}", out, a, b),
-            Op::IntAnd => write!(f, "{} = {} & {}", out, a, b),
-            Op::IntMul => write!(f, "{} = {} * {}", out, a, b),
-            Op::IntDiv => write!(f, "{} = {} / {}", out, a, b),
-            Op::IntSignedDiv => write!(f, "{} = {} s/ {}", out, a, b),
-            Op::IntRem => write!(f, "{} = {} % {}", out, a, b),
-            Op::IntSignedRem => write!(f, "{} = {} s% {}", out, a, b),
+            Op::IntAdd => write!(f, "{out} = {a} + {b}"),
+            Op::IntSub => write!(f, "{out} = {a} - {b}"),
+            Op::IntXor => write!(f, "{out} = {a} ^ {b}"),
+            Op::IntOr => write!(f, "{out} = {a} | {b}"),
+            Op::IntAnd => write!(f, "{out} = {a} & {b}"),
+            Op::IntMul => write!(f, "{out} = {a} * {b}"),
+            Op::IntDiv => write!(f, "{out} = {a} / {b}"),
+            Op::IntSignedDiv => write!(f, "{out} = {a} s/ {b}"),
+            Op::IntRem => write!(f, "{out} = {a} % {b}"),
+            Op::IntSignedRem => write!(f, "{out} = {a} s% {b}"),
 
-            Op::IntLeft => write!(f, "{} = {} << {}", out, a, b),
-            Op::IntRotateLeft => write!(f, "{} = {} <<< {}", out, a, b),
-            Op::IntRight => write!(f, "{} = {} >> {}", out, a, b),
-            Op::IntSignedRight => write!(f, "{} = {} s>> {}", out, a, b),
-            Op::IntRotateRight => write!(f, "{} = {} >>> {}", out, a, b),
+            Op::IntLeft => write!(f, "{out} = {a} << {b}"),
+            Op::IntRotateLeft => write!(f, "{out} = {a} <<< {b}"),
+            Op::IntRight => write!(f, "{out} = {a} >> {b}"),
+            Op::IntSignedRight => write!(f, "{out} = {a} s>> {b}"),
+            Op::IntRotateRight => write!(f, "{out} = {a} >>> {b}"),
 
-            Op::IntEqual => write!(f, "{} = {} == {}", out, a, b),
-            Op::IntNotEqual => write!(f, "{} = {} != {}", out, a, b),
-            Op::IntLess => write!(f, "{} = {} < {}", out, a, b),
-            Op::IntSignedLess => write!(f, "{} = {} s< {}", out, a, b),
-            Op::IntLessEqual => write!(f, "{} = {} <= {}", out, a, b),
-            Op::IntSignedLessEqual => write!(f, "{} = {} s<= {}", out, a, b),
-            Op::IntCarry => write!(f, "{} = {} carry {}", out, a, b),
-            Op::IntSignedCarry => write!(f, "{} = {} scarry {}", out, a, b),
-            Op::IntSignedBorrow => write!(f, "{} = {} sborrow {}", out, a, b),
+            Op::IntEqual => write!(f, "{out} = {a} == {b}"),
+            Op::IntNotEqual => write!(f, "{out} = {a} != {b}"),
+            Op::IntLess => write!(f, "{out} = {a} < {b}"),
+            Op::IntSignedLess => write!(f, "{out} = {a} s< {b}"),
+            Op::IntLessEqual => write!(f, "{out} = {a} <= {b}"),
+            Op::IntSignedLessEqual => write!(f, "{out} = {a} s<= {b}"),
+            Op::IntCarry => write!(f, "{out} = {a} carry {b}"),
+            Op::IntSignedCarry => write!(f, "{out} = {a} scarry {b}"),
+            Op::IntSignedBorrow => write!(f, "{out} = {a} sborrow {b}"),
 
-            Op::IntNot => write!(f, "{} = ~{}", out, a),
-            Op::IntNegate => write!(f, "{} = -{}", out, a),
-            Op::IntCountOnes => write!(f, "{} = count_ones({})", out, a),
+            Op::IntNot => write!(f, "{out} = ~{a}"),
+            Op::IntNegate => write!(f, "{out} = -{a}"),
+            Op::IntCountOnes => write!(f, "{out} = count_ones({a})"),
 
-            Op::BoolNot => write!(f, "{} = !{}", out, a),
-            Op::BoolAnd => write!(f, "{} = {} && {}", out, a, b),
-            Op::BoolOr => write!(f, "{} = {} || {}", out, a, b),
-            Op::BoolXor => write!(f, "{} = {} ^^ {}", out, a, b),
+            Op::BoolNot => write!(f, "{out} = !{a}"),
+            Op::BoolAnd => write!(f, "{out} = {a} && {b}"),
+            Op::BoolOr => write!(f, "{out} = {a} || {b}"),
+            Op::BoolXor => write!(f, "{out} = {a} ^^ {b}"),
 
-            Op::FloatNegate => write!(f, "{} = f-{}", out, a),
-            Op::FloatAbs => write!(f, "{} = abs({})", out, a),
-            Op::FloatSqrt => write!(f, "{} = sqrt({})", out, a),
-            Op::FloatCeil => write!(f, "{} = ceil({})", out, a),
-            Op::FloatFloor => write!(f, "{} = floor({})", out, a),
-            Op::FloatRound => write!(f, "{} = round({})", out, a),
-            Op::FloatIsNan => write!(f, "{} = isnan({})", out, a),
+            Op::FloatNegate => write!(f, "{out} = f-{a}"),
+            Op::FloatAbs => write!(f, "{out} = abs({a})"),
+            Op::FloatSqrt => write!(f, "{out} = sqrt({a})"),
+            Op::FloatCeil => write!(f, "{out} = ceil({a})"),
+            Op::FloatFloor => write!(f, "{out} = floor({a})"),
+            Op::FloatRound => write!(f, "{out} = round({a})"),
+            Op::FloatIsNan => write!(f, "{out} = isnan({a})"),
 
-            Op::FloatAdd => write!(f, "{} = {} f+ {}", out, a, b),
-            Op::FloatSub => write!(f, "{} = {} f- {}", out, a, b),
-            Op::FloatMul => write!(f, "{} = {} f* {}", out, a, b),
-            Op::FloatDiv => write!(f, "{} = {} f/ {}", out, a, b),
-            Op::FloatEqual => write!(f, "{} = {} f== {}", out, a, b),
-            Op::FloatNotEqual => write!(f, "{} = {} f!= {}", out, a, b),
-            Op::FloatLess => write!(f, "{} = {} f< {}", out, a, b),
-            Op::FloatLessEqual => write!(f, "{} = {} f<= {}", out, a, b),
+            Op::FloatAdd => write!(f, "{out} = {a} f+ {b}"),
+            Op::FloatSub => write!(f, "{out} = {a} f- {b}"),
+            Op::FloatMul => write!(f, "{out} = {a} f* {b}"),
+            Op::FloatDiv => write!(f, "{out} = {a} f/ {b}"),
+            Op::FloatEqual => write!(f, "{out} = {a} f== {b}"),
+            Op::FloatNotEqual => write!(f, "{out} = {a} f!= {b}"),
+            Op::FloatLess => write!(f, "{out} = {a} f< {b}"),
+            Op::FloatLessEqual => write!(f, "{out} = {a} f<= {b}"),
 
-            Op::Load(id) => write!(f, "{} = {}[{}]", out, SpaceId(id).display(ctx), a),
-            Op::Store(id) => write!(f, "{}[{}] = {}", SpaceId(id).display(ctx), a, b),
+            Op::Load(id) => write!(f, "{out} = {}[{a}]", SpaceId(id).display(ctx)),
+            Op::Store(id) => write!(f, "{}[{a}] = {b}", SpaceId(id).display(ctx)),
 
-            Op::Branch(hint) if inputs[0].const_eq(1) => {
-                write!(f, "{} {}", hint, b)
-            }
-            Op::Branch(hint) => write!(f, "if {} {} {}", a, hint, b),
+            Op::Branch(hint) if inputs[0].const_eq(1) => write!(f, "{hint} {b}"),
+            Op::Branch(hint) => write!(f, "if {a} {hint} {b}"),
 
-            Op::PcodeBranch(label) if inputs[0].const_eq(1) => {
-                write!(f, "jump <{}>", label)
-            }
-            Op::PcodeBranch(label) => write!(f, "if {} jump <{}>", a, label),
-            Op::PcodeLabel(label) => write!(f, "<{}>", label),
+            Op::PcodeBranch(label) if inputs[0].const_eq(1) => write!(f, "jump <{label}>"),
+            Op::PcodeBranch(label) => write!(f, "if {a} jump <{label}>"),
+            Op::PcodeLabel(label) => write!(f, "<{label}>"),
 
-            Op::Arg(id) => write!(f, "arg{} = {}", id, a),
+            Op::Arg(id) => write!(f, "arg{id} = {a}"),
             Op::PcodeOp(id) => {
                 let op = UserOpId(id);
                 match self.output.is_invalid() {
-                    false => write!(f, "{} = {}({})", out, op.display(ctx), inputs.display(ctx)),
+                    false => write!(f, "{out} = {}({})", op.display(ctx), inputs.display(ctx)),
                     true => write!(f, "{}({})", op.display(ctx), inputs.display(ctx)),
                 }
             }
             Op::Hook(id) => {
                 let hook = HookIdD(id);
                 match self.output.is_invalid() {
-                    false => write!(f, "{} = {}({})", out, hook.display(&()), inputs.display(ctx)),
+                    false => write!(f, "{out} = {}({})", hook.display(&()), inputs.display(ctx)),
                     true => write!(f, "{}({})", hook.display(&()), inputs.display(ctx)),
                 }
             }
 
-            Op::TracerLoad(id) => write!(f, "{} = {}[{}]", out, StoreIdD(id).display(&()), a),
-            Op::TracerStore(id) => write!(f, "{}[{}] = {}", StoreIdD(id).display(&()), a, b),
+            Op::TracerLoad(id) => write!(f, "{out} = {}[{a}]", StoreIdD(id).display(&())),
+            Op::TracerStore(id) => write!(f, "{}[{a}] = {b}", StoreIdD(id).display(&())),
 
-            Op::Exception => write!(f, "exception({}, {})", a, b),
+            Op::Exception => write!(f, "exception({a}, {b})"),
 
             Op::InstructionMarker => write!(f, "instruction({:#0x})", inputs[0].as_u64()),
             Op::Invalid => write!(f, "invalid"),

@@ -18,8 +18,18 @@ pub const PAGE_SIZE: usize = 1 << OFFSET_BITS;
 pub const MAX_PAGES: usize = 50_000;
 
 /// Represents an opaque index into physical memory.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Index(usize);
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Index(u32);
+
+impl std::fmt::Debug for Index {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            0 => f.write_str("ReadOnlyZeroPage"),
+            1 => f.write_str("ZeroPage"),
+            x => f.debug_tuple("Index").field(&x).finish(),
+        }
+    }
+}
 
 impl Index {
     pub fn is_zero_page(&self) -> bool {
@@ -46,12 +56,13 @@ pub struct PhysicalMemory {
 
 impl PhysicalMemory {
     pub fn new(capacity: usize) -> Self {
-        let zero_page_read_only = Page::zero_page(perm::READ | perm::INIT | perm::MAP);
+        let zero_page_read_only = Page::zero_page(perm::READ | perm::INIT | perm::MAP, false);
         let zero_page_read_write =
-            Page::zero_page(perm::READ | perm::WRITE | perm::INIT | perm::MAP);
+            Page::zero_page(perm::READ | perm::WRITE | perm::INIT | perm::MAP, true);
         Self { capacity, allocated: vec![zero_page_read_only, zero_page_read_write], free: vec![] }
     }
 
+    #[inline]
     pub fn allocated_pages(&self) -> usize {
         self.allocated.len() - self.free.len()
     }
@@ -78,10 +89,10 @@ impl PhysicalMemory {
                     return None;
                 }
                 self.allocated.push(Page::new());
-                Index(self.allocated.len() - 1)
+                Index((self.allocated.len() - 1).try_into().unwrap())
             }
         };
-        self.allocated[index.0].clear();
+        self.allocated[index.0 as usize].clear();
         Some(index)
     }
 
@@ -90,22 +101,27 @@ impl PhysicalMemory {
         self.free.push(index);
     }
 
+    #[inline]
     pub fn read_only_zero_page(&self) -> Index {
         Index(0)
     }
 
+    #[inline]
     pub fn zero_page(&self) -> Index {
         Index(1)
     }
 
+    #[inline]
     pub fn get(&self, index: Index) -> &Page {
-        &self.allocated[index.0]
+        &self.allocated[index.0 as usize]
     }
 
+    #[inline]
     pub fn get_mut(&mut self, index: Index) -> &mut Page {
-        &mut self.allocated[index.0]
+        &mut self.allocated[index.0 as usize]
     }
 
+    #[inline]
     pub fn address_of(&self, vaddr: u64, index: Index) -> PhysicalAddr {
         let base = (index.0 << OFFSET_BITS) as u64;
         let offset = vaddr & ((1_u64 << OFFSET_BITS) - 1);
@@ -122,12 +138,13 @@ impl PhysicalMemory {
 
     /// Return mutable references to two distict pages
     pub fn get_pair_mut(&mut self, a: Index, b: Index) -> (&mut Page, &mut Page) {
-        assert!(a.0 != b.0 && a.0 < self.allocated.len() && b.0 <= self.allocated.len());
+        let end = self.allocated.len() as u32;
+        assert!(a.0 != b.0 && a.0 < end && b.0 <= end);
 
         // Safety: we have ensured that both indices are inbounds and are distinct.
         unsafe {
             let ptr = self.allocated.as_mut_ptr();
-            (ptr.add(a.0).as_mut().unwrap(), ptr.add(b.0).as_mut().unwrap())
+            (ptr.add(a.0 as usize).as_mut().unwrap(), ptr.add(b.0 as usize).as_mut().unwrap())
         }
     }
 
@@ -178,18 +195,17 @@ impl Clone for Page {
 
 impl Page {
     fn new() -> Self {
-        let data: UnsafeCell<Rc<PageData>> = {
-            let tmp = Rc::new_zeroed();
-            // Safety: `PageData` is valid when zeroed.
-            UnsafeCell::new(unsafe { tmp.assume_init() })
-        };
-
-        Self { data, modified: false, copy_on_write: false, executed: false }
+        Self {
+            data: UnsafeCell::new(Rc::default()),
+            modified: false,
+            copy_on_write: false,
+            executed: false,
+        }
     }
 
-    fn zero_page(perm: u8) -> Self {
+    fn zero_page(perm: u8, copy_on_write: bool) -> Self {
         let mut page = Self::new();
-        page.copy_on_write = true;
+        page.copy_on_write = copy_on_write;
 
         let data = page.data_mut();
         data.data.fill(0);
@@ -246,6 +262,12 @@ pub struct PageData {
 
     /// The permissions associated with each byte in the page
     pub perm: [u8; PAGE_SIZE],
+}
+
+impl Default for PageData {
+    fn default() -> Self {
+        Self { data: [0; PAGE_SIZE], perm: [0; PAGE_SIZE] }
+    }
 }
 
 impl PageData {
@@ -347,6 +369,7 @@ impl PageData {
         (addr & ((1 << OFFSET_BITS) - 1)).try_into().unwrap()
     }
 
+    #[inline(always)]
     pub fn read<const N: usize>(&self, addr: u64, perm: u8) -> MemResult<[u8; N]> {
         assert!([1, 2, 4, 8, 16].contains(&N));
 
@@ -359,12 +382,16 @@ impl PageData {
         let offset = PageData::offset(addr);
         // Safety: `offset..offset + N` is always in-bounds.
         unsafe {
-            perm::check(self.get_perm_unchecked(offset, N), perm | perm::MAP)?;
+            perm::check_bytes::<N>(
+                self.perm.get_unchecked(offset..offset + N).try_into().unwrap(),
+                perm | perm::MAP,
+            )?;
             buf.copy_from_slice(self.data.get_unchecked(offset..offset + N));
         }
         Ok(buf)
     }
 
+    #[inline(always)]
     pub fn write<const N: usize>(&mut self, addr: u64, value: [u8; N], perm: u8) -> MemResult<()> {
         assert!([1, 2, 4, 8, 16].contains(&N));
 
@@ -376,7 +403,10 @@ impl PageData {
         let offset = PageData::offset(addr);
         // Safety: `offset..offset + N` is always in-bounds.
         unsafe {
-            perm::check(self.get_perm_unchecked(offset, N), perm | perm::MAP)?;
+            perm::check_bytes::<N>(
+                self.perm.get_unchecked(offset..offset + N).try_into().unwrap(),
+                perm | perm::MAP,
+            )?;
             self.add_perm_unchecked(offset as usize, N, perm::INIT);
             self.data.get_unchecked_mut(offset..offset + N).copy_from_slice(&value);
         }

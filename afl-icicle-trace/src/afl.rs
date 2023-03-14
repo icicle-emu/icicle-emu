@@ -51,45 +51,47 @@ pub fn set_opt_map_size(x: u32) -> u32 {
 pub struct Comms {
     rx: std::fs::File,
     tx: std::fs::File,
+    killable_process: u32,
 }
 
 impl Comms {
     /// Safety: This function must not be called more than once.
     #[cfg(unix)]
-    pub(crate) unsafe fn open() -> Self {
+    pub unsafe fn open() -> Self {
         use std::os::unix::io::FromRawFd;
 
         Self {
             rx: std::fs::File::from_raw_fd(RX_FD.try_into().unwrap()),
             tx: std::fs::File::from_raw_fd(TX_FD.try_into().unwrap()),
+            killable_process: u32::MAX,
         }
     }
 
     #[cfg(not(unix))]
-    pub(crate) unsafe fn open() -> Self {
+    pub unsafe fn open() -> Self {
         unimplemented!("");
     }
 
     /// Set status to the parent
-    pub(crate) fn write(&mut self, status: u32) -> io::Result<()> {
+    pub fn write(&mut self, status: u32) -> io::Result<()> {
         self.tx.write_all(&status.to_le_bytes())?;
         Ok(())
     }
 
     /// Read status response from parent
-    pub(crate) fn read(&mut self) -> io::Result<u32> {
+    pub fn read(&mut self) -> io::Result<u32> {
         let mut buf = [0; 4];
         self.rx.read_exact(&mut buf)?;
         Ok(u32::from_le_bytes(buf))
     }
 
     /// Check whether AFL is still alive
-    pub(crate) fn is_alive(&mut self) -> bool {
+    pub fn is_alive(&mut self) -> bool {
         self.read().is_ok()
     }
 
     /// Send configuration information to AFL and check that AFL responds correctly.
-    pub(crate) fn setup(&mut self, config: &FuzzConfig) -> anyhow::Result<()> {
+    pub fn setup(&mut self, config: &FuzzConfig) -> anyhow::Result<()> {
         let mut status = OPT_ENABLED;
         status |= set_opt_map_size(shared_mem::MAP_SIZE as u32) | OPT_MAPSIZE;
 
@@ -112,6 +114,20 @@ impl Comms {
             );
         }
 
+        Ok(())
+    }
+
+    /// Notifies AFL that we are starting the next execution of the next fuzz case.
+    pub fn start_fuzz_case(
+        &mut self,
+        interrupt_flag: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> anyhow::Result<()> {
+        if interrupt_flag.swap(false, std::sync::atomic::Ordering::AcqRel)
+            || self.killable_process == u32::MAX
+        {
+            self.killable_process = crate::spawn_killable_process(interrupt_flag.clone());
+        }
+        self.write(self.killable_process).context("failed to send fuzzer PID to AFL")?;
         Ok(())
     }
 }

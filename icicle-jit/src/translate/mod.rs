@@ -23,7 +23,7 @@ use memoffset::offset_of;
 use crate::{translate::ops::Ctx, CompilationTarget, MemHandler, VmCtx};
 
 impl MemHandler<FuncRef> {
-    fn import(module: &JITModule, current: &mut Function, funcs: &MemHandler<FuncId>) -> Self {
+    fn import(module: &mut JITModule, current: &mut Function, funcs: &MemHandler<FuncId>) -> Self {
         Self {
             load8: module.declare_func_in_func(funcs.load8, current),
             load16: module.declare_func_in_func(funcs.load16, current),
@@ -76,7 +76,11 @@ struct Symbols {
 }
 
 impl Symbols {
-    fn import(module: &JITModule, current: &mut Function, funcs: &crate::RuntimeFunctions) -> Self {
+    fn import(
+        module: &mut JITModule,
+        current: &mut Function,
+        funcs: &crate::RuntimeFunctions,
+    ) -> Self {
         Self {
             mmu: MemHandler::import(module, current, &funcs.mmu),
             push_shadow_stack: module.declare_func_in_func(funcs.push_shadow_stack, current),
@@ -155,7 +159,7 @@ impl VmPtr {
     fn store_arg(&self, builder: &mut FunctionBuilder, id: u16, value: Value) {
         let arg_offset = id as usize * std::mem::size_of::<u128>();
         let offset: i32 = (offset_of!(Cpu, args) + arg_offset).try_into().unwrap();
-        builder.ins().store(MemFlags::trusted(), value, self.0, offset);
+        builder.ins().store(MemFlags::trusted().with_vmctx(), value, self.0, offset);
     }
 
     fn load_var(
@@ -166,24 +170,20 @@ impl VmPtr {
     ) -> Value {
         let offset = VmPtr::var_offset(var);
         if var.offset == 0 {
-            builder.ins().load(ty, MemFlags::trusted(), self.0, offset)
+            builder.ins().load(ty, MemFlags::trusted().with_vmctx(), self.0, offset)
         }
         else {
-            let mut flags = MemFlags::new();
-            flags.set_notrap();
-            builder.ins().load(ty, flags, self.0, offset)
+            builder.ins().load(ty, MemFlags::new().with_vmctx().with_notrap(), self.0, offset)
         }
     }
 
     fn store_var(&self, builder: &mut FunctionBuilder, var: pcode::VarNode, value: Value) {
         let offset = VmPtr::var_offset(var);
         if var.offset == 0 {
-            builder.ins().store(MemFlags::trusted(), value, self.0, offset);
+            builder.ins().store(MemFlags::trusted().with_vmctx(), value, self.0, offset);
         }
         else {
-            let mut flags = MemFlags::new();
-            flags.set_notrap();
-            builder.ins().store(flags, value, self.0, offset);
+            builder.ins().store(MemFlags::new().with_vmctx().with_notrap(), value, self.0, offset);
         }
     }
 }
@@ -193,7 +193,12 @@ macro_rules! gen_load_store {
         impl VmPtr {
             fn $load_ident(&self, builder: &mut FunctionBuilder) -> Value {
                 let offset: i32 = ($offset).try_into().unwrap();
-                builder.ins().load(<$ty>::clif_type(), MemFlags::trusted(), self.0, offset)
+                builder.ins().load(
+                    <$ty>::clif_type(),
+                    MemFlags::trusted().with_vmctx(),
+                    self.0,
+                    offset,
+                )
             }
 
             fn $store_ident(
@@ -203,7 +208,7 @@ macro_rules! gen_load_store {
             ) {
                 let offset: i32 = ($offset).try_into().unwrap();
                 let value = value.into().get_value(builder);
-                builder.ins().store(MemFlags::trusted(), value, self.0, offset);
+                builder.ins().store(MemFlags::trusted().with_vmctx(), value, self.0, offset);
             }
         }
     };
@@ -302,7 +307,7 @@ impl TranslatorCtx {
 }
 
 pub(crate) fn translate<'a>(
-    module: &'a JITModule,
+    module: &'a mut JITModule,
     mut builder: FunctionBuilder<'a>,
     ctx: &'a mut TranslatorCtx,
     functions: &crate::RuntimeFunctions,
@@ -420,7 +425,7 @@ struct Translator<'a> {
 }
 
 impl<'a> Translator<'a> {
-    fn finalize(&mut self) {
+    fn finalize(mut self) {
         for (_, block) in self.ctx.local_blocks.drain() {
             self.builder.seal_block(block);
         }
@@ -448,13 +453,24 @@ impl<'a> Translator<'a> {
         self.builder.finalize();
     }
 
-    /// Creates a new block, jumps to it, switches to it, then seals it.
-    fn jump_next_block(&mut self) -> Block {
-        let next = self.builder.create_block();
-        self.builder.ins().jump(next, &[]);
-        self.builder.switch_to_block(next);
-        self.builder.seal_block(next);
-        next
+    /// Branches to `block` if `cond != 0`, creating a new block and switching to it and sealing it
+    /// to handle the fallthrough case.
+    fn branch_non_zero(&mut self, cond: Value, then_block: Block) -> Block {
+        let else_block = self.builder.create_block();
+        self.builder.ins().brif(cond, then_block, &[], else_block, &[]);
+        self.builder.switch_to_block(else_block);
+        self.builder.seal_block(else_block);
+        else_block
+    }
+
+    /// Branches to `block` if `cond == 0`, creating a new block and switching to it and sealing it
+    /// to handle the fallthrough case.
+    fn branch_zero(&mut self, cond: Value, then_block: Block) -> Block {
+        let else_block = self.builder.create_block();
+        self.builder.ins().brif(cond, else_block, &[], then_block, &[]);
+        self.builder.switch_to_block(else_block);
+        self.builder.seal_block(else_block);
+        else_block
     }
 
     /// Exit the JIT with the current interrupt code, value and block offset.
@@ -480,17 +496,16 @@ impl<'a> Translator<'a> {
 
     /// Generates code that exits the JIT if there is an active exception. Returns the block
     /// associated with the `ok` case.
-    fn maybe_exit_jit(&mut self) -> Block {
+    fn maybe_exit_jit(&mut self, ok_block: Option<Block>) -> Block {
         let exception_code = self.vm_ptr.load_exception_code(&mut self.builder);
 
-        let ok_block = self.builder.create_block();
+        let ok_block = ok_block.unwrap_or_else(|| self.builder.create_block());
 
         let err_block = self.builder.create_block();
         self.builder.set_cold_block(err_block);
 
         assert_eq!(ExceptionCode::None as u32, 0);
-        self.builder.ins().brnz(exception_code, err_block, &[]);
-        self.builder.ins().jump(ok_block, &[]);
+        self.builder.ins().brif(exception_code, err_block, &[], ok_block, &[]);
 
         // error:
         {
@@ -508,6 +523,13 @@ impl<'a> Translator<'a> {
         ok_block
     }
 
+    pub fn flush_state(&mut self) {
+        // @fixme: allow some hooks to only flush some variables.
+        for (var, state) in self.ctx.active_vars.drain() {
+            state.flush_to_mem(&mut self.builder, &self.vm_ptr, var);
+        }
+    }
+
     fn read_int(&mut self, var: pcode::Value) -> Value {
         self.read_typed(var, sized_int(var.size()))
     }
@@ -523,7 +545,7 @@ impl<'a> Translator<'a> {
         if var.size() == 10 {
             value = self.builder.ins().ireduce(types::I64, value);
         }
-        self.builder.ins().bitcast(ty, value)
+        self.builder.ins().bitcast(ty, MemFlags::new(), value)
     }
 
     fn read_bool(&mut self, var: pcode::Value) -> Value {
@@ -607,16 +629,18 @@ impl<'a> Translator<'a> {
                 }
                 state.last_size = var.size
             }
-            _ => {
-                // Just invalidate any cached value if the offset is not zero.
-                if let Some(entry) = self.ctx.active_vars.remove(&var.id) {
-                    entry.flush_to_mem(&mut self.builder, &self.vm_ptr, var.id);
-                }
-            }
+            // Just invalidate any cached value if the offset is not zero.
+            _ => self.invalidate_var(var),
         }
 
         if flush {
             self.vm_ptr.store_var(&mut self.builder, var, value);
+        }
+    }
+
+    fn invalidate_var(&mut self, var: pcode::VarNode) {
+        if let Some(entry) = self.ctx.active_vars.remove(&var.id) {
+            entry.flush_to_mem(&mut self.builder, &self.vm_ptr, var.id);
         }
     }
 
@@ -689,7 +713,6 @@ impl<'a> Translator<'a> {
             let inputs = stmt.inputs.get();
 
             let mut ctx = Ctx { trans: self, instruction: stmt.clone() };
-
             match stmt.op {
                 Op::Copy => ctx.emit_copy(),
                 Op::ZeroExtend => ctx.emit_zero_extend(),
@@ -774,7 +797,7 @@ impl<'a> Translator<'a> {
                         }
                         let ptr = ctx.get_trace_store_ptr(id - 1, inputs[0]);
                         let value = ctx.trans.read_int(inputs[1]);
-                        mem::store_host(ctx.trans, ptr, value, inputs[1].size());
+                        mem::store_host(ctx.trans, ptr, value);
                     }
                 },
 
@@ -786,22 +809,11 @@ impl<'a> Translator<'a> {
                     ctx.trans.interpret(ctx.instruction);
                     // The pcode operation may set an interupt, so check it here.
                     // @fixme: avoid checking all helpers.
-                    self.maybe_exit_jit();
+                    self.maybe_exit_jit(None);
                 }
                 Op::Hook(id) => {
-                    let current_pc =
-                        ctx.trans.builder.ins().iconst(types::I64, ctx.trans.last_addr as i64);
-
-                    // Fuzzware assumes PC is flushed to memory before calling the hook (even though
-                    // the correct value is available as a parameter), so write it here now.
-                    let reg_pc = ctx.trans.ctx.reg_pc;
-                    let pc_sized = ctx.trans.resize_int(current_pc, 8, reg_pc.size);
-                    ctx.trans.write(reg_pc, pc_sized);
-
-                    let (fn_ptr, data_ptr) = ctx.get_hook(id);
-                    let args = [self.vm_ptr.0, current_pc, data_ptr];
-                    self.builder.ins().call_indirect(self.hook_sig, fn_ptr, &args);
-                    self.maybe_exit_jit();
+                    ctx.call_hook(id);
+                    ctx.trans.maybe_exit_jit(None);
                 }
 
                 Op::TracerLoad(_) | Op::TracerStore(_) => {
@@ -821,7 +833,7 @@ impl<'a> Translator<'a> {
                     return;
                 }
 
-                // They operations should be removed during lifting, and IR-graph construction.
+                // These operations should be removed during lifting, and IR-graph construction.
                 Op::Subpiece(_)
                 | Op::Branch(_)
                 | Op::PcodeBranch(_)
@@ -832,15 +844,15 @@ impl<'a> Translator<'a> {
                     return;
                 }
             }
-
-            if self.builder.is_filled() {
-                tracing::error!("current block is filled (likely a JIT error)");
-                return;
-            }
         }
 
         self.builder.set_srcloc(codegen::ir::SourceLoc::new(self.srcloc));
         self.srcloc += 1;
+
+        let remaining_fuel = self.vm_ptr.load_fuel(&mut self.builder);
+        let new = self.builder.ins().iadd_imm(remaining_fuel, -(block.num_instructions as i64));
+        self.vm_ptr.store_fuel(&mut self.builder, new);
+
         self.translate_block_exit(&block.exit);
     }
 
@@ -857,8 +869,7 @@ impl<'a> Translator<'a> {
         let err_block = self.builder.create_block();
         self.builder.set_cold_block(err_block);
 
-        self.builder.ins().brnz(insufficient_fuel, err_block, &[]);
-        self.builder.ins().jump(ok_block, &[]);
+        self.builder.ins().brif(insufficient_fuel, err_block, &[], ok_block, &[]);
 
         // err:
         {
@@ -871,9 +882,6 @@ impl<'a> Translator<'a> {
         {
             self.builder.switch_to_block(ok_block);
             self.builder.seal_block(ok_block);
-
-            let new = self.builder.ins().iadd_imm(remaining_fuel, -required_fuel);
-            self.vm_ptr.store_fuel(&mut self.builder, new);
         }
     }
 
@@ -887,8 +895,7 @@ impl<'a> Translator<'a> {
                 let false_block = self.builder.create_block();
 
                 let cond = self.read_int(*cond);
-                self.builder.ins().brz(cond, false_block, &[]);
-                self.builder.ins().jump(true_block, &[]);
+                self.builder.ins().brif(cond, true_block, &[], false_block, &[]);
 
                 // true:
                 {

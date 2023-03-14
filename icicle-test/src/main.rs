@@ -13,22 +13,13 @@ fn main() {
         .with_env_filter(tracing_subscriber::EnvFilter::from_env("ICICLE_LOG"))
         .without_time()
         .with_writer(|| {
-            let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-            socket.connect("127.0.0.1:9500").unwrap();
-            std::io::BufWriter::new(icicle_vm::cpu::utils::UdpWriter::new(socket))
+            std::io::BufWriter::new(icicle_vm::cpu::utils::UdpWriter::new("127.0.0.1:9500"))
         })
         .init();
 
-    std::thread::Builder::new()
-        .stack_size(1024 * 1024 * 1024)
-        .spawn(|| {
-            if let Err(e) = run() {
-                eprintln!("{:?}", e);
-            }
-        })
-        .expect("failed to spawn thread")
-        .join()
-        .unwrap();
+    if let Err(e) = run() {
+        eprintln!("{:?}", e);
+    }
 }
 
 enum TestMode {
@@ -201,9 +192,10 @@ fn run_bench(triple: &str, config: &TestConfig) -> anyhow::Result<()> {
 
     let seconds = now.elapsed().as_secs_f64();
     eprintln!(
-        "{:.4} s / iter, {:.4} ms / inst ({} il instructions for {} cases)",
+        "{:.4} s / iter, {:.4} ms / inst, {:.1} instructions / sec ({} il instructions for {} cases)",
         seconds / times as f64,
         seconds / times as f64 / cases.len() as f64 * 1000.0,
+        (cases.len() as f64 * times as f64) / seconds,
         il_count / times,
         cases.len()
     );

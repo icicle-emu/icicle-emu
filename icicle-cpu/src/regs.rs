@@ -42,7 +42,7 @@ pub trait ValueSource {
         }
     }
 
-    fn write<R: RegValue>(&mut self, var: pcode::VarNode, value: R);
+    fn write_var<R: RegValue>(&mut self, var: pcode::VarNode, value: R);
 
     #[inline(always)]
     fn read_dynamic(&self, value: pcode::Value) -> DynamicValue {
@@ -66,17 +66,17 @@ pub trait ValueSource {
     fn write_trunc(&mut self, var: pcode::VarNode, val: impl Into<DynamicValue>) {
         let val = val.into();
         match var.size {
-            1 => self.write::<[u8; 1]>(var, val.zxt()),
-            2 => self.write::<[u8; 2]>(var, val.zxt()),
-            3 => self.write::<[u8; 3]>(var, val.zxt()),
-            4 => self.write::<[u8; 4]>(var, val.zxt()),
-            5 => self.write::<[u8; 5]>(var, val.zxt()),
-            6 => self.write::<[u8; 6]>(var, val.zxt()),
-            7 => self.write::<[u8; 7]>(var, val.zxt()),
-            8 => self.write::<[u8; 8]>(var, val.zxt()),
-            9 => self.write::<[u8; 9]>(var, val.zxt()),
-            10 => self.write::<[u8; 10]>(var, val.zxt()),
-            16 => self.write::<[u8; 16]>(var, val.zxt()),
+            1 => self.write_var::<[u8; 1]>(var, val.zxt()),
+            2 => self.write_var::<[u8; 2]>(var, val.zxt()),
+            3 => self.write_var::<[u8; 3]>(var, val.zxt()),
+            4 => self.write_var::<[u8; 4]>(var, val.zxt()),
+            5 => self.write_var::<[u8; 5]>(var, val.zxt()),
+            6 => self.write_var::<[u8; 6]>(var, val.zxt()),
+            7 => self.write_var::<[u8; 7]>(var, val.zxt()),
+            8 => self.write_var::<[u8; 8]>(var, val.zxt()),
+            9 => self.write_var::<[u8; 9]>(var, val.zxt()),
+            10 => self.write_var::<[u8; 10]>(var, val.zxt()),
+            16 => self.write_var::<[u8; 16]>(var, val.zxt()),
             _ => (),
         }
     }
@@ -96,12 +96,6 @@ impl Clone for Regs {
 }
 
 impl Regs {
-    pub fn new_boxed() -> Box<Self> {
-        let regs = Box::new_zeroed();
-        // Safety: `Regs` is valid when zeroed.
-        unsafe { regs.assume_init() }
-    }
-
     pub fn new() -> Regs {
         Regs([0; REGISTER_SPACE_BYTES])
     }
@@ -177,7 +171,7 @@ impl ValueSource for Regs {
         R::read(self, var)
     }
 
-    fn write<R: RegValue>(&mut self, var: pcode::VarNode, value: R) {
+    fn write_var<R: RegValue>(&mut self, var: pcode::VarNode, value: R) {
         R::write(self, var, value)
     }
 }
@@ -436,16 +430,16 @@ mod test {
 
     #[test]
     fn test_regs() {
-        let mut regs = Regs::new_boxed();
+        let mut regs: Box<Regs> = Box::default();
 
-        regs.write(pcode::VarNode::new(0, 1), 0x01_u8);
-        regs.write(pcode::VarNode::new(1, 1), 0x02_u8);
+        regs.write_var(pcode::VarNode::new(0, 1), 0x01_u8);
+        regs.write_var(pcode::VarNode::new(1, 1), 0x02_u8);
 
         assert_eq!(regs.read_var::<u8>(pcode::VarNode::new(0, 1)), 0x01_u8);
         assert_eq!(regs.read_var::<u8>(pcode::VarNode::new(1, 1)), 0x02_u8);
 
-        regs.write(pcode::VarNode::new(0, 2), 0x1211_u16);
-        regs.write(pcode::VarNode::new(1, 2), 0x1413_u16);
+        regs.write_var(pcode::VarNode::new(0, 2), 0x1211_u16);
+        regs.write_var(pcode::VarNode::new(1, 2), 0x1413_u16);
 
         assert_eq!(regs.read_var::<u16>(pcode::VarNode::new(0, 2)), 0x1211_u16);
         assert_eq!(regs.read_var::<u16>(pcode::VarNode::new(1, 2)), 0x1413_u16);

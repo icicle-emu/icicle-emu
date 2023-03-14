@@ -42,10 +42,6 @@ impl IoMemory for RngMem {
         Ok(())
     }
 
-    fn as_any(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
-
     fn snapshot(&mut self) -> Box<dyn Any> {
         Box::new((self.rng, self.limit))
     }
@@ -81,10 +77,6 @@ impl<W: std::io::Write + 'static> IoMemory for AsciiLogger<W> {
             }
         }
         Ok(())
-    }
-
-    fn as_any(&mut self) -> &mut dyn std::any::Any {
-        self
     }
 }
 

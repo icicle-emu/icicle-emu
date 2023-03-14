@@ -17,17 +17,26 @@ pub enum VmExit {
     /// The VM has halted.
     Halt,
 
+    /// Killed by an environment specific mechanism.
+    Killed,
+
     /// A deadlock was detected.
     Deadlock,
 
-    /// Internal error where MMU failed to allocate memory correctly.
-    AllocFailure,
+    /// MMU was unable to allocate memory for an operation.
+    OutOfMemory,
 
     /// Internal error where the emulator reached unimplemented code.
     Unimplemented,
 
     /// The VM exited due to a unhandled exception.
     UnhandledException((ExceptionCode, u64)),
+}
+
+impl Default for VmExit {
+    fn default() -> Self {
+        Self::Running
+    }
 }
 
 impl std::fmt::Debug for VmExit {
@@ -38,9 +47,10 @@ impl std::fmt::Debug for VmExit {
             Self::Breakpoint => write!(f, "Breakpoint"),
             Self::Interrupted => write!(f, "Interrupt"),
             Self::Halt => write!(f, "Halt"),
+            Self::Killed => write!(f, "Killed"),
             Self::Unimplemented => write!(f, "Unimplemented"),
             Self::Deadlock => write!(f, "Deadlock"),
-            Self::AllocFailure => write!(f, "AllocFailure"),
+            Self::OutOfMemory => write!(f, "OutOfMemory"),
             Self::UnhandledException((code, value)) => {
                 write!(f, "UnhandledException(code={code:?}, value={value:#0x})")
             }
