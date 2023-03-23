@@ -307,8 +307,7 @@ impl<'a> Lexer<'a> {
 
             // Numeric literal
             '0'..='9' => {
-                // @fixme: not all identifiers are valid numbers
-                self.eat_ident();
+                self.eat_number();
                 self.create_token(TokenKind::Number)
             }
 
@@ -485,6 +484,34 @@ impl<'a> Lexer<'a> {
         self.bump_while(is_ident_char);
         (start as usize)..=(self.prev as usize)
     }
+    /// Eat a number, decimal, hex, or binary notation
+    fn eat_number(&mut self) {
+        match self.bump() {
+            Some('0') => {}
+            //dec
+            Some('1'..='9') => {
+                self.bump_while(|c| matches!(c, '0'..='9'));
+                return;
+            }
+            Some(_) | None => {
+                panic!("called `eat_number` at an invalid location");
+            }
+        };
+        match self.peek_char() {
+            //hex
+            Some('x') | Some('X') => {
+                self.bump();
+                self.bump_while(|c| matches!(c, '0'..='9' | 'a'..='f' | 'A'..='F'))
+            }
+            //bin
+            Some('b') | Some('B') => {
+                self.bump();
+                self.bump_while(|c| matches!(c, '0'..='1'))
+            }
+            //just 0
+            Some(_) | None => (),
+        }
+    }
 
     /// Eat a string surrounded by `"` characters
     fn eat_string(&mut self) -> bool {
@@ -517,6 +544,21 @@ fn parse_ident() {
 
     let token = tokenize_all("123_invalid_ident")[0];
     assert_ne!(token, TokenKind::Ident);
+}
+
+#[test]
+fn parse_number() {
+    let token = tokenize_all("123")[0];
+    assert_eq!(token, TokenKind::Number);
+
+    let token = tokenize_all("0x0123ABC")[0];
+    assert_eq!(token, TokenKind::Number);
+
+    let token = tokenize_all("0b101011111")[0];
+    assert_eq!(token, TokenKind::Number);
+
+    let token = tokenize_all("0")[0];
+    assert_eq!(token, TokenKind::Number);
 }
 
 #[test]
