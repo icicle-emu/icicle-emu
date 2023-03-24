@@ -71,23 +71,24 @@ Icicle can also be used as a library, in a similar to Unicorn:
 ```rust
 fn main() {
     // Setup the CPU state for the target triple
-    let cpu_config = icicle_vm::cpu::Config::from_triple("target-triple").unwrap();
-    let mut vm = icicle_vm::build(&cpu_config).unwrap()
+    let cpu_config = icicle_vm::cpu::Config::from_target_triple("target-triple");
+    let mut vm = icicle_vm::build(&cpu_config).unwrap();
 
     // Setup an environment to run inside of.
     let mut env = icicle_vm::env::build_auto(&mut vm).unwrap();
     // Load a binary into the environment.
-    env.load(&mut vm.cpu, "path/to/binary").unwrap();
-    vm.env = Box::new(env);
+    env.load(&mut vm.cpu, "path/to/binary".as_bytes()).unwrap();
+    vm.env = env;
 
     // Add instrumentation
     let storage = vm.cpu.trace.register_store(...);
     vm.add_injector(...);
 
     // Run until the VM exits.
-    let exit = vm.run().unwrap();
+    let exit = vm.run();
     println!("{exit:?}");
 }
+
 ```
 
 ## License
