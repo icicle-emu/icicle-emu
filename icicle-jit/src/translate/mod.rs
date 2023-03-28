@@ -341,6 +341,7 @@ pub(crate) fn translate<'a>(
         srcloc: 0,
 
         last_addr: 0,
+        instruction_len: 0,
         block_id: 0,
         block_offset: 0,
 
@@ -418,6 +419,7 @@ struct Translator<'a> {
     srcloc: u32,
 
     last_addr: u64,
+    instruction_len: u64,
     block_id: u64,
     block_offset: u64,
 
@@ -682,8 +684,9 @@ impl<'a> Translator<'a> {
         self.builder.ins().call(self.symbols.run_interpreter, &args);
     }
 
-    fn next_instruction(&mut self, addr: u64, _len: u64) {
+    fn next_instruction(&mut self, addr: u64, len: u64) {
         self.last_addr = addr;
+        self.instruction_len = len;
         self.builder.ins().nop();
     }
 
@@ -853,6 +856,12 @@ impl<'a> Translator<'a> {
         let new = self.builder.ins().iadd_imm(remaining_fuel, -(block.num_instructions as i64));
         self.vm_ptr.store_fuel(&mut self.builder, new);
 
+        // Since we are exiting the block, reset the block offset and set the last address to after
+        // the completed instruction. This ensures that the runtime does not try to run clean up
+        // code for handling partially executed blocks and will resume at the correct location.
+        self.block_offset = 0;
+        self.last_addr = self.last_addr + self.instruction_len;
+
         self.translate_block_exit(&block.exit);
     }
 
@@ -943,8 +952,7 @@ impl<'a> Translator<'a> {
                 }
             },
             Target::External(target) => {
-                // Check try to directly jump to the target, if it is defined in the current
-                // function.
+                // Try to directly jump to the target if it is defined in the current function.
                 if let pcode::Value::Const(addr, _) = target {
                     if let Some((_, block)) =
                         self.ctx.entry_points.iter().find(|entry| entry.0 == *addr)
