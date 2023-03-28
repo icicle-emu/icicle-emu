@@ -75,13 +75,13 @@ impl CodeInjector for InstructionHookInjection {
             self.tmp_block.next_tmp = block.pcode.next_tmp;
 
             for stmt in block.pcode.instructions.drain(..) {
+                self.tmp_block.push(stmt);
                 if let pcode::Op::InstructionMarker = stmt.op {
                     if self.addrs.iter().any(|&addr| addr == stmt.inputs.first().as_u64()) {
                         self.tmp_block.push(pcode::Op::Hook(self.hook));
                         code.modified.insert(id);
                     }
                 }
-                self.tmp_block.push(stmt);
             }
 
             std::mem::swap(&mut self.tmp_block.instructions, &mut block.pcode.instructions);
