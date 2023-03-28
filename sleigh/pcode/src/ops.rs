@@ -495,6 +495,7 @@ pub enum Op {
     IntNot,
     IntNegate,
     IntCountOnes,
+    IntCountLeadingZeroes,
 
     BoolAnd,
     BoolOr,

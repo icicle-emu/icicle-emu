@@ -348,6 +348,19 @@ pub trait BitVecExt {
         Some(count)
     }
 
+    /// Counts the number leading bits that are set to zero, returning None if there are any unknown
+    /// bits before the first one bit.
+    fn count_leading_zeros(&self) -> Option<u32> {
+        let mut count = 0;
+        for bit in self.slice().iter().rev() {
+            if bit.const_value()? as u32 == 1 {
+                return Some(count);
+            }
+            count += 1;
+        }
+        Some(count)
+    }
+
     /// Set the bit vector to be equal to `value`.
     fn set_const(&mut self, mut value: u64) {
         for bit in self.slice_mut().iter_mut() {
@@ -799,7 +812,10 @@ fn eval(op: pcode::Op, a: &[Bit], b: &[Bit], output: &mut [Bit]) {
             Some(count) => output.set_const(count as u64),
             None => output.fill(Bit::Unknown),
         },
-
+        Op::IntCountLeadingZeroes => match a.count_leading_zeros() {
+            Some(count) => output.set_const(count as u64),
+            None => output.fill(Bit::Unknown),
+        },
         Op::IntSignedLess => {
             let (result, overflow) = a.sub_overflow(b);
             *output.bool_mut() = result.sign().xor(overflow);
@@ -1136,5 +1152,25 @@ mod test {
         let mut expected = Value::zero();
         expected[0] = Bit::Expr(Expr { id: 0, invert: false, offset: 15 });
         assert_eq!(result, expected.slice_to(0, 16));
+    }
+
+    #[test]
+    fn count_ones() {
+        fn do_count_ones(value: u16) -> bool {
+            let tmp = pcode::VarNode::new(1, 2);
+            let result = eval_op(pcode::Op::IntCountOnes, &[value.into()], tmp);
+            result.get_const() == Some(value.count_ones() as u64)
+        }
+        quickcheck::quickcheck(do_count_ones as fn(u16) -> bool)
+    }
+
+    #[test]
+    fn count_leading_zeros() {
+        fn do_count_leading_zeros(value: u16) -> bool {
+            let tmp = pcode::VarNode::new(1, 2);
+            let result = eval_op(pcode::Op::IntCountLeadingZeroes, &[value.into()], tmp);
+            result.get_const() == Some(value.leading_zeros() as u64)
+        }
+        quickcheck::quickcheck(do_count_leading_zeros as fn(u16) -> bool)
     }
 }

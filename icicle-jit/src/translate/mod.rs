@@ -755,6 +755,7 @@ impl<'a> Translator<'a> {
                 Op::IntNot => ctx.emit_int_unary_op(ops::int_not),
                 Op::IntNegate => ctx.emit_int_unary_op(ops::int_negate),
                 Op::IntCountOnes => ctx.emit_count_ones(),
+                Op::IntCountLeadingZeroes => ctx.emit_count_leading_zeroes(),
 
                 Op::BoolAnd => ctx.emit_bool_op(ops::bool_and),
                 Op::BoolOr => ctx.emit_bool_op(ops::bool_or),

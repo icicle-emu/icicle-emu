@@ -145,6 +145,16 @@ impl<'a, 'b> Ctx<'a, 'b> {
         self.trans.write(self.instruction.output, result);
     }
 
+    pub fn emit_count_leading_zeroes(&mut self) {
+        let input = self.instruction.inputs.first();
+        let x = self.trans.read_int(input);
+        let result = {
+            let tmp = self.trans.builder.ins().clz(x);
+            self.trans.resize_int(tmp, input.size(), self.instruction.output.size)
+        };
+        self.trans.write(self.instruction.output, result);
+    }
+
     pub fn emit_div_op(&mut self, op: fn(&mut Translator, Value, Value) -> Value) {
         if self.instruction.output.size > 8 {
             // 128-bit division is not currently supported in cranelift

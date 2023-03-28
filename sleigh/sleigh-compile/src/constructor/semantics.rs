@@ -191,7 +191,8 @@ impl<'a, 'b> Builder<'a, 'b> {
             | pcode::Op::FloatCeil
             | pcode::Op::FloatFloor
             | pcode::Op::FloatRound
-            | pcode::Op::IntCountOnes => {
+            | pcode::Op::IntCountOnes
+            | pcode::Op::IntCountLeadingZeroes => {
                 let output = output.as_mut().unwrap();
                 if self.use_fallback_sizes
                     && (self.size_of(inputs[0]).is_none() || self.size_of(*output).is_none())
@@ -932,6 +933,7 @@ fn translate_inbuilt_func(name: &str) -> Option<(pcode::Op, usize)> {
         "float2float" => (Op::FloatToFloat, 1),
 
         "popcount" => (Op::IntCountOnes, 1),
+        "lzcount" => (Op::IntCountLeadingZeroes, 1),
         _ => return None,
     })
 }

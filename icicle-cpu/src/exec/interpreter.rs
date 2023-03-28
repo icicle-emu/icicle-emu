@@ -84,6 +84,7 @@ where
         Op::IntNot => int_single_op::<IntNot, _>(exec, inputs[0], output),
         Op::IntNegate => int_single_op::<IntNeg, _>(exec, inputs[0], output),
         Op::IntCountOnes => count_ones(exec, inputs[0], output),
+        Op::IntCountLeadingZeroes => count_leading_zeros(exec, inputs[0], output),
 
         Op::BoolAnd => bool_op::<BoolAnd, _>(exec, inputs, output),
         Op::BoolOr => bool_op::<BoolOr, _>(exec, inputs, output),
@@ -136,7 +137,12 @@ where
         Op::InstructionMarker => exec.next_instruction(inputs[0].as_u64(), inputs[1].as_u64()),
         Op::Invalid => exec.exception(ExceptionCode::InvalidInstruction, 0),
 
-        _ => panic!("Unexpected operation in interpreter: {stmt:?}"),
+        Op::Subpiece(_)
+        | Op::Branch(_)
+        | Op::PcodeBranch(_)
+        | Op::PcodeLabel(_)
+        | Op::TracerLoad(_)
+        | Op::TracerStore(_) => panic!("Unexpected operation in interpreter: {stmt:?}"),
     }
 }
 
@@ -618,6 +624,21 @@ where
         4 => exec.read::<u32>(input).count_ones(),
         8 => exec.read::<u64>(input).count_ones(),
         16 => exec.read::<u128>(input).count_ones(),
+        size => return exec.invalid_op_size(size),
+    };
+    exec.write_trunc(output, result);
+}
+
+fn count_leading_zeros<E>(exec: &mut E, input: Value, output: VarNode)
+where
+    E: PcodeExecutor,
+{
+    let result = match input.size() {
+        1 => exec.read::<u8>(input).leading_zeros(),
+        2 => exec.read::<u16>(input).leading_zeros(),
+        4 => exec.read::<u32>(input).leading_zeros(),
+        8 => exec.read::<u64>(input).leading_zeros(),
+        16 => exec.read::<u128>(input).leading_zeros(),
         size => return exec.invalid_op_size(size),
     };
     exec.write_trunc(output, result);
