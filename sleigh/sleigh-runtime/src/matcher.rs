@@ -26,11 +26,27 @@ pub struct SequentialMatcher {
 }
 
 impl SequentialMatcher {
-    /// Find the first constructor that matches the current context
-    pub fn match_constructor(&self, state: &Decoder) -> Option<ConstructorId> {
+    /// Find the first constructor that matches the current context, if last_constructor
+    /// is provided search from the next constructor onward.
+    pub fn match_constructor(
+        &self,
+        state: &Decoder,
+        last_constructor: Option<ConstructorId>,
+    ) -> Option<ConstructorId> {
         let context = state.context;
         let token = state.get_raw_token(Token::new(self.token_size as u8));
-        self.cases
+        // the cases from the last constructor (non-inclusive) onward
+        let cases = match last_constructor {
+            None => &self.cases,
+            Some(last_constructor) => {
+                let last_constructor_index =
+                    self.cases.iter().enumerate().find_map(|(i, case)| {
+                        (case.constructor == last_constructor).then_some(i)
+                    })?;
+                self.cases.get(last_constructor_index + 1..)?
+            }
+        };
+        cases
             .iter()
             .find(|case| case.matches(state, context, token))
             .map(|case| case.constructor)

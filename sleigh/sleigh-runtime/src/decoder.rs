@@ -99,14 +99,33 @@ impl Decoder {
         inst: &mut Instruction,
         table: TableId,
     ) -> Option<DecodedConstructor> {
-        let constructor_id = match sleigh.match_constructor_with(self, table) {
-            Some(found) => found,
-            None => {
+        // try all constructors
+        let mut last_constructor = None;
+        loop {
+            // get a matching constructor, next one if backtracking
+            last_constructor = sleigh.match_constructor_with(self, table, last_constructor);
+            let Some(constructor_id) = last_constructor else {
+                // no more constructors
                 inst.last_subtable = table;
                 return None;
+            };
+            // check if is possible to decode it
+            if let Some(constructor) =
+                self.decode_subtable_constructor(sleigh, inst, table, constructor_id)
+            {
+                return Some(constructor);
             }
-        };
+            //otherwise just backtrack and try with the next constructor
+        }
+    }
 
+    fn decode_subtable_constructor(
+        &mut self,
+        sleigh: &SleighData,
+        inst: &mut Instruction,
+        table: TableId,
+        constructor_id: ConstructorId,
+    ) -> Option<DecodedConstructor> {
         let mut ctx = inst.alloc_constructor(sleigh, constructor_id).ok()?;
         let mut next = self.next_offset;
 
