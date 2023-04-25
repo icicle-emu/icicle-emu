@@ -413,3 +413,32 @@ impl SleighDataCache {
         (start, end)
     }
 }
+
+#[test]
+fn backtracking() {
+    const INSTRUCTIONS: &[(u32, &str)] = &[
+        // shift 1
+        (0x080021e2, "eor r0,r1,#0x8"),
+        (0x010c21e2, "eor r0,r1,#0x100"),
+
+        // shift 2
+        (0x020021e0, "eor r0,r1,r2"),
+        (0x220021e0, "eor r0,r1,r2, lsr #32"),
+    ];
+
+    let ghidra_home = std::env::var("GHIDRA_SRC").unwrap();
+    let file = format!(
+        "{}/Ghidra/Processors/ARM/data/languages/ARM4_le.slaspec",
+        ghidra_home
+    );
+    let sleigh = from_path(&file).unwrap();
+    for (token, result) in INSTRUCTIONS.iter() {
+        println!("try to decode {}", result);
+        let mut decoder = sleigh_runtime::Decoder::new();
+        decoder.set_inst(0, &token.to_be_bytes());
+        let instruction = sleigh.decode(&mut decoder).unwrap();
+        let output = sleigh.disasm(&instruction).unwrap();
+
+        assert_eq!(&output, result);
+    }
+}
