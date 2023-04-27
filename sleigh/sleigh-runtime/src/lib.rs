@@ -37,7 +37,7 @@ impl Runtime {
         Self {
             context,
             lifter: Lifter::new(),
-            state: Decoder::new(),
+            state: Decoder::default(),
             disasm: String::new(),
             instruction: Instruction::default(),
         }
@@ -49,10 +49,9 @@ impl Runtime {
         addr: u64,
         bytes: &'_ [u8],
     ) -> Option<&Instruction> {
-        self.state.global_context = self.context;
         self.state.set_inst(addr, bytes);
         sleigh.decode_into(&mut self.state, &mut self.instruction)?;
-        self.context = self.state.global_context;
+        self.context = self.state.context();
         Some(&self.instruction)
     }
 
@@ -94,6 +93,57 @@ impl Token {
     pub fn offset(self, amount: u8) -> Self {
         Self { offset: self.offset + amount, ..self }
     }
+
+    /// Read a raw token (i.e. without any endianness conversion) of `token_size` bytes, from the
+    /// instruction stream at `offset`.
+    ///
+    /// Note: The instruction stream is padded with zeros.
+    #[inline]
+    pub fn get_raw_token(&self, bytes: &[u8]) -> u64 {
+        let start = self.offset as usize;
+        let end = (start + self.size as usize).min(bytes.len());
+
+        let bytes = &bytes[start..end];
+        let mut buf = [0; 8];
+        buf[..bytes.len()].copy_from_slice(bytes);
+        u64::from_le_bytes(buf)
+    }
+
+    /// Read a token from the instruction stream.
+    pub(crate) fn get_token(&self, bytes: &[u8], big_endian: bool) -> u64 {
+        // Macro for specialized token sizes.
+        macro_rules! read_token {
+            ($ty:ty) => {{
+                let start = self.offset as usize;
+                match bytes.get(start..start + std::mem::size_of::<$ty>()) {
+                    Some(bytes) => {
+                        let array = bytes.try_into().unwrap();
+                        match big_endian {
+                            true => <$ty>::from_be_bytes(array) as u64,
+                            false => <$ty>::from_le_bytes(array) as u64,
+                        }
+                    }
+                    None => 0,
+                }
+            }};
+        }
+
+        match self.size as usize {
+            1 => read_token!(u8),
+            2 => read_token!(u16),
+            4 => read_token!(u32),
+            8 => read_token!(u64),
+            x if x < 8 => {
+                let mut token = self.get_raw_token(bytes).to_le_bytes();
+                if big_endian {
+                    token[..x].reverse();
+                }
+                u64::from_le_bytes(token)
+            }
+            _ => panic!("invalid token size: {}", self.size),
+        }
+    }
+
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -486,15 +536,17 @@ impl SleighData {
         }
     }
 
-    /// Finds a matching constructor given the current decoder state using the matcher `matcher_id`.
-    fn match_constructor_with(
-        &self,
-        state: &Decoder,
+    /// All constructors given the current decoder state using the matcher `matcher_id`.
+    fn match_constructors_with<'a>(
+        &'a self,
+        bytes: &'a [u8],
+        big_endian: bool,
+        context: u64,
         matcher_id: MatcherIndex,
-    ) -> Option<ConstructorId> {
+    ) -> impl Iterator<Item = ConstructorId> + 'a {
         match &self.matchers[matcher_id as usize] {
             Matcher::SequentialMatcher(matcher) => {
-                return matcher.match_constructor(state);
+                matcher.match_constructors(bytes, big_endian, context)
             }
         }
     }

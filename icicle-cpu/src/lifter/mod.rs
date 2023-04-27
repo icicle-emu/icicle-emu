@@ -57,7 +57,7 @@ impl InstructionLifter {
     pub fn new() -> Self {
         Self {
             lifter: sleigh_runtime::Lifter::new(),
-            decoder: sleigh_runtime::Decoder::new(),
+            decoder: sleigh_runtime::Decoder::default(),
             decoded: sleigh_runtime::Instruction::default(),
             lifted: pcode::Block::new(),
             generate_disassembly: true,
@@ -68,7 +68,7 @@ impl InstructionLifter {
     }
 
     pub fn set_context(&mut self, context: u64) {
-        self.decoder.global_context = context;
+        self.decoder.set_context(context);
     }
 
     /// Lift a single instruction starting at `vaddr` returning the address of the next instruction,
@@ -708,7 +708,7 @@ impl BlockLifter {
             }
         }
 
-        self.current.context = self.instruction_lifter.decoder.global_context;
+        self.current.context = self.instruction_lifter.decoder.context();
         Some(self.current.next)
     }
 }

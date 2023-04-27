@@ -8,22 +8,27 @@ use crate::{
     ConstructorId, Field, TableId, Token,
 };
 
-/// The decoder context for the current instruction.
-pub struct Decoder {
+/// The Non-mutable data from the Decoder
+#[derive(Default)]
+pub(crate) struct DecoderData {
+    /// The bytes in the instruction stream.
+    bytes: Vec<u8>,
+
+    /// Configures whether token fields should be decoded as big endian.
+    pub big_endian: bool,
+
+    /// The base address of the instruction stream.
+    base_addr: u64,
+}
+
+/// The Mutable data from the Decoder
+#[derive(Default)]
+pub(crate) struct DecoderState {
     /// The global decoder context.
     pub global_context: u64,
 
     /// The local context value.
     pub(crate) context: u64,
-
-    /// The bytes in the instruction stream.
-    bytes: Vec<u8>,
-
-    /// Configures whether token fields should be decoded as big endian.
-    big_endian: bool,
-
-    /// The base address of the instruction stream.
-    base_addr: u64,
 
     /// The offset of the current token in instruction stream.
     offset: usize,
@@ -38,38 +43,65 @@ pub struct Decoder {
     eval_stack: Vec<i64>,
 }
 
+/// The decoder context for the current instruction.
+#[derive(Default)]
+pub struct Decoder {
+    pub(crate) data: DecoderData,
+    pub(crate) state: DecoderState,
+}
+
 impl Decoder {
-    pub fn new() -> Self {
+    pub fn new(bytes: Vec<u8>, big_endian: bool, base_addr: u64) -> Self {
         Self {
-            global_context: 0,
-            context: 0,
-            bytes: Vec::new(),
-            big_endian: false,
-            base_addr: 0,
-            offset: 0,
-            next_offset: 0,
-            token_stack: Vec::new(),
-            eval_stack: Vec::new(),
+            data: DecoderData {
+                bytes,
+                big_endian,
+                base_addr,
+            },
+            state: DecoderState::default(),
         }
+    }
+    /// Decode the current instruction storing the result in `inst`.
+    pub fn decode_into(&mut self, sleigh: &SleighData, inst: &mut Instruction) -> Option<()> {
+        self.data.big_endian = sleigh.big_endian;
+        let mut inner = InnerDecoder {
+            data: &self.data,
+            state: &mut self.state,
+        };
+        inner.decode_into(sleigh, inst)
     }
 
     pub fn set_inst(&mut self, base_addr: u64, bytes: &[u8]) {
-        self.context = self.global_context;
-        self.base_addr = base_addr;
-        self.offset = 0;
-        self.next_offset = 0;
-        self.bytes.clear();
-        self.bytes.extend_from_slice(bytes);
+        self.state.context = 0;
+        self.data.base_addr = base_addr;
+        self.state.offset = 0;
+        self.state.next_offset = 0;
+        self.data.bytes.clear();
+        self.data.bytes.extend_from_slice(bytes);
     }
 
+    pub fn context(&self) -> u64 {
+        self.state.global_context
+    }
+
+    pub fn set_context(&mut self, context: u64) {
+        self.state.global_context = context;
+    }
+}
+
+pub(crate) struct InnerDecoder<'a, 'b> {
+    pub data: &'a DecoderData,
+    pub state: &'b mut DecoderState,
+}
+
+impl<'a, 'b> InnerDecoder<'a, 'b> {
     /// Decode the current instruction storing the result in `inst`.
     pub fn decode_into(&mut self, sleigh: &SleighData, inst: &mut Instruction) -> Option<()> {
         // Clear any noflow fields from `global_context`
         for entry in sleigh.context_fields.iter().filter(|entry| !entry.flow) {
-            entry.field.set(&mut self.global_context, 0);
+            entry.field.set(&mut self.state.global_context, 0);
         }
 
-        self.big_endian = sleigh.big_endian;
         let root = inst.init();
 
         let constructor = self.decode_subtable(sleigh, inst, ROOT_TABLE_ID)?;
@@ -83,12 +115,12 @@ impl Decoder {
         // Note: this differs from the behaviour of the disassembly section, where `inst_next`
         // refers to the address immediately after the first instruction.
         if let Some(_) = inst.delay_slot {
-            self.offset = self.next_offset;
+            self.state.offset = self.state.next_offset;
             inst.delay_slot = Some(self.decode_subtable(sleigh, inst, ROOT_TABLE_ID)?);
         }
 
-        inst.inst_start = self.base_addr;
-        inst.inst_next = self.base_addr + self.next_offset as u64;
+        inst.inst_start = self.data.base_addr;
+        inst.inst_next = self.data.base_addr + self.state.next_offset as u64;
 
         Some(())
     }
@@ -99,41 +131,63 @@ impl Decoder {
         inst: &mut Instruction,
         table: TableId,
     ) -> Option<DecodedConstructor> {
-        let constructor_id = match sleigh.match_constructor_with(self, table) {
-            Some(found) => found,
-            None => {
-                inst.last_subtable = table;
-                return None;
+        let constructors = sleigh.match_constructors_with(
+            self.bytes_offset(),
+            self.data.big_endian,
+            self.state.context,
+            table,
+        );
+        // info required to rever the decoder to the initial state
+        let orig_next_offset = self.state.next_offset;
+        let orig_token_stack_len = self.state.token_stack.len();
+        // try all the constructors
+        for constructor_id in constructors {
+            match self.decode_subtable_constructor(sleigh, inst, table, constructor_id) {
+                Some(decoded) => return Some(decoded),
+                //just backtrack and try with the next constructor
+                None => {
+                    self.state.next_offset = orig_next_offset;
+                    self.state.token_stack.truncate(orig_token_stack_len);
+                }
             }
-        };
+        }
+        None
+    }
 
+    fn decode_subtable_constructor(
+        &mut self,
+        sleigh: &SleighData,
+        inst: &mut Instruction,
+        table: TableId,
+        constructor_id: ConstructorId,
+    ) -> Option<DecodedConstructor> {
         let mut ctx = inst.alloc_constructor(sleigh, constructor_id).ok()?;
-        let mut next = self.next_offset;
+        let mut next = self.state.next_offset;
 
         if DEBUG {
             eprintln!(
                 "[{:>2}] constructor={}, offset={}, next={next} actions={:?}",
                 table,
                 constructor_id,
-                self.offset,
+                self.state.offset,
                 ctx.as_ref().decode_actions()
             );
         }
 
-        self.next_offset = self.offset;
+        self.state.next_offset = self.state.offset;
         for action in ctx.as_ref().decode_actions() {
             match action {
                 DecodeAction::ModifyContext(field, expr) => {
                     let value = self.eval_context_expr(*expr, sleigh);
-                    field.set(&mut self.context, value);
+                    field.set(&mut self.state.context, value);
                 }
                 DecodeAction::SaveContext(field) => {
-                    let value = field.extract(self.context);
-                    field.set(&mut self.global_context, value);
+                    let value = field.extract(self.state.context);
+                    field.set(&mut self.state.global_context, value);
                 }
                 DecodeAction::Eval(idx, kind) => {
                     ctx.locals_mut()[*idx as usize] = match kind {
-                        EvalKind::ContextField(field) => field.extract(self.context),
+                        EvalKind::ContextField(field) => field.extract(self.state.context),
                         EvalKind::TokenField(token, field) => field.extract(self.get_token(*token)),
                     };
                 }
@@ -150,90 +204,44 @@ impl Decoder {
                     // token.
                     //
                     //@todo: check this behaviour.
-                    next = next.max(self.next_offset);
-                    self.next_offset = self.offset + *size as usize;
+                    next = next.max(self.state.next_offset);
+                    self.state.next_offset = self.state.offset + *size as usize;
                 }
                 DecodeAction::GroupStart => self.group_start(),
                 DecodeAction::GroupEnd => self.group_end(),
-                DecodeAction::ExpandStart => next = next.max(self.next_offset),
-                DecodeAction::ExpandEnd => self.next_offset = self.next_offset.max(next),
+                DecodeAction::ExpandStart => next = next.max(self.state.next_offset),
+                DecodeAction::ExpandEnd => self.state.next_offset = self.state.next_offset.max(next),
             }
         }
-        self.next_offset = next.max(self.next_offset);
+        self.state.next_offset = next.max(self.state.next_offset);
 
         Some(ctx.constructor)
     }
 
     fn eval_context_expr(&mut self, expr: DisasmExprRange, sleigh: &SleighData) -> i64 {
-        let mut stack = std::mem::take(&mut self.eval_stack);
+        let mut stack = std::mem::take(&mut self.state.eval_stack);
         let expr = sleigh.get_context_mod_expr(expr);
         let result =
             eval_disasm_expr(&mut stack, &*self, expr).expect("invalid disassembly expression");
-        self.eval_stack = stack;
+        self.state.eval_stack = stack;
         result
     }
 
-    /// Read a raw token (i.e. without any endianness conversion) of `token_size` bytes, from the
-    /// instruction stream at `offset`.
-    ///
-    /// Note: The instruction stream is padded with zeros.
-    #[inline]
-    pub fn get_raw_token(&self, token: Token) -> u64 {
-        let start = token.offset as usize + self.offset;
-        let end = (start + token.size as usize).min(self.bytes.len());
-
-        match self.bytes.get(start..end) {
-            Some(bytes) => {
-                let mut buf = [0; 8];
-                buf[..bytes.len()].copy_from_slice(bytes);
-                u64::from_le_bytes(buf)
-            }
-            None => 0,
-        }
-    }
-
-    /// Read a token from the instruction stream.
-    pub(crate) fn get_token(&self, token: Token) -> u64 {
-        // Macro for specialized token sizes.
-        macro_rules! read_token {
-            ($ty:ty) => {{
-                let start = token.offset as usize + self.offset;
-                match self.bytes.get(start..start + std::mem::size_of::<$ty>()) {
-                    Some(bytes) => {
-                        let array = bytes.try_into().unwrap();
-                        match self.big_endian {
-                            true => <$ty>::from_be_bytes(array) as u64,
-                            false => <$ty>::from_le_bytes(array) as u64,
-                        }
-                    }
-                    None => 0,
-                }
-            }};
-        }
-
-        match token.size as usize {
-            1 => read_token!(u8),
-            2 => read_token!(u16),
-            4 => read_token!(u32),
-            8 => read_token!(u64),
-            x if x < 8 => {
-                let mut token = self.get_raw_token(token).to_le_bytes();
-                if self.big_endian {
-                    token[..x].reverse();
-                }
-                u64::from_le_bytes(token)
-            }
-            _ => panic!("invalid token size: {}", token.size),
-        }
-    }
-
     fn group_start(&mut self) {
-        self.token_stack.push(self.offset);
-        self.offset = self.next_offset;
+        self.state.token_stack.push(self.state.offset);
+        self.state.offset = self.state.next_offset;
     }
 
     fn group_end(&mut self) {
-        self.offset = self.token_stack.pop().unwrap();
+        self.state.offset = self.state.token_stack.pop().unwrap();
+    }
+
+    pub fn bytes_offset(&self) -> &'a [u8] {
+        &self.data.bytes[self.state.offset..]
+    }
+
+    pub(crate) fn get_token(&self, token: Token) -> u64 {
+        token.get_token(self.bytes_offset(), self.data.big_endian)
     }
 }
 
@@ -429,7 +437,7 @@ impl<'a, 'b> SubtableCtxMut<'a, 'b> {
         SubtableCtxMut { data: self.data, inst: self.inst, constructor }
     }
 
-    fn eval_disasm_expr(&mut self, state: &mut Decoder) {
+    fn eval_disasm_expr(&mut self, state: &mut InnerDecoder) {
         for subtable in self.constructor.subtables.0..self.constructor.subtables.1 {
             let constructor = self.inst.subtables[subtable as usize];
             let mut ctx = SubtableCtxMut { data: self.data, inst: self.inst, constructor };
@@ -437,7 +445,7 @@ impl<'a, 'b> SubtableCtxMut<'a, 'b> {
         }
 
         for (local, expr) in self.as_ref().post_decode_actions() {
-            let mut stack = std::mem::take(&mut state.eval_stack);
+            let mut stack = std::mem::take(&mut state.state.eval_stack);
 
             let value = eval_disasm_expr(
                 &mut stack,
@@ -447,7 +455,7 @@ impl<'a, 'b> SubtableCtxMut<'a, 'b> {
             .expect("invalid disasm expr");
             self.locals_mut()[*local as usize] = value;
 
-            state.eval_stack = stack;
+            state.state.eval_stack = stack;
         }
     }
 
@@ -469,14 +477,14 @@ pub enum ContextModValue {
     InstStart,
 }
 
-impl EvalDisasmValue for &'_ Decoder {
+impl EvalDisasmValue for &'_ InnerDecoder<'_, '_> {
     type Value = ContextModValue;
 
     fn eval(&self, value: &Self::Value) -> i64 {
         match value {
-            ContextModValue::ContextField(field) => field.extract(self.context),
+            ContextModValue::ContextField(field) => field.extract(self.state.context),
             ContextModValue::TokenField(token, field) => field.extract(self.get_token(*token)),
-            ContextModValue::InstStart => self.base_addr as i64,
+            ContextModValue::InstStart => self.data.base_addr as i64,
         }
     }
 }
@@ -489,21 +497,21 @@ pub enum DisasmConstantValue {
     InstNext,
 }
 
-struct DisasmLocalEval<'a, 'b, 'c> {
-    state: &'c Decoder,
+struct DisasmLocalEval<'a, 'b, 'c, 'd, 'e> {
+    state: &'c InnerDecoder<'d, 'e>,
     ctx: SubtableCtx<'a, 'b>,
 }
 
-impl EvalDisasmValue for DisasmLocalEval<'_, '_, '_> {
+impl EvalDisasmValue for DisasmLocalEval<'_, '_, '_, '_, '_> {
     type Value = DisasmConstantValue;
 
     fn eval(&self, value: &Self::Value) -> i64 {
         match value {
             DisasmConstantValue::LocalField(idx) => self.ctx.locals()[*idx as usize],
-            DisasmConstantValue::ContextField(field) => field.extract(self.state.context),
-            DisasmConstantValue::InstStart => self.state.base_addr as i64,
+            DisasmConstantValue::ContextField(field) => field.extract(self.state.state.context),
+            DisasmConstantValue::InstStart => self.state.data.base_addr as i64,
             DisasmConstantValue::InstNext => {
-                (self.state.base_addr + self.state.next_offset as u64) as i64
+                (self.state.data.base_addr + self.state.state.next_offset as u64) as i64
             }
         }
     }

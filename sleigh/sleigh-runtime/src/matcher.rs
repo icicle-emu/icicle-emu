@@ -1,4 +1,4 @@
-use crate::{decoder::Decoder, ConstructorId, Field, Token};
+use crate::{ConstructorId, Field, Token};
 
 pub type ConstraintOp = sleigh_parse::ast::ConstraintOp;
 pub type ConstraintCmp = sleigh_parse::ast::ConstraintCmp;
@@ -26,13 +26,17 @@ pub struct SequentialMatcher {
 }
 
 impl SequentialMatcher {
-    /// Find the first constructor that matches the current context
-    pub fn match_constructor(&self, state: &Decoder) -> Option<ConstructorId> {
-        let context = state.context;
-        let token = state.get_raw_token(Token::new(self.token_size as u8));
+    /// All constructors that matches the current context
+    pub fn match_constructors<'a>(
+        &'a self,
+        bytes: &'a [u8],
+        big_endian: bool,
+        context: u64,
+    ) -> impl Iterator<Item = ConstructorId> + 'a {
+        let token = Token::new(self.token_size as u8).get_raw_token(bytes);
         self.cases
             .iter()
-            .find(|case| case.matches(state, context, token))
+            .filter(move |case| case.matches(bytes, big_endian, context, token))
             .map(|case| case.constructor)
     }
 }
@@ -57,15 +61,21 @@ pub struct MatchCase {
 }
 
 impl MatchCase {
-    fn matches(&self, state: &Decoder, context_reg: u64, token: u64) -> bool {
-        self.context.matches(context_reg)
+    fn matches(
+        &self,
+        bytes: &[u8],
+        big_endian: bool,
+        context: u64,
+        token: u64,
+    ) -> bool {
+        self.context.matches(context)
             && self.token.matches(token)
-            && (self.constraints.is_empty() || self.matches_complex(state))
+            && (self.constraints.is_empty() || self.matches_complex(bytes, big_endian, context))
     }
 
     #[cold]
-    fn matches_complex(&self, state: &Decoder) -> bool {
-        self.constraints.iter().all(|x| x.matches(state))
+    fn matches_complex(&self, bytes: &[u8], big_endian: bool, context: u64) -> bool {
+        self.constraints.iter().all(|x| x.matches(bytes, big_endian, context))
     }
 }
 
@@ -94,21 +104,21 @@ pub enum Constraint {
 }
 
 impl Constraint {
-    pub fn matches(&self, state: &Decoder) -> bool {
+    pub fn matches(&self, bytes: &[u8], big_endian: bool, context: u64) -> bool {
         match *self {
             Self::Token { token, field, cmp, operand } => {
-                let lhs = field.extract(state.get_token(token));
+                let lhs = field.extract(token.get_token(bytes, big_endian));
                 let rhs = match operand {
                     ConstraintOperand::Constant(x) => x,
-                    ConstraintOperand::Field(field) => field.extract(state.get_token(token)),
+                    ConstraintOperand::Field(field) => field.extract(token.get_token(bytes, big_endian)),
                 };
                 cmp_constraints(lhs, cmp, rhs)
             }
             Self::Context { field, cmp, operand } => {
-                let lhs = field.extract(state.context);
+                let lhs = field.extract(context);
                 let rhs = match operand {
                     ConstraintOperand::Constant(x) => x,
-                    ConstraintOperand::Field(field) => field.extract(state.context),
+                    ConstraintOperand::Field(field) => field.extract(context),
                 };
                 cmp_constraints(lhs, cmp, rhs)
             }
