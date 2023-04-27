@@ -39,11 +39,11 @@ impl SequentialMatcher {
         let cases = match last_constructor {
             None => &self.cases,
             Some(last_constructor) => {
-                let last_constructor_index =
-                    self.cases.iter().enumerate().find_map(|(i, case)| {
-                        (case.constructor == last_constructor).then_some(i)
-                    })?;
-                self.cases.get(last_constructor_index + 1..)?
+                let last_constructor_index = self
+                    .cases
+                    .iter()
+                    .position(|case| case.constructor == last_constructor)?;
+                &self.cases[last_constructor_index + 1..]
             }
         };
         cases

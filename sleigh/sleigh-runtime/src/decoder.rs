@@ -101,6 +101,9 @@ impl Decoder {
     ) -> Option<DecodedConstructor> {
         // try all constructors
         let mut last_constructor = None;
+        let initial_offset = self.next_offset;
+        let initial_token_stack_len = self.token_stack.len();
+        let initial_eval_stack_len = self.eval_stack.len();
         loop {
             // get a matching constructor, next one if backtracking
             last_constructor = sleigh.match_constructor_with(self, table, last_constructor);
@@ -116,6 +119,9 @@ impl Decoder {
                 return Some(constructor);
             }
             //otherwise just backtrack and try with the next constructor
+            self.next_offset = initial_offset;
+            self.token_stack.truncate(initial_token_stack_len);
+            self.eval_stack.truncate(initial_eval_stack_len);
         }
     }
 
