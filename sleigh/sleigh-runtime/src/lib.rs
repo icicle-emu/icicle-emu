@@ -487,14 +487,16 @@ impl SleighData {
     }
 
     /// Finds a matching constructor given the current decoder state using the matcher `matcher_id`.
+    /// If last_constructor is provided search from the next constructor onward.
     fn match_constructor_with(
         &self,
         state: &Decoder,
         matcher_id: MatcherIndex,
+        last_constructor: Option<ConstructorId>,
     ) -> Option<ConstructorId> {
         match &self.matchers[matcher_id as usize] {
             Matcher::SequentialMatcher(matcher) => {
-                return matcher.match_constructor(state);
+                matcher.match_constructor(state, last_constructor)
             }
         }
     }
