@@ -138,19 +138,26 @@ impl<'a, 'b> InnerDecoder<'a, 'b> {
             table,
         );
         // info required to rever the decoder to the initial state
-        let orig_next_offset = self.state.next_offset;
-        let orig_token_stack_len = self.state.token_stack.len();
+        let initial_offset = self.state.offset;
+        let initial_next_offset = self.state.next_offset;
+        let initial_context = self.state.context;
+        let initial_global_context = self.state.global_context;
+        let initial_token_stack_len = self.state.token_stack.len();
         // try all the constructors
         for constructor_id in constructors {
             match self.decode_subtable_constructor(sleigh, inst, table, constructor_id) {
                 Some(decoded) => return Some(decoded),
                 //just backtrack and try with the next constructor
                 None => {
-                    self.state.next_offset = orig_next_offset;
-                    self.state.token_stack.truncate(orig_token_stack_len);
+                    self.state.offset = initial_offset;
+                    self.state.next_offset = initial_next_offset;
+                    self.state.context = initial_context;
+                    self.state.global_context = initial_global_context;
+                    self.state.token_stack.truncate(initial_token_stack_len);
                 }
             }
         }
+        inst.last_subtable = table;
         None
     }
 
