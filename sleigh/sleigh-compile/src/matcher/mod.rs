@@ -31,9 +31,9 @@ struct BitConstraint {
     unconstrained: u32,
 }
 
-/// SLEIGH specifications are allowed to overlap, in the case of an overlap the constructor with
-/// highest number of constrained bits wins. Here we take care of sorting the match cases so that
-/// when we match each case in a sequential order we match the most constraint constructor first.
+/// Constructors are allowed to have overlapping constraints where the constructor with highest
+/// number of constrained bits is matched first. Here we take care of sorting the match cases so
+/// that to ensure the most constrained constructors are matched first.
 fn sort_overlaps(symbols: &SymbolTable, ctx: &Context, cases: &mut [MatchCase], token_size: u8) {
     // Iterate each possibly constrained bit so we can compute states that let us split the
     // constraints into overlapping/non-overlapping more efficiently.
@@ -63,7 +63,7 @@ fn sort_overlaps(symbols: &SymbolTable, ctx: &Context, cases: &mut [MatchCase], 
     for case in cases.iter() {
         remaining_cases.push(case_graph.add_node(case));
     }
-    let mut visitor = BitVisitor { state: Vec::new(), case_graph };
+    let mut visitor = BitVisitor { state: Vec::new(), case_graph, symbols };
     visitor.split_next(&bit_stats, &mut remaining_cases);
 
     // Assign ranking to cases based on topological ordering (lower ranks will be matched before
@@ -98,15 +98,12 @@ fn sort_overlaps(symbols: &SymbolTable, ctx: &Context, cases: &mut [MatchCase], 
 fn compare_number_of_constrained_bits(a: &MatchCase, b: &MatchCase) -> Option<Ordering> {
     let (a_token, a_context) = pattern_mask(a);
     let (b_token, b_context) = pattern_mask(b);
-    match compare_bits_set(a_token, b_token) {
-        Some(Ordering::Equal) | None => {}
-        Some(x) => return Some(x),
+    match (compare_bits_set(a_token, b_token), compare_bits_set(a_context, b_context)) {
+        (Some(Ordering::Equal), Some(Ordering::Equal)) => Some(Ordering::Equal),
+        (Some(x @ (Ordering::Greater | Ordering::Less)), _) => Some(x),
+        (_, Some(x @ (Ordering::Greater | Ordering::Less))) => Some(x),
+        _ => None,
     }
-    match compare_bits_set(a_context, b_context) {
-        Some(Ordering::Equal) | None => {}
-        Some(x) => return Some(x),
-    }
-    None
 }
 
 /// Returns a mask for token and context fields representing the bits with constraints.
@@ -168,6 +165,8 @@ struct BitVisitor<'a> {
     state: Vec<Bit>,
     /// Keeps track of the ordering requirements of match cases.
     case_graph: petgraph::Graph<&'a MatchCase, ()>,
+    /// Used for debug info.
+    symbols: &'a SymbolTable,
 }
 
 impl<'a> BitVisitor<'a> {
@@ -188,10 +187,10 @@ impl<'a> BitVisitor<'a> {
 
         let (zero, one, unconstrained) = match bit.index {
             Index::Token(i) => {
-                partition_by_bit(cases, |case| check_bit(&self.case_graph[*case].token, i as u8))
+                partition_by_bit(cases, |case| check_bit(&self.case_graph[*case].token, i))
             }
             Index::Context(i) => {
-                partition_by_bit(cases, |case| check_bit(&self.case_graph[*case].context, i as u8))
+                partition_by_bit(cases, |case| check_bit(&self.case_graph[*case].context, i))
             }
         };
 
@@ -244,9 +243,9 @@ impl<'a> BitVisitor<'a> {
                     Some(Ordering::Less) => {
                         self.case_graph.update_edge(b_idx, a_idx, ());
                     }
-                    _ => {
-                        // No ordering implied by the number of constraints, so add a constraint
-                        // based on the order the constructor was declared in the original file.
+                    Some(Ordering::Equal) | None => {
+                        // No ordering implied by the number of bits constrained, so try to order
+                        // the constructors based on the declaration order in the original file.
                         let (before, after) = match a.constructor < b.constructor {
                             true => (a_idx, b_idx),
                             false => (b_idx, a_idx),
@@ -254,11 +253,13 @@ impl<'a> BitVisitor<'a> {
                         self.case_graph.update_edge(before, after, ());
 
                         if WARN_ON_DECLARATION_ORDERING {
+                            let a = &self.symbols.constructors[a.constructor as usize];
+                            let b = &self.symbols.constructors[b.constructor as usize];
                             eprintln!(
                                 "At: {}, using declaration order for: {} and {}",
                                 display_bits(&self.state),
-                                a.constructor,
-                                b.constructor,
+                                self.symbols.format_span(&a.span),
+                                self.symbols.format_span(&b.span)
                             );
                         }
                     }
@@ -293,10 +294,10 @@ fn check_bit(pattern: &Pattern, bit: u8) -> Bit {
 
 /// Partitions `arr` into 3 arrays (zeroes, ones, unconstrained) depending on the value returned by
 /// `selector`
-fn partition_by_bit<'a, T>(
-    arr: &'a mut [T],
+fn partition_by_bit<T>(
+    arr: &mut [T],
     mut selector: impl FnMut(&T) -> Bit,
-) -> (&'a mut [T], &'a mut [T], &'a mut [T]) {
+) -> (&mut [T], &mut [T], &mut [T]) {
     // First partition the array into constrained and unconstrained elements.
     let idx = partition_in_place(arr, |case| selector(case) != Bit::Unconstrained);
     let (constrained, unconstrained) = arr.split_at_mut(idx);
@@ -312,7 +313,7 @@ fn partition_by_bit<'a, T>(
 /// split point.
 fn partition_in_place<T>(arr: &mut [T], mut pred: impl FnMut(&T) -> bool) -> usize {
     let mut split = 0;
-    let mut iter = arr.into_iter();
+    let mut iter = arr.iter_mut();
 
     while let Some(front) = iter.next() {
         if pred(front) {

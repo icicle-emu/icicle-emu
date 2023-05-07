@@ -104,6 +104,9 @@ pub struct FuzzConfig {
     /// The maximum number of instructions to execute before exiting.
     pub icount_limit: u64,
 
+    /// The number of workers to use for fuzzing.
+    pub workers: u16,
+
     /// Additional arguments passed to the emulator.
     pub icicle_args: Vec<String>,
 
@@ -202,6 +205,13 @@ impl FuzzConfig {
             Err(_) => 0,
         };
 
+        let workers = match std::env::var("WORKERS") {
+            Ok(workers) => workers
+                .parse::<u16>()
+                .with_context(|| format!("Invalid value for WORKERS: {workers}"))?,
+            Err(_) => 1,
+        };
+
         Ok(Self {
             resume: parse_bool_env("RESUME")?.unwrap_or(false),
             save_crashes: parse_bool_env("SAVE_CRASHES")?.unwrap_or(true),
@@ -217,6 +227,7 @@ impl FuzzConfig {
             coverage_mode,
             compcov_level,
             context_bits,
+            workers,
             no_cmplog_return: parse_bool_env("ICICLE_CMPLOG_RTN")?.unwrap_or(false),
             start_addr,
             msp430: Msp430Config::from_env()?,
@@ -475,13 +486,13 @@ where
 
     let snapshot = vm.snapshot();
     let mut map = BTreeMap::new();
-    utils::input_visitor(&dir, |path, input| {
+    utils::input_visitor(dir, |path, input| {
         vm.restore(&snapshot);
 
         tracing::info!("resolving crashes for {}", path.display());
         target.set_input(&mut vm, &input)?;
         let exit = vm.run();
-        let exit_code = utils::get_afl_exit_code(&mut vm, exit);
+        let exit_code = utils::get_afl_exit_code(&vm, exit);
 
         map.entry(gen_crash_key(&mut vm, exit))
             .or_insert_with(|| CrashEntry {
@@ -491,7 +502,7 @@ where
                 inputs: vec![],
             })
             .inputs
-            .push(path.to_owned());
+            .push(path);
 
         Ok(())
     })?;
@@ -522,14 +533,13 @@ pub fn gen_crash_key(vm: &mut Vm, exit: VmExit) -> String {
             // Caused by timeouts or resource exhaustion. Since the detection is based on
             // heuristics, the final PC frequently changes. To reduce duplicates we just use
             // the parent function (if avaliable).
-            format!("{:#x}_hang", stack.iter().rev().skip(1).next().unwrap_or(&pc))
+            format!("{:#x}_hang", stack.iter().rev().nth(1).unwrap_or(&pc))
         }
         CrashKind::Killed => format!("{stack_hash:#x}_killed"),
         CrashKind::ExecViolation => {
-            // On `InvalidInstruction` exceptions, the `block_id` field represents the last block
-            // that was executed. Try to deduplicate cases where multiple blocks end at the same
-            // place by using the address at the end of the block.
-            let last_addr = vm.code.blocks.get(vm.cpu.block_id as usize).map_or(pc, |x| x.end);
+            // When we have an execution violation, then the final address is invalid. To
+            // deduplicate cases where this is caused by the corruption of a function pointer, we
+            // save inputs based on the previous address instead of usign pc.
             match pc {
                 0 => format!("{stack_hash:#x}_{last_addr:#x}_jump_null"),
                 _ => format!("{stack_hash:#x}_{last_addr:#x}_jump_invalid"),
@@ -586,7 +596,7 @@ pub fn add_debug_instrumentation(vm: &mut icicle_vm::Vm) {
     if let Ok(entries) = std::env::var("ICICLE_LOG_WRITES") {
         // A `;` separated list of locations to instrument writes to, e.g:
         // "applet=0x1c00:2;jumptarget=0x1c02:2"
-        for entry in entries.split(";") {
+        for entry in entries.split(';') {
             match parse_write_hook(entry) {
                 Some((name, addr, size)) => {
                     tracing::info!("Logging writes to {name}@{addr:#x} ({size} bytes)");
@@ -597,7 +607,7 @@ pub fn add_debug_instrumentation(vm: &mut icicle_vm::Vm) {
         }
     }
     if let Ok(entries) = std::env::var("ICICLE_LOG_REGS") {
-        for entry in entries.split(";") {
+        for entry in entries.split(';') {
             match parse_reg_print_hook(entry) {
                 Some((name, addr, reglist)) => {
                     icicle_vm::debug::log_regs(vm, name.to_string(), addr, &reglist);
@@ -608,7 +618,7 @@ pub fn add_debug_instrumentation(vm: &mut icicle_vm::Vm) {
     }
     if let Ok(entries) = std::env::var("BREAKPOINTS") {
         // A comma separated list of addresses to stop execution at.
-        for entry in entries.split(",") {
+        for entry in entries.split(',') {
             match parse_u64_with_prefix(entry) {
                 Some(addr) => {
                     vm.add_breakpoint(addr);
@@ -646,7 +656,7 @@ pub fn parse_reg_print_hook(entry: &str) -> Option<(&str, u64, Vec<&str>)> {
 
     let pc = parse_u64_with_prefix(pc)?;
 
-    Some((name, pc, reglist.split(",").collect()))
+    Some((name, pc, reglist.split(',').map(str::trim).collect()))
 }
 
 /// Parse a string of the format `<address>(<reglist>)` and return a tuple with the address and
@@ -661,7 +671,7 @@ pub fn parse_func_hook(entry: &str) -> Option<(u64, Vec<&str>)> {
     let pc = parse_u64_with_prefix(pc)?;
     let reglist = reg.trim_end_matches(')');
 
-    Some((pc, reglist.split(",").collect()))
+    Some((pc, reglist.split(',').map(str::trim).collect()))
 }
 
 /// Parse a boolean environment varialbe
@@ -710,24 +720,15 @@ pub enum CrashKind {
 
 impl CrashKind {
     pub fn is_crash(&self) -> bool {
-        match self {
-            CrashKind::Halt | CrashKind::Hang => false,
-            _ => true,
-        }
+        !matches!(self, CrashKind::Halt | CrashKind::Hang)
     }
 
     pub fn is_hang(&self) -> bool {
-        match self {
-            CrashKind::Hang => true,
-            _ => false,
-        }
+        matches!(self, CrashKind::Hang)
     }
 
     pub fn is_ok(&self) -> bool {
-        match self {
-            CrashKind::Halt => true,
-            _ => false,
-        }
+        matches!(self, CrashKind::Halt)
     }
 }
 

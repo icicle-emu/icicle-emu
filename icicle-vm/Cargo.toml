@@ -4,13 +4,13 @@ version = "0.2.0"
 edition = "2021"
 
 [dependencies]
-anyhow = "1.0.69"
+anyhow = "1.0.71"
 icicle-cpu = { path = "../icicle-cpu" }
 icicle-linux = { path = "../icicle-linux" }
 icicle-jit = { path = "../icicle-jit" }
 pcode = { path = "../sleigh/pcode" }
 sleigh-runtime = { path = "../sleigh/sleigh-runtime" }
 sleigh-compile = { path = "../sleigh/sleigh-compile" }
-target-lexicon = "0.12.6"
+target-lexicon = "0.12.7"
 tracing = { version = "0.1.37", default-features = false }
-object = { version = "0.30.3", default-features = false, features = ["read_core", "elf"] }
+object = { version = "0.31.0", default-features = false, features = ["read_core", "elf"] }

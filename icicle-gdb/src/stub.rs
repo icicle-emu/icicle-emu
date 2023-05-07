@@ -143,7 +143,7 @@ impl<T: DynamicTarget> SingleThreadBase for VmState<T> {
         data: &mut [u8],
     ) -> TargetResult<(), Self> {
         let start: u64 = num_traits::cast(start_addr).unwrap();
-        if !self.vm.cpu.mem.is_regular_region((start, start + data.len() as u64)) {
+        if !self.vm.cpu.mem.is_regular_region(start, data.len() as u64) {
             return Err(TargetError::NonFatal);
         }
         self.vm.cpu.mem.read_bytes(start, data, perm::NONE).map_err(|_| TargetError::NonFatal)
@@ -155,7 +155,7 @@ impl<T: DynamicTarget> SingleThreadBase for VmState<T> {
         data: &[u8],
     ) -> TargetResult<(), Self> {
         let start: u64 = num_traits::cast(start_addr).unwrap();
-        if !self.vm.cpu.mem.is_regular_region((start, start + data.len() as u64)) {
+        if !self.vm.cpu.mem.is_regular_region(start, data.len() as u64) {
             return Err(TargetError::NonFatal);
         }
         self.vm.cpu.mem.write_bytes(start, data, perm::NONE).map_err(|_| TargetError::NonFatal)
@@ -242,7 +242,7 @@ impl<T: DynamicTarget> ext::breakpoints::SwBreakpoint for VmState<T> {
     }
 }
 
-impl<'a, T: DynamicTarget> ext::breakpoints::HwWatchpoint for VmState<T> {
+impl<T: DynamicTarget> ext::breakpoints::HwWatchpoint for VmState<T> {
     fn add_hw_watchpoint(
         &mut self,
         addr: <Self::Arch as Arch>::Usize,
@@ -303,7 +303,7 @@ impl<T: DynamicTarget> ext::monitor_cmd::MonitorCmd for VmState<T> {
                 }
             }
             Some("pcode") => {
-                let pcode = icicle_vm::debug::current_disasm(&mut self.vm);
+                let pcode = icicle_vm::debug::current_disasm(&self.vm);
                 gdbstub::outputln!(out, "{}", pcode);
             }
             Some("save-trace") => {
@@ -361,11 +361,10 @@ impl<T: DynamicTarget> ext::monitor_cmd::MonitorCmd for VmState<T> {
             Some("restore") => match self.snapshots.get(&None) {
                 Some(snapshot) => {
                     self.vm.restore(&snapshot.vm);
-                    snapshot
-                        .trace
-                        .as_ref()
-                        .map(|trace| self.tracer.unwrap().restore(&mut self.vm, trace));
-                    gdbstub::outputln!(out, "state restored from snapshot");
+                    if let Some(trace) = snapshot.trace.as_ref() {
+                        self.tracer.unwrap().restore(&mut self.vm, trace);
+                        gdbstub::outputln!(out, "state restored from snapshot");
+                    }
                 }
                 None => gdbstub::outputln!(out, "snapshot does not exist"),
             },
@@ -437,7 +436,7 @@ impl<T: DynamicTarget> ext::catch_syscalls::CatchSyscalls for VmState<T> {
         &mut self,
         filter: Option<ext::catch_syscalls::SyscallNumbers<<Self::Arch as Arch>::Usize>>,
     ) -> TargetResult<(), Self> {
-        let mut kernel = self.vm.env_mut::<icicle_vm::linux::Kernel>().unwrap();
+        let kernel = self.vm.env_mut::<icicle_vm::linux::Kernel>().unwrap();
         kernel.syscall_breakpoints.clear();
         match filter {
             Some(filter) => {
@@ -456,7 +455,7 @@ impl<T: DynamicTarget> ext::catch_syscalls::CatchSyscalls for VmState<T> {
     }
 
     fn disable_catch_syscalls(&mut self) -> TargetResult<(), Self> {
-        let mut kernel = self.vm.env_mut::<icicle_vm::linux::Kernel>().unwrap();
+        let kernel = self.vm.env_mut::<icicle_vm::linux::Kernel>().unwrap();
         kernel.syscall_breakpoints.clear();
         kernel.catch_syscalls = icicle_vm::linux::CatchSyscalls::None;
         Ok(())

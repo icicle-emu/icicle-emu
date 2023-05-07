@@ -140,7 +140,7 @@ pub fn run_without_parent<T: FuzzTarget>(
     let mut cmplog_trace = None;
     if let Some(path) = std::env::var_os("ICICLE_SAVE_CMP_MAP") {
         let map = gen_cmplog_map(&mut vm);
-        cmplog_trace = Some((path, &*map));
+        cmplog_trace = Some((path, map));
     }
 
     if let Ok(addr) = std::env::var("GDB_BIND") {
@@ -167,7 +167,7 @@ pub fn run_without_parent<T: FuzzTarget>(
         unsafe { (*cmp_map.get()).save(path.as_ref())? };
     }
 
-    let exit_code = get_afl_exit_code(&mut vm, exit);
+    let exit_code = get_afl_exit_code(&vm, exit);
     if exit_code == 0 {
         // Consider adding an exit here for quiet mode.
     }
@@ -304,7 +304,7 @@ fn run_afl<T: FuzzTarget>(
         ) {
             Ok(run_result) => run_result?,
             Err(e) => {
-                std::fs::write(&"internal_emulator_crash.bin", input).unwrap();
+                std::fs::write("internal_emulator_crash.bin", input).unwrap();
                 anyhow::bail!("Internal emulator panic: {:?}", e)
             }
         };
@@ -318,16 +318,14 @@ fn run_afl<T: FuzzTarget>(
             }
         }
 
-        let afl_exit_kind = get_afl_exit_code(&mut vm, exit);
-        if afl_exit_kind != 0 {
-            if crashes.check_crash(&mut vm, exit) {
-                let backtrace = icicle_vm::debug::backtrace(&mut vm);
-                tracing::info!("New crash ({:0x?}): \n{}", exit, backtrace);
+        let afl_exit_kind = get_afl_exit_code(&vm, exit);
+        if afl_exit_kind != 0 && crashes.check_crash(&mut vm, exit) {
+            let backtrace = icicle_vm::debug::backtrace(&mut vm);
+            tracing::info!("New crash ({:0x?}): \n{}", exit, backtrace);
 
-                if config.save_crashes {
-                    let pc = vm.cpu.read_pc();
-                    std::fs::write(&format!("crash_pc_{:0x}.bin", pc), input).unwrap()
-                }
+            if config.save_crashes {
+                let pc = vm.cpu.read_pc();
+                std::fs::write(&format!("crash_pc_{:0x}.bin", pc), input).unwrap()
             }
         }
 
@@ -356,7 +354,7 @@ fn run_afl<T: FuzzTarget>(
         }
     }
 
-    return Ok(());
+    Ok(())
 }
 
 pub enum InputSource {
@@ -380,7 +378,7 @@ impl InputSource {
         match self {
             Self::File(path, buf) => {
                 buf.clear();
-                std::fs::File::open(&path)
+                std::fs::File::open(path)
                     .context("failed to open input file")?
                     .read_to_end(buf)
                     .context("failed to read input file")?;

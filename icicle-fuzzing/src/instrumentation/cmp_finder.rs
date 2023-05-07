@@ -7,6 +7,7 @@ use icicle_vm::cpu::{
 use pcode::{Op, PcodeDisplay, Value};
 
 bitflags::bitflags! {
+    #[derive(Copy, Clone, PartialEq, Eq, Debug)]
     pub struct CmpAttr: u8 {
         const NOT_EQUAL     = 1;
         const IS_EQUAL      = 1 << 1;
@@ -798,7 +799,7 @@ fn datalog_find_comparisons(prop: &mut CmpProp) -> bool {
     let cond = rw.get_input(prop.dst.into());
     tracing::trace!("finding flow to {}", cond.display(&()));
 
-    runtime.extend(&[Cond(cond.into())]);
+    runtime.extend(&[Cond(cond)]);
 
     let (output,): (HashSet<Output>,) = runtime.run();
 
@@ -944,7 +945,7 @@ mod test {
 
         assert_eq!(
             test_generic(cond, block),
-            "CmpOp { kind: IS_EQUAL, arg1: $U1:4, arg2: $U2:4, offset: 0 }\n"
+            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: $U1:4, arg2: $U2:4, offset: 0 }\n"
         );
     }
 
@@ -965,7 +966,7 @@ mod test {
 
         assert_eq!(
             test_generic(cond, block),
-            "CmpOp { kind: IS_EQUAL, arg1: $U1:4, arg2: $U2:4, offset: 0 }\n"
+            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: $U1:4, arg2: $U2:4, offset: 0 }\n"
         );
     }
 
@@ -979,7 +980,7 @@ mod test {
 
         assert_eq!(
             test_generic(cond, block),
-            "CmpOp { kind: IS_EQUAL, arg1: $U1:4, arg2: 0xaa:4, offset: 0 }\n"
+            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: $U1:4, arg2: 0xaa:4, offset: 0 }\n"
         );
     }
 
@@ -998,7 +999,7 @@ mod test {
 
         assert_eq!(
             test_generic(cond, block),
-            "CmpOp { kind: IS_EQUAL, arg1: $U1:4, arg2: $U2:4, offset: 0 }\n"
+            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: $U1:4, arg2: $U2:4, offset: 0 }\n"
         );
     }
 
@@ -1010,7 +1011,7 @@ mod test {
         ];
         assert_eq!(
             x86_ops(&input),
-            "CmpOp { kind: IS_EQUAL, arg1: EAX, arg2: 0x6c61754f:4, offset: 3 }\n"
+            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: EAX, arg2: 0x6c61754f:4, offset: 3 }\n"
         );
     }
 
@@ -1020,7 +1021,10 @@ mod test {
             0x39, 0xd8, // CMP EAX,EBX
             0x74, 0x18, // JZ RIP+0x18
         ];
-        assert_eq!(x86_ops(&input), "CmpOp { kind: IS_EQUAL, arg1: EAX, arg2: EBX, offset: 3 }\n");
+        assert_eq!(
+            x86_ops(&input),
+            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: EAX, arg2: EBX, offset: 3 }\n"
+        );
     }
 
     #[test]
@@ -1034,13 +1038,13 @@ mod test {
         if USE_DATALOG {
             assert_eq!(
                 x86_ops(&input),
-                "CmpOp { kind: NOT_EQUAL, arg1: $U5:4, arg2: 0x63667a77:4, offset: 6 }\n"
+                "CmpOp { kind: CmpAttr(NOT_EQUAL), arg1: $U5:4, arg2: 0x63667a77:4, offset: 6 }\n"
             );
         }
         else {
             assert_eq!(
                 x86_ops(&input),
-                "CmpOp { kind: NOT_EQUAL, arg1: $U7:4, arg2: 0x63667a77:4, offset: 6 }\n"
+                "CmpOp { kind: CmpAttr(NOT_EQUAL), arg1: $U7:4, arg2: 0x63667a77:4, offset: 6 }\n"
             );
         }
     }
@@ -1052,19 +1056,15 @@ mod test {
             0x0f, 0x8c, 0x00, 0x00, 0x00, 0x00, // JL +0x0
         ];
 
-        // @fixme: The datalog implementation can merge these constraints, but the manual approach
-        // currently doesn't do any merging.
-        let datalog_result =
-            "CmpOp { kind: IS_LESSER, arg1: EAX, arg2: 0x6c61754f:4, offset: 3 }\n";
-        let manual_result = "CmpOp { kind: IS_OVERFLOW, arg1: EAX, arg2: 0x6c61754f:4, offset: 2 }\n\
-        CmpOp { kind: IS_LESSER, arg1: EAX, arg2: 0x6c61754f:4, offset: 3 }\n";
-
         let result = x86_ops(&input);
         if USE_DATALOG {
-            assert_eq!(result, datalog_result)
+            assert_eq!(
+                result,
+                "CmpOp { kind: CmpAttr(IS_LESSER), arg1: EAX, arg2: 0x6c61754f:4, offset: 3 }\n"
+            )
         }
         else {
-            assert_eq!(result, manual_result)
+            // The the manual is unable to merge the constraints properly.
         }
     }
 
@@ -1079,7 +1079,7 @@ mod test {
         if USE_DATALOG {
             assert_eq!(
                 result,
-                "CmpOp { kind: IS_GREATER, arg1: EAX, arg2: 0x6c61754f:4, offset: 3 }\n"
+                "CmpOp { kind: CmpAttr(IS_GREATER), arg1: EAX, arg2: 0x6c61754f:4, offset: 3 }\n"
             )
         }
         else {
@@ -1087,9 +1087,9 @@ mod test {
             // approach currently doesn't do any merging.
             assert_eq!(
                 result,
-                "CmpOp { kind: IS_OVERFLOW, arg1: EAX, arg2: 0x6c61754f:4, offset: 2 }\n\
-            CmpOp { kind: NOT_EQUAL, arg1: EAX, arg2: 0x6c61754f:4, offset: 3 }\n\
-            CmpOp { kind: IS_LESSER, arg1: EAX, arg2: 0x6c61754f:4, offset: 3 }\n"
+                "CmpOp { kind: CmpAttr(IS_OVERFLOW), arg1: EAX, arg2: 0x6c61754f:4, offset: 2 }\n\
+            CmpOp { kind: CmpAttr(NOT_EQUAL), arg1: EAX, arg2: 0x6c61754f:4, offset: 3 }\n\
+            CmpOp { kind: CmpAttr(IS_LESSER), arg1: EAX, arg2: 0x6c61754f:4, offset: 3 }\n"
             )
         }
     }
@@ -1101,7 +1101,10 @@ mod test {
             0x29, 0xd8, // SUB EAX,EBX
             0x75, 0x18, // JNZ RIP+0x18
         ];
-        assert_eq!(x86_ops(&input), "CmpOp { kind: NOT_EQUAL, arg1: EAX, arg2: EBX, offset: 3 }\n");
+        assert_eq!(
+            x86_ops(&input),
+            "CmpOp { kind: CmpAttr(NOT_EQUAL), arg1: EAX, arg2: EBX, offset: 3 }\n"
+        );
     }
 
     #[test]
@@ -1112,7 +1115,7 @@ mod test {
         ];
         assert_eq!(
             x86_ops(&input),
-            "CmpOp { kind: NOT_EQUAL, arg1: EAX, arg2: 0x6c61754f:4, offset: 3 }\n"
+            "CmpOp { kind: CmpAttr(NOT_EQUAL), arg1: EAX, arg2: 0x6c61754f:4, offset: 3 }\n"
         );
     }
 
@@ -1122,7 +1125,10 @@ mod test {
             0x39, 0xd8, // CMP EAX,EBX
             0x41, 0x0f, 0x44, 0xd4, // CMOVZ EDX,R12D
         ];
-        assert_eq!(x86_ops(&input), "CmpOp { kind: NOT_EQUAL, arg1: EAX, arg2: EBX, offset: 3 }\n");
+        assert_eq!(
+            x86_ops(&input),
+            "CmpOp { kind: CmpAttr(NOT_EQUAL), arg1: EAX, arg2: EBX, offset: 3 }\n"
+        );
     }
 
     #[test]
@@ -1137,7 +1143,7 @@ mod test {
         ];
         assert_eq!(
             x86_ops(&input),
-            "CmpOp { kind: IS_EQUAL, arg1: EAX, arg2: 0xa374616c:4, offset: 3 }\n"
+            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: EAX, arg2: 0xa374616c:4, offset: 3 }\n"
         );
 
         // But avoid adding instrumentation if the multiply doesn't depend on a comparison.
@@ -1156,7 +1162,10 @@ mod test {
             0x4c, 0x8d, 0x6e, 0x01, 0x44, 0x88, 0x26, // ...
             0x0f, 0x84, 0xfd, 0x01, 0x00, 0x00, // JZ   [RIP + 0x20d],
         ];
-        assert_eq!(x86_ops(&input), "CmpOp { kind: IS_EQUAL, arg1: R12D, arg2: EBP, offset: 3 }\n");
+        assert_eq!(
+            x86_ops(&input),
+            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: R12D, arg2: EBP, offset: 3 }\n"
+        );
     }
 
     #[test]
@@ -1169,7 +1178,7 @@ mod test {
         ];
         assert_eq!(
             x86_ops(&input),
-            "CmpOp { kind: IS_EQUAL, arg1: EAX, arg2: 0xfffffff:4, offset: 6 }\n"
+            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: EAX, arg2: 0xfffffff:4, offset: 6 }\n"
         );
     }
 
@@ -1183,7 +1192,7 @@ mod test {
         ];
         assert_eq!(
             x86_ops(&input),
-            "CmpOp { kind: IS_EQUAL, arg1: EAX, arg2: 0xfffffff:4, offset: 5 }\n"
+            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: EAX, arg2: 0xfffffff:4, offset: 5 }\n"
         );
     }
 
@@ -1197,7 +1206,7 @@ mod test {
         ];
         assert_eq!(
             mipsel_ops(&input),
-            "CmpOp { kind: NOT_EQUAL, arg1: v0, arg2: 0x63667a77:4, offset: 5 }\n"
+            "CmpOp { kind: CmpAttr(NOT_EQUAL), arg1: v0, arg2: 0x63667a77:4, offset: 5 }\n"
         );
     }
 
@@ -1212,7 +1221,7 @@ mod test {
         ];
         assert_eq!(
             mipsel_ops(&input),
-            "CmpOp { kind: IS_LESSER, arg1: v0, arg2: 0x63667a77:4, offset: 5 }\n"
+            "CmpOp { kind: CmpAttr(IS_LESSER), arg1: v0, arg2: 0x63667a77:4, offset: 5 }\n"
         );
     }
 
@@ -1224,7 +1233,7 @@ mod test {
         ];
         assert_eq!(
             msp430x_ops(&input),
-            "CmpOp { kind: IS_EQUAL, arg1: R15_16, arg2: 0x16:2, offset: 10 }\n"
+            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: R15_16, arg2: 0x16:2, offset: 10 }\n"
         );
     }
 
@@ -1236,7 +1245,7 @@ mod test {
         ];
         assert_eq!(
             msp430x_ops(&input),
-            "CmpOp { kind: IS_EQUAL, arg1: R12_16, arg2: 0x80:2, offset: 10 }\n"
+            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: R12_16, arg2: 0x80:2, offset: 10 }\n"
         );
     }
 
@@ -1249,14 +1258,14 @@ mod test {
         if USE_DATALOG {
             assert_eq!(
                 msp430x_ops(&input),
-                "CmpOp { kind: IS_EQUAL | IS_GREATER, arg1: R15_16, arg2: 0x16:2, offset: 10 }\n"
+                "CmpOp { kind: CmpAttr(IS_EQUAL | IS_GREATER), arg1: R15_16, arg2: 0x16:2, offset: 10 }\n"
             );
         }
         else {
             assert_eq!(
                 msp430x_ops(&input),
-                "CmpOp { kind: IS_OVERFLOW, arg1: R15_16, arg2: 0x16:2, offset: 5 }\n\
-                CmpOp { kind: IS_LESSER, arg1: R15_16, arg2: 0x16:2, offset: 10 }\n"
+                "CmpOp { kind: CmpAttr(IS_OVERFLOW), arg1: R15_16, arg2: 0x16:2, offset: 5 }\n\
+                CmpOp { kind: CmpAttr(IS_LESSER), arg1: R15_16, arg2: 0x16:2, offset: 10 }\n"
             );
         }
     }
@@ -1270,14 +1279,14 @@ mod test {
         if USE_DATALOG {
             assert_eq!(
                 msp430x_ops(&input),
-                "CmpOp { kind: IS_EQUAL | IS_GREATER, arg1: $U14:2, arg2: R12_16, offset: 13 }\n"
+                "CmpOp { kind: CmpAttr(IS_EQUAL | IS_GREATER), arg1: $U14:2, arg2: R12_16, offset: 13 }\n"
             );
         }
         else {
             assert_eq!(
                 msp430x_ops(&input),
-                "CmpOp { kind: IS_OVERFLOW, arg1: $U15:2, arg2: R12_16, offset: 7 }\n\
-                CmpOp { kind: IS_LESSER, arg1: $U16:2, arg2: R12_16, offset: 13 }\n"
+                "CmpOp { kind: CmpAttr(IS_OVERFLOW), arg1: $U15:2, arg2: R12_16, offset: 7 }\n\
+                CmpOp { kind: CmpAttr(IS_LESSER), arg1: $U16:2, arg2: R12_16, offset: 13 }\n"
             );
         }
     }
@@ -1290,7 +1299,7 @@ mod test {
         ];
         assert_eq!(
             msp430x_ops(&input),
-            "CmpOp { kind: NOT_EQUAL, arg1: R15_16, arg2: 0x16:2, offset: 10 }\n"
+            "CmpOp { kind: CmpAttr(NOT_EQUAL), arg1: R15_16, arg2: 0x16:2, offset: 10 }\n"
         );
     }
 
@@ -1303,14 +1312,14 @@ mod test {
         if USE_DATALOG {
             assert_eq!(
                 msp430x_ops(&input),
-                "CmpOp { kind: IS_EQUAL | IS_GREATER, arg1: R13_16, arg2: R10_16, offset: 10 }\n"
+                "CmpOp { kind: CmpAttr(IS_EQUAL | IS_GREATER), arg1: R13_16, arg2: R10_16, offset: 10 }\n"
             );
         }
         else {
             assert_eq!(
                 msp430x_ops(&input),
-                "CmpOp { kind: IS_OVERFLOW, arg1: R13_16, arg2: R10_16, offset: 5 }\n\
-                CmpOp { kind: IS_LESSER, arg1: R13_16, arg2: R10_16, offset: 10 }\n"
+                "CmpOp { kind: CmpAttr(IS_OVERFLOW), arg1: R13_16, arg2: R10_16, offset: 5 }\n\
+                CmpOp { kind: CmpAttr(IS_LESSER), arg1: R13_16, arg2: R10_16, offset: 10 }\n"
             );
         }
     }
@@ -1325,7 +1334,7 @@ mod test {
         ];
         assert_eq!(
             msp430x_ops(&input),
-            "CmpOp { kind: IS_EQUAL | IS_GREATER, arg1: 0x0:2, arg2: R10_16, offset: 10 }\n"
+            "CmpOp { kind: CmpAttr(IS_EQUAL | IS_GREATER), arg1: 0x0:2, arg2: R10_16, offset: 10 }\n"
         );
     }
 
@@ -1337,7 +1346,7 @@ mod test {
         ];
         assert_eq!(
             msp430x_ops(&input),
-            "CmpOp { kind: IS_EQUAL, arg1: R12_lo, arg2: 0x80:1, offset: 10 }\n"
+            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: R12_lo, arg2: 0x80:1, offset: 10 }\n"
         );
     }
 
@@ -1349,7 +1358,7 @@ mod test {
         ];
         assert_eq!(
             msp430x_ops(&input),
-            "CmpOp { kind: IS_EQUAL, arg1: R3, arg2: R5, offset: 1 }\n"
+            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: R3, arg2: R5, offset: 1 }\n"
         );
     }
 
@@ -1362,13 +1371,13 @@ mod test {
         if USE_DATALOG {
             assert_eq!(
                 msp430x_ops(&input),
-                "CmpOp { kind: IS_EQUAL, arg1: $U14:1, arg2: 0x1:1, offset: 13 }\n"
+                "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: $U14:1, arg2: 0x1:1, offset: 13 }\n"
             );
         }
         else {
             assert_eq!(
                 msp430x_ops(&input),
-                "CmpOp { kind: IS_EQUAL, arg1: $U16:1, arg2: 0x1:1, offset: 13 }\n"
+                "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: $U16:1, arg2: 0x1:1, offset: 13 }\n"
             );
         }
     }
@@ -1392,7 +1401,7 @@ mod test {
         ];
         assert_eq!(
             msp430x_ops(&input),
-            "CmpOp { kind: IS_EQUAL, arg1: R15_16, arg2: 0x0:2, offset: 9 }\n"
+            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: R15_16, arg2: 0x0:2, offset: 9 }\n"
         );
     }
 
@@ -1414,7 +1423,7 @@ mod test {
         ];
         assert_eq!(
             thumb_ops(&input),
-            "CmpOp { kind: IS_EQUAL | IS_GREATER, arg1: r4, arg2: r7, offset: 3 }\n"
+            "CmpOp { kind: CmpAttr(IS_EQUAL | IS_GREATER), arg1: r4, arg2: r7, offset: 3 }\n"
         );
     }
 
@@ -1427,8 +1436,8 @@ mod test {
         ];
         assert_eq!(
             thumb_ops(&input),
-            "CmpOp { kind: IS_EQUAL | IS_MASKED, arg1: r2, arg2: r1, offset: 9 }\n\
-            CmpOp { kind: IS_EQUAL | IS_MASKED, arg1: r2, arg2: r3, offset: 9 }\n"
+            "CmpOp { kind: CmpAttr(IS_EQUAL | IS_MASKED), arg1: r2, arg2: r1, offset: 9 }\n\
+            CmpOp { kind: CmpAttr(IS_EQUAL | IS_MASKED), arg1: r2, arg2: r3, offset: 9 }\n"
         );
 
         let input = [
@@ -1439,7 +1448,7 @@ mod test {
         ];
         assert_eq!(
             thumb_ops(&input),
-            "CmpOp { kind: IS_EQUAL | IS_MASKED, arg1: r2:2, arg2: r3:2, offset: 12 }\n"
+            "CmpOp { kind: CmpAttr(IS_EQUAL | IS_MASKED), arg1: r2:2, arg2: r3:2, offset: 12 }\n"
         );
     }
 
@@ -1451,7 +1460,7 @@ mod test {
         ];
         assert_eq!(
             thumb_ops(&input),
-            "CmpOp { kind: NOT_EQUAL, arg1: r1, arg2: 0x79:4, offset: 3 }\n"
+            "CmpOp { kind: CmpAttr(NOT_EQUAL), arg1: r1, arg2: 0x79:4, offset: 3 }\n"
         );
     }
 }

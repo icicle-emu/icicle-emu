@@ -12,7 +12,7 @@ fn main() {
         .iter()
         .map(|arch| {
             println!("cargo:rerun-if-changed=data/syscalls/{arch}.txt");
-            std::fs::read_to_string(&format!("data/syscalls/{arch}.txt")).unwrap()
+            std::fs::read_to_string(format!("data/syscalls/{arch}.txt")).unwrap()
         })
         .collect::<Vec<_>>();
 
@@ -33,7 +33,7 @@ fn main() {
 
 fn output_file(path: impl AsRef<std::path::Path>) -> BufWriter<std::fs::File> {
     let out_dir = std::env::var_os("OUT_DIR").unwrap();
-    BufWriter::new(std::fs::File::create(&std::path::Path::new(&out_dir).join(path)).unwrap())
+    BufWriter::new(std::fs::File::create(std::path::Path::new(&out_dir).join(path)).unwrap())
 }
 
 fn build_dispatcher(syscalls: &[(&str, usize)]) {
@@ -63,8 +63,8 @@ impl<'a> SyscallHandler<'a> {
             Some("_") => Self::Default,
             Some("=") => Self::Alias(&value[1..]),
             _ => {
-                let (path, rest) = value.split_once("(")?;
-                let args = rest.strip_suffix(")")?.parse().ok()?;
+                let (path, rest) = value.split_once('(')?;
+                let args = rest.strip_suffix(')')?.parse().ok()?;
                 Self::Path(path, args)
             }
         })
@@ -80,7 +80,7 @@ struct SyscallEntry<'a> {
 
 impl<'a> SyscallEntry<'a> {
     fn parse(line: &'a str) -> Option<Self> {
-        let line = match line.rfind("#") {
+        let line = match line.rfind('#') {
             Some(x) => &line[..x],
             None => line,
         };
@@ -133,7 +133,7 @@ impl<'a> SyscallMapper<'a> {
     }
 }
 
-fn process_syscall_table<'a, 'b>(arch: &str, table: &'a str, mapper: &'b mut SyscallMapper<'a>) {
+fn process_syscall_table<'a>(arch: &str, table: &'a str, mapper: &mut SyscallMapper<'a>) {
     let mut names_table = output_file(&format!("{arch}_syscall_names.rs"));
     let mut handler_table = output_file(&format!("{arch}_syscall_mapping.rs"));
 

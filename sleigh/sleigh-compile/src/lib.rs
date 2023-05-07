@@ -2,8 +2,8 @@ use std::{collections::HashMap, path::Path};
 
 use sleigh_parse::{ast, Parser};
 use sleigh_runtime::{
-    matcher::Matcher, AttachmentIndex, Constructor, ConstructorDebugInfo, DecodeAction,
-    DisplaySegment, NamedRegister, RegisterAlias, RegisterAttachment, SleighData, StrIndex,
+    AttachmentIndex, Constructor, ConstructorDebugInfo, DecodeAction, DisplaySegment,
+    NamedRegister, RegisterAlias, RegisterAttachment, SleighData, StrIndex,
 };
 
 pub use sleigh_parse::resolve_dependencies;
@@ -29,10 +29,12 @@ pub fn build_inner(mut parser: Parser, verbose: bool) -> Result<SleighData, Stri
     };
 
     let mut symbols = SymbolTable::new(parser);
-    let mut ctx = Context::default();
-    ctx.verbose = verbose;
-    // @todo: make configurable
-    ctx.capture_debug_info = true;
+    let mut ctx = Context {
+        verbose,
+        // @todo: make configurable
+        capture_debug_info: true,
+        ..Context::default()
+    };
     ctx.data.alignment = 1;
 
     for item in ast.items {
@@ -54,7 +56,7 @@ pub fn build_inner(mut parser: Parser, verbose: bool) -> Result<SleighData, Stri
 
     for table in &symbols.tables {
         let matcher = matcher::build_sequential_matcher(&symbols, table, &ctx)?;
-        ctx.data.matchers.push(Matcher::SequentialMatcher(matcher));
+        ctx.data.matchers.push(matcher);
     }
 
     ctx.data.named_registers = vec![NamedRegister::default(); symbols.registers.len()];
@@ -118,7 +120,7 @@ pub fn build_inner(mut parser: Parser, verbose: bool) -> Result<SleighData, Stri
 
             for byte in 0..size {
                 let varnode_offset = offset + byte as u32;
-                ctx.data.register_mapping.insert(varnode_offset, (reg_id, byte as u8));
+                ctx.data.register_mapping.insert(varnode_offset, (reg_id, byte));
             }
         }
     }
@@ -145,10 +147,8 @@ pub fn build_inner(mut parser: Parser, verbose: bool) -> Result<SleighData, Stri
                 }
                 let end = ctx.data.attached_registers.len() as u32;
 
-                let size = size.unwrap_or(ctx.data.default_space_size as u16);
-                ctx.data
-                    .attachments
-                    .push(AttachmentIndex::Register((start, end), size.try_into().unwrap()));
+                let size = size.unwrap_or(ctx.data.default_space_size);
+                ctx.data.attachments.push(AttachmentIndex::Register((start, end), size));
             }
             symbols::Attachment::Name(names) => {
                 let start = ctx.data.attached_names.len() as u32;
@@ -271,7 +271,7 @@ fn resolve_item(ctx: &mut Context, syms: &mut SymbolTable, item: ast::Item) -> R
                         );
                         Some(syms.parser.get_ident(&name))
                     }
-                    (Some(with), None) => Some(with.clone()),
+                    (Some(with), None) => Some(with),
                     (None, constructor) => constructor,
                 };
 
@@ -322,7 +322,7 @@ fn add_constructor(
 
     let fields_start = ctx.data.fields.len() as u32;
     for field in &constructor.fields {
-        ctx.data.fields.push(field.clone());
+        ctx.data.fields.push(*field);
     }
     let fields_end = ctx.data.fields.len() as u32;
 
@@ -331,12 +331,12 @@ fn add_constructor(
         let start = ctx.data.context_disasm_expr.len() as u32;
         ctx.data.context_disasm_expr.extend_from_slice(expr);
         let end = ctx.data.context_disasm_expr.len() as u32;
-        let field = symbols.context_fields[*field as usize].field.into();
+        let field = symbols.context_fields[*field as usize].field;
         ctx.data.decode_actions.push(DecodeAction::ModifyContext(field, (start, end)));
     }
 
     for field in &constructor.disasm_actions.global_set {
-        let field = symbols.context_fields[*field as usize].field.into();
+        let field = symbols.context_fields[*field as usize].field;
         ctx.data.decode_actions.push(DecodeAction::SaveContext(field));
     }
 
@@ -350,7 +350,7 @@ fn add_constructor(
         let start = ctx.data.disasm_exprs.len() as u32;
         ctx.data.disasm_exprs.extend_from_slice(expr);
         let end = ctx.data.disasm_exprs.len() as u32;
-        ctx.data.post_decode_actions.push((*field as u32, (start, end)));
+        ctx.data.post_decode_actions.push((*field, (start, end)));
     }
     let post_decode_actions_end = ctx.data.post_decode_actions.len() as u32;
 
@@ -412,4 +412,34 @@ impl SleighDataCache {
         self.display_map.insert(segment.to_vec(), (start, end));
         (start, end)
     }
+}
+
+#[test]
+fn backtrack_with_offset() {
+    // https://github.com/icicle-emu/icicle-emu/pull/8#issuecomment-1527557130
+    static TEST_SPEC: &str = r#"
+    define endian=big;
+    define alignment=1;
+
+    define space ram type=ram_space size=4 default;
+    define space register type=register_space size=4;
+
+    define token t1(8)
+        tf1=(0,7);
+
+    sub_table: "sub_table a" is tf1=0 unimpl
+    sub_table: "sub_table b" is tf1=2 unimpl
+
+    :instr "a and" sub_table is tf1=1; sub_table  unimpl
+    :instr "b" tf1           is tf1=1; tf1        unimpl"#;
+
+    let sleigh = build_inner(sleigh_parse::Parser::from_str(TEST_SPEC), true).unwrap();
+    let mut runtime = sleigh_runtime::Runtime::new(0);
+
+    let inst = runtime.decode(&sleigh, 0x0, &[0x01, 0x01]).expect("failed to decode instruction");
+    assert_eq!(inst.inst_start, 0);
+    assert_eq!(inst.inst_next, 2);
+
+    let disasm = runtime.disasm(&sleigh).expect("failed to disassembly instruction");
+    assert_eq!(disasm, "instr b 0x1");
 }

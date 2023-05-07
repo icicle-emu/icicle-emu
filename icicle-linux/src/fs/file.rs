@@ -169,7 +169,7 @@ impl ActiveFileData {
         let new = match whence {
             types::Seek::Set => Some(offset),
             types::Seek::Cur => (self.pos as i64).checked_add(offset),
-            types::Seek::End => (self.inode.borrow().size as i64).checked_add(offset as i64),
+            types::Seek::End => (self.inode.borrow().size as i64).checked_add(offset),
             types::Seek::Data | types::Seek::Hole => return Err(errno::EINVAL),
         };
 

@@ -147,3 +147,105 @@ ldr q0, [x1, w2, sxtw]
 	z0_16[8]:8 = 0x0:8
 
 
+ucvtf s0, xzr
+<L0> (entry=0x8000000):
+	s0 = uint2float(0x0:8)
+	z0[4]:4 = 0x0:4
+	z0[8]:8 = 0x0:8
+	z0_16:8 = 0x0:8
+	z0_16[8]:8 = 0x0:8
+
+ucvtf s0, x0
+<L0> (entry=0x8000000):
+	s0 = uint2float(x0)
+	z0[4]:4 = 0x0:4
+	z0[8]:8 = 0x0:8
+	z0_16:8 = 0x0:8
+	z0_16[8]:8 = 0x0:8
+
+ucvtf d0, xzr
+<L0> (entry=0x8000000):
+	d0 = uint2float(0x0:8)
+	z0[8]:8 = 0x0:8
+	z0_16:8 = 0x0:8
+	z0_16[8]:8 = 0x0:8
+
+ucvtf h0, wzr
+<L0> (entry=0x8000000):
+	$U3:4 = int2float(0x0:8)
+	$U4:2 = float2float($U3:4)
+	h0 = $U4:2
+	z0[2]:6 = 0x0:6
+	z0[8]:8 = 0x0:8
+	z0_16:8 = 0x0:8
+	z0_16[8]:8 = 0x0:8
+
+ucvtf h0, w0
+<L0> (entry=0x8000000):
+	$U1:8 = zext(w0)
+	$U2:4 = int2float($U1:8)
+	$U3:2 = float2float($U2:4)
+	h0 = $U3:2
+	z0[2]:6 = 0x0:6
+	z0[8]:8 = 0x0:8
+	z0_16:8 = 0x0:8
+	z0_16[8]:8 = 0x0:8
+
+fsub h0, h0, h0
+<L0> (entry=0x8000000):
+	$U1:4 = float2float(h0)
+	$U2:4 = float2float(h0)
+	$U3:4 = $U1:4 f- $U2:4
+	$U4:2 = float2float($U3:4)
+	h0 = $U4:2
+	z0[2]:6 = 0x0:6
+	z0[8]:8 = 0x0:8
+	z0_16:8 = 0x0:8
+	z0_16[8]:8 = 0x0:8
+
+fsqrt h31, h31
+<L0> (entry=0x8000000):
+	$U1:4 = float2float(h31)
+	$U2:4 = sqrt($U1:4)
+	$U3:2 = float2float($U2:4)
+	h31 = $U3:2
+	z31[2]:6 = 0x0:6
+	z31[8]:8 = 0x0:8
+	z31_16:8 = 0x0:8
+	z31_16[8]:8 = 0x0:8
+
+frintz h0, h0
+<L0> (entry=0x8000000):
+	$U1:4 = float2float(h0)
+	h0 = float2int($U1:4)
+	z0[2]:6 = 0x0:6
+	z0[8]:8 = 0x0:8
+	z0_16:8 = 0x0:8
+	z0_16[8]:8 = 0x0:8
+
+fmov h0, x0
+<L0> (entry=0x8000000):
+	h0 = float2float(x0)
+	z0[2]:6 = 0x0:6
+	z0[8]:8 = 0x0:8
+	z0_16:8 = 0x0:8
+	z0_16[8]:8 = 0x0:8
+
+stzg sp, [sp, #-0x10]
+<L0> (entry=0x8000000):
+	$U6:8 = sp + 0xfffffffffffffff0:8
+	$tmp0:8 = $U6:8
+	$tmp1:8 = 0x0:8
+	$tmp2:8 = 0x10:8
+<L1>:
+	$U3:8 = $tmp0:8 + $tmp1:8
+	ram[$U3:8] = 0x0:8
+	$tmp1:8 = $tmp1:8 + 0x8:8
+	$U5:1 = $tmp1:8 < $tmp2:8
+	if $U5:1 jump <L1>
+
+retaa
+<L0> (entry=0x8000000):
+	pc = x30
+	return x30
+

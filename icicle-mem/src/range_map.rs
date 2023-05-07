@@ -22,6 +22,28 @@ impl From<(u64, u64)> for Range {
     }
 }
 
+pub trait RangeIndex {
+    fn to_inclusive(&self) -> (u64, u64);
+}
+
+impl RangeIndex for (u64, u64) {
+    fn to_inclusive(&self) -> (u64, u64) {
+        (self.0, self.1)
+    }
+}
+
+impl RangeIndex for std::ops::Range<u64> {
+    fn to_inclusive(&self) -> (u64, u64) {
+        (self.start, self.end - 1)
+    }
+}
+
+impl RangeIndex for std::ops::RangeInclusive<u64> {
+    fn to_inclusive(&self) -> (u64, u64) {
+        (*self.start(), *self.end())
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Default)]
 struct RangeMapData<T> {
     end: u64,
@@ -325,6 +347,13 @@ impl RangeOverlap {
             RangeOverlap::Full => (range.start, range.end),
         }
     }
+
+    pub fn get_with_len(self, range: (u64, u64)) -> (u64, u64) {
+        match self {
+            RangeOverlap::Partial(start, end) => (start, (end - start) + 1),
+            RangeOverlap::Full => (range.0, (range.1 - range.0) + 1),
+        }
+    }
 }
 
 fn get_overlapping(a: Range, b: Range) -> Option<RangeOverlap> {
@@ -336,6 +365,21 @@ fn get_overlapping(a: Range, b: Range) -> Option<RangeOverlap> {
     }
     else {
         Some(RangeOverlap::Partial(a.start.max(b.start), a.end.min(b.end)))
+    }
+}
+
+fn get_overlapping_range_inclusive(
+    (a_start, a_end): (u64, u64),
+    (b_start, b_end): (u64, u64),
+) -> Option<RangeOverlap> {
+    if b_start > a_end || b_end < a_start {
+        None
+    }
+    else if b_end >= a_end && b_start <= a_start {
+        Some(RangeOverlap::Full)
+    }
+    else {
+        Some(RangeOverlap::Partial(a_start.max(b_start), a_end.min(b_end)))
     }
 }
 
@@ -366,7 +410,7 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut map = f.debug_map();
         for entry in &self.ranges {
-            map.entry(&(entry.0..entry.1), &entry.2);
+            map.entry(&(entry.0..=entry.1), &entry.2);
         }
         map.finish()
     }
@@ -387,16 +431,13 @@ where
     /// Returns the position such that all elements before this position end before `index`.
     #[inline(always)]
     fn lower_bound(&self, index: u64) -> usize {
-        self.ranges.binary_search_by_key(&index, |(_, end, _)| *end).unwrap_or_else(|x| x)
+        self.ranges.binary_search_by_key(&index, |(_, end, _)| *end).map_or_else(|x| x, |x| x)
     }
 
     /// Returns the position such that all elements before this position start after `index`.
     #[inline(always)]
     fn upper_bound(&self, index: u64) -> usize {
-        self.ranges
-            .binary_search_by_key(&index, |(start, _, _)| *start)
-            .map(|x| x)
-            .unwrap_or_else(|x| x)
+        self.ranges.binary_search_by_key(&index, |(start, _, _)| *start).unwrap_or_else(|x| x)
     }
 
     /// Find the last range that starts before `index`. If there is no range before `index` then
@@ -414,13 +455,21 @@ where
         let i = self.find_range_before(index)?;
         let (start, end, data) = self.ranges.get(i)?;
         debug_assert!(*start <= index);
-        if *end <= index {
+        if *end < index {
             return None;
         }
         Some(data)
     }
 
-    pub fn insert(&mut self, (start, end): (u64, u64), data: T) -> Result<(), OverlapError<T>> {
+    pub fn insert(&mut self, range: impl RangeIndex, data: T) -> Result<(), OverlapError<T>> {
+        self.insert_inclusive(range.to_inclusive(), data)
+    }
+
+    pub fn insert_inclusive(
+        &mut self,
+        (start, end): (u64, u64),
+        data: T,
+    ) -> Result<(), OverlapError<T>> {
         let i = self.find_range_before(start);
         let mut merged = false;
 
@@ -428,19 +477,19 @@ where
         if let Some(i) = i {
             let (_, prev_end, prev_data) = &self.ranges[i];
             match start.cmp(prev_end) {
-                std::cmp::Ordering::Less => {
+                std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
                     return Err(OverlapError { data, overlap: (start, *prev_end) });
                 }
-                std::cmp::Ordering::Equal if prev_data == &data => {
-                    // Ensure that we will succeed in checking the overlap with the next element
-                    // before we modify the current range.
-                    if self.ranges.get(i + 1).map_or(true, |(next_start, _, _)| end <= *next_start)
-                    {
+                std::cmp::Ordering::Greater if start == *prev_end + 1 && prev_data == &data => {
+                    // We can merge the region that is being inserted with the previous region in
+                    // the range map. However, we need to ensure that we will succeed in checking
+                    // the overlap with the next element before we modify the current range.
+                    if self.ranges.get(i + 1).map_or(true, |(next_start, _, _)| end < *next_start) {
                         merged = true;
                         self.ranges[i].1 = end;
                     }
                 }
-                _ => {
+                std::cmp::Ordering::Greater => {
                     // The new range should be inserted after this range.
                 }
             }
@@ -448,30 +497,27 @@ where
 
         // Check for overlap with the range after the insertion.
         let next_i = i.map_or(0, |x| x + 1);
-        match self.ranges.get(next_i) {
-            Some((next_start, next_end, next_data)) => {
-                match next_start.cmp(&end) {
-                    std::cmp::Ordering::Less => {
-                        return Err(OverlapError { data, overlap: (*next_start, end) });
+        if let Some((next_start, next_end, next_data)) = self.ranges.get(next_i) {
+            match next_start.cmp(&end) {
+                std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
+                    return Err(OverlapError { data, overlap: (*next_start, end) });
+                }
+                std::cmp::Ordering::Greater if *next_start == end + 1 && next_data == &data => {
+                    if merged {
+                        // If already merged the new range then this range joins with the
+                        // previous.
+                        self.ranges[i.unwrap()].1 = *next_end;
+                        self.ranges.remove(next_i);
                     }
-                    std::cmp::Ordering::Equal if next_data == &data => {
-                        if merged {
-                            // If already merged the new range then this range joins with the
-                            // previous.
-                            self.ranges[i.unwrap()].1 = *next_end;
-                            self.ranges.remove(next_i);
-                        }
-                        else {
-                            self.ranges[next_i].0 = start;
-                        }
-                        return Ok(());
+                    else {
+                        self.ranges[next_i].0 = start;
                     }
-                    _ => {
-                        // New range should be inserted before this range.
-                    }
+                    return Ok(());
+                }
+                _ => {
+                    // New range should be inserted before this range.
                 }
             }
-            None => {}
         }
 
         if !merged {
@@ -485,8 +531,8 @@ where
     /// Removes the last overlapping entry in the mapping that overlap with `range`
     ///
     /// Returns the range removed any data associated with the removed range.
-    pub fn remove_last(&mut self, range: (u64, u64)) -> Option<(T, (u64, u64))> {
-        let (i, overlap) = self.get_overlap(Range::from(range))?;
+    pub fn remove_last(&mut self, range: impl RangeIndex) -> Option<(T, (u64, u64))> {
+        let (i, overlap) = self.get_overlap(range)?;
         self.remove_subrange(i, overlap)
     }
 
@@ -497,17 +543,17 @@ where
                 let data = data.clone();
 
                 if *start == overlap_start {
-                    *start = overlap_end;
+                    *start = overlap_end + 1;
                 }
                 else if *end == overlap_end {
-                    *end = overlap_start;
+                    *end = overlap_start - 1;
                 }
                 else {
                     // If removing the target range splits the removed range into two parts, we
                     // adjust the lower half and insert a new range to represent the upper half.
                     let upper_end = *end;
-                    *end = overlap_start;
-                    self.ranges.insert(i + 1, (overlap_end, upper_end, data.clone()));
+                    *end = overlap_start - 1;
+                    self.ranges.insert(i + 1, (overlap_end + 1, upper_end, data.clone()));
                 }
 
                 Some((data, (overlap_start, overlap_end)))
@@ -520,15 +566,22 @@ where
     }
 
     /// Removes all entries in the mapping that overlap with `range`
-    pub fn remove_all(&mut self, (target_start, target_end): (u64, u64)) {
+    pub fn remove_all(&mut self, range: impl RangeIndex) {
+        self.remove_all_inclusive(range.to_inclusive());
+    }
+
+    pub fn remove_all_inclusive(&mut self, (target_start, target_end): (u64, u64)) {
         // Elements before this index end before the target range starts.
         let mut lower_bound = self.lower_bound(target_start);
         // Elements after this index start after the target range ends.
-        let mut upper_bound = self.upper_bound(target_end + 1);
+        let mut upper_bound = match target_end.checked_add(1) {
+            Some(end) => self.upper_bound(end),
+            None => self.ranges.len(),
+        };
 
         debug_assert!(
             lower_bound <= upper_bound,
-            "remove all {target_start:#x}..{target_end:#x} => lower_bound={lower_bound}, upper_bound={upper_bound}"
+            "remove all {target_start:#x}..={target_end:#x} => lower_bound={lower_bound}, upper_bound={upper_bound}"
         );
 
         // If the range only contains a single element then we could be removing the middle of a
@@ -538,10 +591,9 @@ where
         }
         else if lower_bound + 1 == upper_bound {
             let (start, end, _) = &self.ranges[lower_bound];
-            if let Some(overlap) = get_overlapping(
-                Range::from((*start, *end)),
-                Range::from((target_start, target_end)),
-            ) {
+            if let Some(overlap) =
+                get_overlapping_range_inclusive((*start, *end), (target_start, target_end))
+            {
                 self.remove_subrange(lower_bound, overlap);
             }
             return;
@@ -550,13 +602,13 @@ where
         // Adjust ranges that partially overlap with the range we are removing:
         if let Some((start, end, _)) = self.ranges.get_mut(lower_bound) {
             if *start < target_start {
-                *end = target_start;
+                *end = target_start - 1;
                 lower_bound += 1;
             }
         }
         if let Some((start, end, _)) = self.ranges.get_mut(upper_bound.saturating_sub(1)) {
             if target_end < *end {
-                *start = target_end;
+                *start = target_end + 1;
                 upper_bound -= 1;
             }
         }
@@ -580,23 +632,22 @@ where
     /// Returns an iterator over all the entries in the map that overlap with `range`.
     pub fn overlapping_iter(
         &self,
-        (start, end): (u64, u64),
+        range: impl RangeIndex,
     ) -> impl Iterator<Item = (u64, u64, Option<&T>)> {
-        let i = self.upper_bound(end);
-        let mut cursor = VecRangeMapCursor { start, end, i };
+        let mut cursor = VecRangeMapCursor::new(self, range.to_inclusive());
         std::iter::from_fn(move || {
-            let (start, end, i) = cursor.next(self)?;
-            Some((start, end, i.map(|i| &self.ranges[i].2)))
+            let (start, len, i) = cursor.next(self)?;
+            Some((start, len, i.map(|i| &self.ranges[i].2)))
         })
     }
 
     /// Execute `func` for each mapped entry and gap between `range`, allowing modification of each
     /// entry.
-    pub fn overlapping_mut<F, E>(&mut self, range: (u64, u64), mut func: F) -> Result<(), E>
+    pub fn overlapping_mut<F, E>(&mut self, range: impl RangeIndex, mut func: F) -> Result<(), E>
     where
         F: FnMut(u64, u64, &mut Option<T>) -> Result<(), E>,
     {
-        let mut iter = VecRangeSplitIterMut::new(self, range);
+        let mut iter = VecRangeSplitIterMut::new(self, range.to_inclusive());
         let result = loop {
             match iter.step(&mut func) {
                 Ok(true) => {}
@@ -609,8 +660,8 @@ where
     }
 
     /// Gets the last range that overlaps with `target`
-    pub fn get_range(&self, target: (u64, u64)) -> Option<(u64, u64)> {
-        self.get_overlap(Range::from(target)).map(|(i, _)| {
+    pub fn get_range(&self, target: impl RangeIndex) -> Option<(u64, u64)> {
+        self.get_overlap(target).map(|(i, _)| {
             let (start, end, _) = &self.ranges[i];
             (*start, *end)
         })
@@ -619,11 +670,23 @@ where
     /// Finds the overlap of `target` with an existing range.
     ///
     /// Note: If there is more more than one overlapping range the last one will be returned
-    fn get_overlap(&self, target: Range) -> Option<(usize, RangeOverlap)> {
-        let i = self.find_range_before(target.end.saturating_sub(1))?;
+    fn get_overlap(&self, target: impl RangeIndex) -> Option<(usize, RangeOverlap)> {
+        let target = target.to_inclusive();
+        let i = self.find_range_before(target.1)?;
         let (start, end, _) = &self.ranges[i];
-        let overlapping = get_overlapping(Range::from((*start, *end)), target)?;
+        let overlapping = get_overlapping_range_inclusive((*start, *end), target)?;
         Some((i, overlapping))
+    }
+
+    #[allow(unused)]
+    fn debug_map(&self) -> String {
+        let map = self
+            .ranges
+            .iter()
+            .map(|(start, end, _)| format!("    range={start:#x}..={end:#x},"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("{{\n{map}\n}}")
     }
 }
 
@@ -637,9 +700,8 @@ struct VecRangeSplitIterMut<'a, T> {
 }
 
 impl<'a, T: Clone + Eq + PartialEq> VecRangeSplitIterMut<'a, T> {
-    fn new(map: &'a mut VecRangeMap<T>, (start, end): (u64, u64)) -> Self {
-        let i = map.upper_bound(end);
-        let cursor = VecRangeMapCursor { start, end, i };
+    fn new(map: &'a mut VecRangeMap<T>, range: (u64, u64)) -> Self {
+        let cursor = VecRangeMapCursor::new(map, range);
         Self { cursor, map, removals: vec![], additions: vec![] }
     }
 
@@ -647,30 +709,30 @@ impl<'a, T: Clone + Eq + PartialEq> VecRangeSplitIterMut<'a, T> {
         &mut self,
         mut modify: impl FnMut(u64, u64, &mut Option<T>) -> Result<(), U>,
     ) -> Result<bool, U> {
-        let Some((overlap_start, overlap_end, existing_slot)) = self.cursor.next(self.map) else {
+        let Some((overlap_start, overlap_len, existing_slot)) = self.cursor.next(self.map) else {
             return Ok(false);
         };
 
         match existing_slot {
             Some(i) => {
                 let mut data = Some(self.map.ranges[i].2.clone());
-                modify(overlap_start, overlap_end, &mut data)?;
+                modify(overlap_start, overlap_len, &mut data)?;
 
                 if data.as_ref() != Some(&self.map.ranges[i].2) {
                     // If data has been modified, the register a removal and insertion. (Note:
                     // currently we never perform in place modifications to so
                     // that regions are merged correctly).
-                    self.removals.push((overlap_start, overlap_end));
+                    self.removals.push((overlap_start, overlap_len));
                     if let Some(data) = data {
-                        self.additions.push((overlap_start, overlap_end, data));
+                        self.additions.push((overlap_start, overlap_len, data));
                     }
                 }
             }
             None => {
                 let mut data = None;
-                modify(overlap_start, overlap_end, &mut data)?;
+                modify(overlap_start, overlap_len, &mut data)?;
                 if let Some(data) = data {
-                    self.additions.push((overlap_start, overlap_end, data));
+                    self.additions.push((overlap_start, overlap_len, data));
                 }
             }
         }
@@ -679,14 +741,16 @@ impl<'a, T: Clone + Eq + PartialEq> VecRangeSplitIterMut<'a, T> {
     }
 
     fn apply_updates(self) {
-        for range in self.removals {
-            self.map.remove_all(range);
+        for (start, len) in self.removals {
+            let end = start + (len - 1);
+            self.map.remove_all(start..=end);
         }
 
-        for (start, end, data) in self.additions {
-            if let Err(err) = self.map.insert((start, end), data) {
+        for (start, len, data) in self.additions {
+            let end = start + (len - 1);
+            if let Err(err) = self.map.insert(start..=end, data) {
                 panic!(
-                    "VecRangeMap update was invalid (overlap with: {:#x}..{:#x})",
+                    "VecRangeMap insert at ({start:#x}..={end:#x}) was invalid (overlap with: {:#x}..={:#x})",
                     err.overlap.0, err.overlap.1
                 );
             }
@@ -696,46 +760,60 @@ impl<'a, T: Clone + Eq + PartialEq> VecRangeSplitIterMut<'a, T> {
 
 struct VecRangeMapCursor {
     start: u64,
-    end: u64,
+    len: u64,
     i: usize,
 }
 
 impl VecRangeMapCursor {
+    pub fn new<T>(map: &VecRangeMap<T>, (start, end): (u64, u64)) -> Self
+    where
+        T: Clone + Eq + PartialEq,
+    {
+        let i = match end.checked_add(1) {
+            Some(end) => map.upper_bound(end),
+            None => map.ranges.len(),
+        };
+        Self { start, len: (end - start) + 1, i }
+    }
+
     pub fn next<T>(&mut self, map: &VecRangeMap<T>) -> Option<(u64, u64, Option<usize>)> {
-        if self.start >= self.end {
+        if self.len == 0 {
             return None;
         }
+        let current_end = self.start + (self.len - 1);
 
         let i = match self.i.checked_sub(1) {
             Some(i) => i,
             None => {
                 // Final region occurs before the start of the range.
-                let end = self.end;
-                self.end = self.start;
-                return Some((self.start, end, None));
+                let rest = self.len;
+                self.len = 0;
+                return Some((self.start, rest, None));
             }
         };
 
         let entry = &map.ranges[i];
 
         // Determine the amount we overlap with this range.
-        let range = Range::from((self.start, self.end));
-        let (overlap_start, overlap_end) =
-            match get_overlapping(range, Range::from((entry.0, entry.1))) {
-                Some(overlap) => overlap.get(range),
-                None => (self.start, self.start),
+        let range = (self.start, current_end);
+        let (overlap_start, overlap_len) =
+            match get_overlapping_range_inclusive(range, (entry.0, entry.1)) {
+                Some(overlap) => overlap.get_with_len(range),
+                None => (self.start, 0),
             };
 
-        if overlap_end < self.end {
+        let region_len = (current_end - overlap_start) + 1;
+        let gap_len = region_len - overlap_len;
+
+        if gap_len != 0 {
             // There was a gap between the next entry and the previous entry:
-            let end = self.end;
-            self.end = overlap_end;
-            Some((overlap_end, end, None))
+            self.len -= gap_len;
+            Some((overlap_start + overlap_len, gap_len, None))
         }
         else {
-            self.end = overlap_start;
+            self.len -= region_len;
             self.i -= 1;
-            Some((overlap_start, overlap_end, Some(i)))
+            Some((overlap_start, region_len, Some(i)))
         }
     }
 }
@@ -743,27 +821,32 @@ impl VecRangeMapCursor {
 #[test]
 fn simple() {
     let mut map = RangeMap::new();
-    map.insert((0x1000, 0x2000), 1).unwrap();
+    map.insert(0x1000..0x2000, 1).unwrap();
     assert_eq!(map.get(0x1000), Some(&1));
 }
 
 #[test]
 fn remove_range_all() {
     let mut map = RangeMap::new();
-    map.insert((0x1000, 0x2000), 1).unwrap();
-    map.remove_all((0x1000, 0x2000));
+    map.insert(0x1000..0x1001, 1).unwrap();
+    map.remove_all(0x1000..0x1001);
     assert_eq!(map.get(0x1000), None);
 
     let mut map = RangeMap::new();
-    map.insert((0x1000, 0x2000), 1).unwrap();
-    map.remove_all((0x1100, 0x1200));
+    map.insert(0x1000..0x2000, 1).unwrap();
+    map.remove_all(0x1000..0x2000);
+    assert_eq!(map.get(0x1000), None);
+
+    let mut map = RangeMap::new();
+    map.insert(0x1000..0x2000, 1).unwrap();
+    map.remove_all(0x1100..0x1200);
     assert_eq!(map.get(0x1000), Some(&1));
     assert_eq!(map.get(0x1100), None);
     assert_eq!(map.get(0x1200), Some(&1));
 
     let mut map = RangeMap::new();
-    map.insert((0x1000, 0x2000), 1).unwrap();
-    map.remove_all((0x1000, 0x1500));
+    map.insert(0x1000..0x2000, 1).unwrap();
+    map.remove_all(0x1000..0x1500);
     eprintln!("{:#x?}", map);
     assert_eq!(map.get(0x1000), None);
     assert_eq!(map.get(0x1100), None);
@@ -773,11 +856,11 @@ fn remove_range_all() {
 #[test]
 fn remove_last() {
     let mut map = RangeMap::new();
-    map.insert((0x1000, 0x2000), 1).unwrap();
-    map.insert((0x2000, 0x3000), 2).unwrap();
+    map.insert(0x1000..0x2000, 1).unwrap();
+    map.insert(0x2000..0x3000, 2).unwrap();
 
     // Remove the first element.
-    map.remove_last((0x1000, 0x2000));
+    map.remove_last(0x1000..0x2000);
     assert_eq!(map.ranges.len(), 1);
     assert_eq!(map.get(0x0), None);
 }
@@ -785,39 +868,39 @@ fn remove_last() {
 #[test]
 fn overlapping_iter() {
     let mut map = RangeMap::new();
-    map.insert((0x1000, 0x2000), 1).unwrap();
-    map.insert((0x2000, 0x3000), 2).unwrap();
-    map.insert((0x4000, 0x5000), 3).unwrap();
+    map.insert(0x1000..0x2000, 1).unwrap();
+    map.insert(0x2000..0x3000, 2).unwrap();
+    map.insert(0x4000..0x5000, 3).unwrap();
 
-    assert_eq!(map.overlapping_iter((0x0000, 0x6000)).collect::<Vec<_>>(), vec![
-        (0x5000, 0x6000, None),
-        (0x4000, 0x5000, Some(&3)),
-        (0x3000, 0x4000, None),
-        (0x2000, 0x3000, Some(&2)),
-        (0x1000, 0x2000, Some(&1)),
+    assert_eq!(map.overlapping_iter(0x0000..0x6000).collect::<Vec<_>>(), vec![
+        (0x5000, 0x1000, None),
+        (0x4000, 0x1000, Some(&3)),
+        (0x3000, 0x1000, None),
+        (0x2000, 0x1000, Some(&2)),
+        (0x1000, 0x1000, Some(&1)),
         (0x0000, 0x1000, None),
     ]);
 
-    assert_eq!(map.overlapping_iter((0x4500, 0x5500)).collect::<Vec<_>>(), vec![
-        (0x5000, 0x5500, None),
-        (0x4500, 0x5000, Some(&3))
+    assert_eq!(map.overlapping_iter(0x4500..0x5500).collect::<Vec<_>>(), vec![
+        (0x5000, 0x500, None),
+        (0x4500, 0xb00, Some(&3))
     ]);
 
-    assert_eq!(map.overlapping_iter((0x1500, 0x2500)).collect::<Vec<_>>(), vec![
-        (0x2000, 0x2500, Some(&2)),
-        (0x1500, 0x2000, Some(&1)),
+    assert_eq!(map.overlapping_iter(0x1500..0x2500).collect::<Vec<_>>(), vec![
+        (0x2000, 0x500, Some(&2)),
+        (0x1500, 0xb00, Some(&1)),
     ]);
 }
 
 #[test]
 fn overlapping_iter_mut() {
     let mut map = RangeMap::new();
-    map.insert((0x1000, 0x2000), 1).unwrap();
+    map.insert(0x1000..0x2000, 1).unwrap();
 
     // Check that we can get access to a region inside of without removing it
-    map.overlapping_mut::<_, ()>((0x1100, 0x1200), |start, end, entry| {
+    map.overlapping_mut::<_, ()>(0x1100..0x1200, |start, len, entry| {
         assert_eq!(start, 0x1100);
-        assert_eq!(end, 0x1200);
+        assert_eq!(len, 0x100);
         assert_eq!(*entry, Some(1));
         Ok(())
     })
@@ -826,43 +909,44 @@ fn overlapping_iter_mut() {
     assert_eq!(map.ranges.len(), 1);
 
     // Check that handle ranges that cross multiple entries.
-    map.insert((0x2000, 0x3000), 2).unwrap();
-    map.overlapping_mut::<_, ()>((0x1900, 0x2200), |_, _, _| Ok(())).unwrap();
+    map.insert(0x2000..0x3000, 2).unwrap();
+    map.overlapping_mut::<_, ()>(0x1900..0x2200, |_, _, _| Ok(())).unwrap();
 
+    eprintln!("{:#x?}", map);
     assert_eq!(map.get(0x1900), Some(&1));
     assert_eq!(map.get(0x2000), Some(&2));
     assert_eq!(map.ranges.len(), 2);
 
     // Check for modifications around boundary conditions
     let mut map = RangeMap::new();
-    map.insert((0x10000, 0x11000), 1).unwrap();
-    map.insert((0x11000, 0x12000), 2).unwrap();
-    map.insert((0x12000, 0x13000), 3).unwrap();
+    map.insert(0x10000..0x11000, 1).unwrap();
+    map.insert(0x11000..0x12000, 2).unwrap();
+    map.insert(0x12000..0x13000, 3).unwrap();
 
-    map.overlapping_mut((0x10000, 0x11000), |_, _, x| x.as_mut().map(|x| *x += 10).ok_or(()))
+    map.overlapping_mut(0x10000..0x11000, |_, _, x| x.as_mut().map(|x| *x += 10).ok_or(()))
         .unwrap();
     assert_eq!(map.get(0x10000), Some(&11));
 
     // Check for modifications with gaps
     let mut map = RangeMap::new();
-    map.insert((0x0, 0x1000), 1).unwrap();
-    map.insert((0x200000, 0x600000), 2).unwrap();
-    map.overlapping_mut((0x200000, 0x400000), |_, _, x| x.as_mut().map(|x| *x += 10).ok_or(()))
+    map.insert(0x0..0x1000, 1).unwrap();
+    map.insert(0x200000..0x600000, 2).unwrap();
+    map.overlapping_mut(0x200000..0x400000, |_, _, x| x.as_mut().map(|x| *x += 10).ok_or(()))
         .unwrap();
 
     eprintln!("{:#x?}", map);
-    assert_eq!(map.overlapping_iter((0x0, 0x600000)).collect::<Vec<_>>(), vec![
-        (0x400000, 0x600000, Some(&2)),
-        (0x200000, 0x400000, Some(&12)),
-        (0x1000, 0x200000, None),
+    assert_eq!(map.overlapping_iter(0x0..0x600000).collect::<Vec<_>>(), vec![
+        (0x400000, 0x200000, Some(&2)),
+        (0x200000, 0x200000, Some(&12)),
+        (0x1000, 0x1ff000, None),
         (0x0, 0x1000, Some(&1)),
     ]);
 
     // Check that we can insert new elements
     let mut map = RangeMap::new();
-    map.insert((0x0, 0x1000), 1).unwrap();
-    map.insert((0x200000, 0x600000), 2).unwrap();
-    map.overlapping_mut::<_, ()>((0x1000, 0x2000), |_, _, x| {
+    map.insert(0x0..0x1000, 1).unwrap();
+    map.insert(0x200000..0x800000, 2).unwrap();
+    map.overlapping_mut::<_, ()>(0x1000..0x2000, |_, _, x| {
         *x = Some(10);
         Ok(())
     })
@@ -871,11 +955,59 @@ fn overlapping_iter_mut() {
 }
 
 #[test]
+fn overlapping_iter_mut_insert_boundaries() {
+    let mut map = RangeMap::new();
+    map.insert(0x1..0x1001, 1).unwrap();
+
+    map.overlapping_mut::<_, ()>(0x1..0x1000, |_, _, value| {
+        *value = Some(2);
+        Ok(())
+    })
+    .unwrap();
+    eprintln!("{:#x?}", map);
+    map.overlapping_mut::<_, ()>(0x1000..0x1001, |_, _, value| {
+        *value = Some(3);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(map.get(0xfff), Some(&2));
+    assert_eq!(map.get(0x1000), Some(&3));
+}
+
+#[test]
+fn overlapping_iter_mut_one() {
+    let mut map = RangeMap::new();
+    map.insert(0x1000..0x2000, 1).unwrap();
+
+    map.overlapping_mut::<_, ()>(0x1000..=0x1000, |start, len, value| {
+        assert_eq!(start, 0x1000);
+        assert_eq!(len, 0x1);
+        assert_eq!(*value, Some(1));
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn overlapping_iter_mut_nothing() {
+    let mut map = RangeMap::new();
+    map.insert(0x0..0x1000, 1).unwrap();
+
+    map.overlapping_mut::<_, ()>(0x10000..=0x10fff, |start, len, value| {
+        assert_eq!(start, 0x10000);
+        assert_eq!(len, 0x1000);
+        assert_eq!(*value, None);
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
 fn modify_middle() {
     // Ensure that we can modify a subrange of an entry.
     let mut map = RangeMap::new();
-    map.insert((0x1000, 0x2000), 1).unwrap();
-    map.overlapping_mut::<_, ()>((0x1050, 0x1150), |_, _, x| x.as_mut().map(|x| *x = 2).ok_or(()))
+    map.insert(0x1000..0x2000, 1).unwrap();
+    map.overlapping_mut::<_, ()>(0x1050..0x1150, |_, _, x| x.as_mut().map(|x| *x = 2).ok_or(()))
         .unwrap();
     eprintln!("{map:#0x?}");
     assert_eq!(map.get(0x1000), Some(&1));
@@ -883,9 +1015,8 @@ fn modify_middle() {
     assert_eq!(map.get(0x1150), Some(&1));
 
     // Ensure we can modify a range crossing multiple entries.
-    let _ = map.overlapping_mut::<_, ()>((0x1000, 0x2000), |_, _, x| {
-        x.as_mut().map(|x| *x += 10).ok_or(())
-    });
+    let _ = map
+        .overlapping_mut::<_, ()>(0x1000..0x2000, |_, _, x| x.as_mut().map(|x| *x += 10).ok_or(()));
     eprintln!("{map:#0x?}");
 
     assert_eq!(map.get(0x1000), Some(&11));
@@ -898,39 +1029,39 @@ fn remove_range_all_complex() {
     #[cfg(test)]
     fn init_map() -> VecRangeMap<i32> {
         let mut map = RangeMap::new();
-        map.insert((0x1000, 0x2000), 1).unwrap();
-        map.insert((0x2000, 0x3000), 2).unwrap();
-        map.insert((0x4000, 0x5000), 3).unwrap();
+        map.insert(0x1000..0x2000, 1).unwrap();
+        map.insert(0x2000..0x3000, 2).unwrap();
+        map.insert(0x4000..0x5000, 3).unwrap();
         map
     }
 
     // Remove none
     let mut map = init_map();
     eprintln!("{:#x?}", map);
-    map.remove_all((0x0, 0x1000));
+    map.remove_all(0x0..0x1000);
     assert_eq!(map.iter().collect::<Vec<_>>(), vec![
-        (0x1000, 0x2000, &1),
-        (0x2000, 0x3000, &2),
-        (0x4000, 0x5000, &3)
+        (0x1000, 0x1fff, &1),
+        (0x2000, 0x2fff, &2),
+        (0x4000, 0x4fff, &3)
     ]);
 
     // Remove all
     let mut map = init_map();
-    map.remove_all((0x1000, 0x5000));
+    map.remove_all(0x1000..0x5000);
     assert_eq!(map.iter().collect::<Vec<_>>(), vec![]);
 
     // Remove first
     let mut map = init_map();
-    map.remove_all((0x1000, 0x2000));
-    assert_eq!(map.iter().collect::<Vec<_>>(), vec![(0x2000, 0x3000, &2), (0x4000, 0x5000, &3)]);
+    map.remove_all(0x1000..0x2000);
+    assert_eq!(map.iter().collect::<Vec<_>>(), vec![(0x2000, 0x2fff, &2), (0x4000, 0x4fff, &3)]);
 
     // Remove last
     let mut map = init_map();
-    map.remove_all((0x4000, 0x5000));
-    assert_eq!(map.iter().collect::<Vec<_>>(), vec![(0x1000, 0x2000, &1), (0x2000, 0x3000, &2)]);
+    map.remove_all(0x4000..0x5000);
+    assert_eq!(map.iter().collect::<Vec<_>>(), vec![(0x1000, 0x1fff, &1), (0x2000, 0x2fff, &2)]);
 
     // Remove middle
     let mut map = init_map();
-    map.remove_all((0x2000, 0x3000));
-    assert_eq!(map.iter().collect::<Vec<_>>(), vec![(0x1000, 0x2000, &1), (0x4000, 0x5000, &3)]);
+    map.remove_all(0x2000..0x3000);
+    assert_eq!(map.iter().collect::<Vec<_>>(), vec![(0x1000, 0x1fff, &1), (0x4000, 0x4fff, &3)]);
 }

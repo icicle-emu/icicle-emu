@@ -4,8 +4,10 @@ use icicle_vm::cpu::{mem::perm, Cpu};
 
 pub mod cmp_finder;
 pub mod cmplog;
+pub mod cmplog2;
 pub mod compcov;
 pub mod coverage;
+pub mod timer;
 
 /// Computes the hash of an integer using the FNV-1a algorithm.
 pub fn fnv_hash(value: u64) -> u32 {

@@ -44,13 +44,13 @@ impl crate::FuzzTarget for RandomIoTarget {
         cpu_config.optimize_block = false;
         let mut vm = icicle_vm::build(&cpu_config)?;
 
-        let mut msp_config = config::Config::default();
-        msp_config.interrupt_interval = config.msp430.interrupt_interval;
+        let mut msp_config = config::Config {
+            load_addr: config.msp430.load_addr.unwrap_or(0),
+            interrupt_interval: config.msp430.interrupt_interval,
+            ..config::Config::default()
+        };
         if let Some(mcu) = config.msp430.mcu.as_ref() {
             msp_config.mcu = mcu.clone();
-        }
-        if let Some(load_addr) = config.msp430.load_addr {
-            msp_config.load_addr = load_addr;
         }
 
         let mut env = env::Msp430::new(&vm.cpu, msp_config)?;
@@ -101,7 +101,7 @@ impl Runnable for RandomIoTarget {
             // The first byte of the input is used to seed various RNGs, note we intentionally
             // restrict the range of the seed to avoid too many excess paths.
             None => {
-                let rand_seed = input.get(0).copied().unwrap_or(0xaa);
+                let rand_seed = input.first().copied().unwrap_or(0xaa);
                 env.interrupt_rng.seed = (rand_seed & 0xf) as u64;
                 env.interrupt_rng.next();
                 (input.get(1..).unwrap_or(&[]), (rand_seed >> 4) as u64)

@@ -61,9 +61,9 @@ impl MemHandler<FuncRef> {
     }
 }
 
-/// Checks whether the size of a value is a size that the JIT can handle natively
-fn is_native_size(bytes: u8) -> bool {
-    [1, 2, 4, 8, 16].contains(&bytes)
+/// Checks whether the size of a value is a size that the JIT can handle natively.
+fn is_jit_supported_size(size_in_bytes: u8) -> bool {
+    [1, 2, 4, 8, 16].contains(&size_in_bytes)
 }
 
 struct Symbols {
@@ -313,7 +313,7 @@ pub(crate) fn translate<'a>(
     functions: &crate::RuntimeFunctions,
     target: &CompilationTarget,
 ) {
-    let symbols = Symbols::import(module, &mut builder.func, functions);
+    let symbols = Symbols::import(module, builder.func, functions);
     let hook_sig = builder.import_signature(functions.hook_signature.clone());
 
     builder.func.signature.params.push(AbiParam::new(types::I64)); // cpu_ptr
@@ -492,7 +492,7 @@ impl<'a> Translator<'a> {
 
     fn goto_jit_exit_external_addr(&mut self, addr: Value) {
         let block_id = self.builder.ins().iconst(types::I64, self.block_id as i64);
-        let block_offset = self.builder.ins().iconst(types::I64, 0 as i64);
+        let block_offset = self.builder.ins().iconst(types::I64, 0_i64);
         self.builder.ins().jump(self.exit_block, &[block_id, block_offset, addr]);
     }
 
@@ -715,12 +715,13 @@ impl<'a> Translator<'a> {
             let output = stmt.output;
             let inputs = stmt.inputs.get();
 
-            let mut ctx = Ctx { trans: self, instruction: stmt.clone() };
+            let mut ctx = Ctx { trans: self, instruction: *stmt };
             match stmt.op {
                 Op::Copy => ctx.emit_copy(),
                 Op::ZeroExtend => ctx.emit_zero_extend(),
                 Op::SignExtend => ctx.emit_sign_extend(),
                 Op::IntToFloat => ctx.emit_int_to_float(),
+                Op::UintToFloat => ctx.emit_uint_to_float(),
                 Op::FloatToFloat => ctx.emit_float_to_float(),
                 Op::FloatToInt => ctx.emit_float_to_int(),
 
@@ -783,7 +784,7 @@ impl<'a> Translator<'a> {
                 Op::Load(id) => match id {
                     0 => mem::load_ram(self, inputs[0], output),
                     _ => {
-                        if !is_native_size(output.size) {
+                        if !is_jit_supported_size(output.size) {
                             ctx.trans.interpret(ctx.instruction);
                             continue;
                         }
@@ -795,7 +796,7 @@ impl<'a> Translator<'a> {
                 Op::Store(id) => match id {
                     0 => mem::store_ram(self, inputs[0], inputs[1]),
                     _ => {
-                        if !is_native_size(inputs[1].size()) {
+                        if !is_jit_supported_size(inputs[1].size()) {
                             ctx.trans.interpret(ctx.instruction);
                             continue;
                         }
@@ -818,6 +819,27 @@ impl<'a> Translator<'a> {
                 Op::Hook(id) => {
                     ctx.call_hook(id);
                     ctx.trans.maybe_exit_jit(None);
+                }
+                Op::HookIf(id) => {
+                    let hook_block = ctx.trans.builder.create_block();
+                    // Typically the only reason to use a conditional hook (instead of just checking
+                    // the condition inside of the hook) is because we expect the condition to be
+                    // false most of the time, and we want to stay on the hot path. So mark the hook
+                    // as cold.
+                    ctx.trans.builder.set_cold_block(hook_block);
+
+                    let continue_block = ctx.trans.builder.create_block();
+
+                    let cond = ctx.trans.read_int(inputs[0]);
+                    ctx.trans.builder.ins().brif(cond, hook_block, &[], continue_block, &[]);
+
+                    // hook_block:
+                    {
+                        ctx.trans.builder.switch_to_block(hook_block);
+                        ctx.trans.builder.seal_block(hook_block);
+                        ctx.call_hook(id);
+                        ctx.trans.maybe_exit_jit(Some(continue_block));
+                    }
                 }
 
                 Op::TracerLoad(_) | Op::TracerStore(_) => {
@@ -847,6 +869,14 @@ impl<'a> Translator<'a> {
                     self.exit_with_exception(ExceptionCode::InvalidInstruction, msg);
                     return;
                 }
+
+                Op::Select(cond_var) => {
+                    let cond = ctx.trans.read_bool(pcode::VarNode::new(cond_var, 1).into());
+                    let a = ctx.trans.read_int(inputs[0]);
+                    let b = ctx.trans.read_int(inputs[1]);
+                    let value = ctx.trans.builder.ins().select(cond, a, b);
+                    self.write(output, value);
+                }
             }
         }
 
@@ -861,7 +891,7 @@ impl<'a> Translator<'a> {
         // the completed instruction. This ensures that the runtime does not try to run clean up
         // code for handling partially executed blocks and will resume at the correct location.
         self.block_offset = 0;
-        self.last_addr = self.last_addr + self.instruction_len;
+        self.last_addr += self.instruction_len;
 
         self.translate_block_exit(&block.exit);
     }
@@ -911,14 +941,14 @@ impl<'a> Translator<'a> {
                 {
                     self.builder.switch_to_block(true_block);
                     self.builder.seal_block(true_block);
-                    self.goto_jump_target(&target);
+                    self.goto_jump_target(target);
                 }
 
                 // false:
                 {
                     self.builder.switch_to_block(false_block);
                     self.builder.seal_block(false_block);
-                    self.goto_jump_target(&fallthrough);
+                    self.goto_jump_target(fallthrough);
                 }
             }
             BlockExit::Call { target, fallthrough, .. } => {

@@ -204,26 +204,26 @@ impl Msp430 {
             // loaded. This prevents the emulator from ever executing code that is not in the
             // binary.
             let perm = (entry.perm.value() | perm::MAP) & !perm::EXEC;
-
+            let len = entry
+                .end
+                .checked_sub(entry.start)
+                .expect("Memory mapping end address occurs before starting address");
             let result = match &entry.value {
                 config::Value::None => {
-                    cpu.mem.map_memory(entry.start, entry.end, Mapping { perm, value: 0xff })
+                    cpu.mem.map_memory_len(entry.start, len, Mapping { perm, value: 0xff })
                 }
-                &config::Value::Fill(value) => {
-                    cpu.mem.map_memory(entry.start, entry.end, Mapping {
-                        perm: perm | perm::INIT,
-                        value,
-                    })
-                }
+                &config::Value::Fill(value) => cpu
+                    .mem
+                    .map_memory_len(entry.start, len, Mapping { perm: perm | perm::INIT, value }),
                 config::Value::Bytes(bytes) => {
-                    cpu.mem.map_memory(entry.start, entry.end, Mapping {
+                    cpu.mem.map_memory_len(entry.start, len, Mapping {
                         perm: perm | perm::INIT,
                         value: 0,
                     });
                     cpu.mem.write_bytes(entry.start, bytes, perm::NONE).is_ok()
                 }
-                config::Value::Io => cpu.mem.map_memory(entry.start, entry.end, peripheral_handler),
-                config::Value::LogWrite => cpu.mem.map_memory(entry.start, entry.end, logger),
+                config::Value::Io => cpu.mem.map_memory_len(entry.start, len, peripheral_handler),
+                config::Value::LogWrite => cpu.mem.map_memory_len(entry.start, len, logger),
             };
 
             if !result {

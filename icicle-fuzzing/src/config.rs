@@ -28,14 +28,10 @@ impl CustomSetup {
         }
 
         for entry in &self.extra_memory {
-            vm.cpu.mem.map_memory(
-                entry.offset,
-                entry.offset + entry.size,
-                icicle_vm::cpu::mem::Mapping {
-                    perm: entry.perm.value() | icicle_vm::cpu::mem::perm::INIT,
-                    value: 0x00,
-                },
-            );
+            vm.cpu.mem.map_memory_len(entry.offset, entry.size, icicle_vm::cpu::mem::Mapping {
+                perm: entry.perm.value() | perm::INIT,
+                value: 0x00,
+            });
         }
 
         // Precompute all register locations to avoid lookups in `init`.
@@ -78,12 +74,12 @@ impl CustomSetup {
                 }
                 Location::StartAddr => {
                     buf.resize(8, 0);
-                    vm.cpu.write_pc(get_u64(&buf));
+                    vm.cpu.write_pc(get_u64(buf));
                 }
                 Location::Mem(addr) => {
                     vm.cpu
                         .mem
-                        .write_bytes_large(*addr, &buf, icicle_vm::cpu::mem::perm::NONE)
+                        .write_bytes_large(*addr, buf, perm::NONE)
                         .map_err(|e| anyhow::format_err!("failed to write to {addr:#x}: {e:?}"))?;
                 }
             }

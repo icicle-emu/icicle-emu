@@ -186,6 +186,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             | pcode::Op::ZeroExtend
             | pcode::Op::SignExtend
             | pcode::Op::IntToFloat
+            | pcode::Op::UintToFloat
             | pcode::Op::FloatToFloat
             | pcode::Op::FloatToInt
             | pcode::Op::FloatCeil
@@ -202,7 +203,10 @@ impl<'a, 'b> Builder<'a, 'b> {
             }
 
             // Unconstrained input/output size.
-            pcode::Op::Arg(_) | pcode::Op::PcodeOp(_) | pcode::Op::Hook(_) => {}
+            pcode::Op::Arg(_)
+            | pcode::Op::PcodeOp(_)
+            | pcode::Op::Hook(_)
+            | pcode::Op::HookIf(_) => {}
 
             // Shift operations: input[0].size == output.size
             pcode::Op::IntLeft | pcode::Op::IntRight | pcode::Op::IntSignedRight => {
@@ -212,6 +216,12 @@ impl<'a, 'b> Builder<'a, 'b> {
             // Rotate operations (Icicle extension): input[0].size == output.size
             pcode::Op::IntRotateLeft | pcode::Op::IntRotateRight => {
                 self.set_size_of_pair(&mut inputs[0], output.as_mut().unwrap());
+            }
+
+            // Select operation (Icicle extension): input[0].size == input[1].size == output.size
+            pcode::Op::Select(_) => {
+                self.set_size(&mut inputs[0], 1);
+                self.set_size_of_pair(&mut inputs[1], output.as_mut().unwrap());
             }
 
             // input[0].size == input[1].size == output.size
@@ -379,6 +389,13 @@ impl<'a, 'b> Builder<'a, 'b> {
     fn set_size(&mut self, value: &mut Value, size: ValueSize) {
         if let Some(x) = self.size_of(*value) {
             if x != size {
+                // This could be a load/store operations through a subtable copy/load. So overwrite
+                // the sizes like we do for loads and stores above. (e.g., see `Mem`
+                // operand in `PEXTRB` of the x64 SLEIGH spec).
+                if matches!(value.local, Local::Subtable(_)) {
+                    value.size = Some(size);
+                    return;
+                }
                 self.error(format!("error setting size of {:?} to: {} (was: {})", value, size, x));
             }
             return;
@@ -464,7 +481,7 @@ impl<'a, 'b> Builder<'a, 'b> {
     fn resolve_all(&mut self, statements: &'a [ast::Statement]) -> Result<(), String> {
         for statement in statements {
             self.current_statement = statement;
-            self.resolve_statement(&statement)?;
+            self.resolve_statement(statement)?;
         }
         Ok(())
     }
@@ -485,8 +502,7 @@ impl<'a, 'b> Builder<'a, 'b> {
                             .as_ref()
                             .map_or(false, |&space| space == self.scope.globals.const_ident)
                         {
-                            let size = size.map(|x| x.try_into().unwrap());
-                            Export::Value(self.resolve_expr(pointer)?.maybe_set_size(size))
+                            Export::Value(self.resolve_expr(pointer)?.maybe_set_size(*size))
                         }
                         else {
                             let (space_id, addr_size, _word_size) = self.resolve_space(space)?;
@@ -507,10 +523,10 @@ impl<'a, 'b> Builder<'a, 'b> {
                 self.semantics.export = Some(export);
             }
             ast::Statement::Local { name, size } => {
-                self.scope.named_tmp(name.clone(), *size)?;
+                self.scope.named_tmp(*name, *size)?;
             }
             ast::Statement::LocalAssignment { name, size, expr } => {
-                let dst = self.scope.named_tmp(name.clone(), *size)?.into();
+                let dst = self.scope.named_tmp(*name, *size)?.into();
                 self.resolve_expr_with_out(expr, Some(dst))?;
             }
             ast::Statement::Build { name } => {
@@ -668,7 +684,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             return Err(format!("Redeclaration of existing label: {}", self.scope.debug(name)));
         }
         label.defined = true;
-        Ok(label.id as u16)
+        Ok(label.id)
     }
 
     fn resolve_expr(&mut self, expr: &ast::PcodeExpr) -> Result<Value, String> {
@@ -791,7 +807,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             ast::PcodeExpr::Ident { value } => {
                 let value = match self.resolve_ident(*value) {
                     Ok(local) => local,
-                    Err(_) => self.scope.named_tmp(value.clone(), None)?.into(),
+                    Err(_) => self.scope.named_tmp(*value, None)?.into(),
                 };
                 Ok(Destination::Local(value))
             }
@@ -799,7 +815,7 @@ impl<'a, 'b> Builder<'a, 'b> {
                 &ast::PcodeExpr::Ident { value } => {
                     let value = match self.resolve_ident(value) {
                         Ok(local) => local.truncate(*size),
-                        Err(_) => self.scope.named_tmp(value.clone(), Some(*size))?.into(),
+                        Err(_) => self.scope.named_tmp(value, Some(*size))?.into(),
                     };
                     Ok(Destination::Local(value))
                 }
@@ -930,6 +946,7 @@ fn translate_inbuilt_func(name: &str) -> Option<(pcode::Op, usize)> {
         "trunc" => (Op::FloatToInt, 1),
 
         "int2float" => (Op::IntToFloat, 1),
+        "uint2float" => (Op::UintToFloat, 1),
         "float2float" => (Op::FloatToFloat, 1),
 
         "popcount" => (Op::IntCountOnes, 1),
@@ -1024,5 +1041,5 @@ fn translate_hint(hint: &ast::BranchHint) -> pcode::BranchHint {
 
 /// Computes the smallest number of bytes necessary to store `num_bits`
 fn needed_bytes(num_bits: ValueSize) -> ValueSize {
-    ValueSize::try_from(num_bits / 8).unwrap() + (if num_bits % 8 == 0 { 0 } else { 1 })
+    (num_bits / 8) + (if num_bits % 8 == 0 { 0 } else { 1 })
 }

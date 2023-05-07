@@ -27,14 +27,14 @@ fn resolve_segment(
 ) -> Result<DisplaySegment, String> {
     Ok(match entry {
         ast::DisplaySegment::Ident(ident) => match scope.lookup(*ident) {
-            Some(Local::Field(field)) => DisplaySegment::Field(field as u32),
-            Some(Local::Subtable(index)) => DisplaySegment::Subtable(index as u32),
+            Some(Local::Field(field)) => DisplaySegment::Field(field),
+            Some(Local::Subtable(index)) => DisplaySegment::Subtable(index),
             _ => {
                 // Registers in the display segment are just treated as literals
                 let _ = scope
                     .globals
                     .lookup_kind(*ident, SymbolKind::Register)
-                    .map_err(|e| format!("Error resolving segment: {}", e))?;
+                    .map_err(|e| format!("Error resolving segment: {e}"))?;
                 DisplaySegment::Literal(ctx.add_string(scope.globals.parser.get_ident_str(*ident)))
             }
         },

@@ -407,7 +407,7 @@ impl PageData {
                 self.perm.get_unchecked(offset..offset + N).try_into().unwrap(),
                 perm | perm::MAP,
             )?;
-            self.add_perm_unchecked(offset as usize, N, perm::INIT);
+            self.add_perm_unchecked(offset, N, perm::INIT);
             self.data.get_unchecked_mut(offset..offset + N).copy_from_slice(&value);
         }
 

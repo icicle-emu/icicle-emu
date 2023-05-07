@@ -9,9 +9,7 @@ pub type ConstraintCmp = sleigh_parse::ast::ConstraintCmp;
 // handling cases where there are multiple matching constructors) so we need this matcher anyway.
 //
 // For current use cases this linear search is "fast enough".
-pub enum Matcher {
-    SequentialMatcher(SequentialMatcher),
-}
+pub type Matcher = SequentialMatcher;
 
 /// A matcher for finding the correct constructor using a linear scan.
 ///
@@ -26,30 +24,22 @@ pub struct SequentialMatcher {
 }
 
 impl SequentialMatcher {
-    /// Find the first constructor that matches the current context, if last_constructor
-    /// is provided search from the next constructor onward.
+    /// Find the first constructor starting at `offset` that matches the current context. On a
+    /// match, the constructor ID and the offset of the _next_ cases is returned.
     pub fn match_constructor(
         &self,
         state: &Decoder,
-        last_constructor: Option<ConstructorId>,
-    ) -> Option<ConstructorId> {
+        offset: usize,
+    ) -> Option<(ConstructorId, usize)> {
         let context = state.context;
         let token = state.get_raw_token(Token::new(self.token_size as u8));
-        // the cases from the last constructor (non-inclusive) onward
-        let cases = match last_constructor {
-            None => &self.cases,
-            Some(last_constructor) => {
-                let last_constructor_index = self
-                    .cases
-                    .iter()
-                    .position(|case| case.constructor == last_constructor)?;
-                &self.cases[last_constructor_index + 1..]
-            }
-        };
-        cases
+        let (position, case) = self
+            .cases
             .iter()
-            .find(|case| case.matches(state, context, token))
-            .map(|case| case.constructor)
+            .enumerate()
+            .skip(offset)
+            .find(|(_, case)| case.matches(state, context, token))?;
+        Some((case.constructor, position + 1))
     }
 }
 

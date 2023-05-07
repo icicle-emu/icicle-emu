@@ -62,11 +62,11 @@ impl Mcu {
                 };
                 match read_from_exe_path() {
                     Some(data) => data,
-                    None => anyhow::bail!("Failed to find {}: {}", mcu, e),
+                    None => anyhow::bail!("Failed to find {mcu}: {e}"),
                 }
             }
         };
-        Ok(ron::de::from_bytes(&input).with_context(|| format!("error deserializing: {}", mcu))?)
+        ron::de::from_bytes(&input).with_context(|| format!("error deserializing: {mcu}"))
     }
 }
 

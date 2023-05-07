@@ -51,7 +51,7 @@ fn disasm_field(sleigh: &SleighData, value: i64, field: Field, disasm: &mut Stri
 fn write_numeric_field(sleigh: &SleighData, value: i64, field: Field, disasm: &mut String) {
     // To match Ghidra's output we assume all numbers that are equal to the default
     // space size are also treated as signed.
-    let is_signed = field.signed || (sleigh.default_space_size as u16 * 8 == field.num_bits);
+    let is_signed = field.signed || (sleigh.default_space_size * 8 == field.num_bits);
 
     let fmt = pcode::NumericFormatter {
         value: value as u64,

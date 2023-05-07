@@ -5,7 +5,7 @@ use crate::{exec::const_eval, lifter::BlockLifter, Cpu, Exception, ExceptionCode
 use super::{BlockState, InstructionSource};
 
 pub fn status_register_control_patch(cpu: &mut Cpu, lifter: &mut BlockLifter) {
-    let check = cpu.arch.sleigh.register_user_op(Some("check_sr_control_bits".into()));
+    let check = cpu.arch.sleigh.register_user_op(Some("check_sr_control_bits"));
     cpu.set_helper(check, check_sr_control_bits);
     lifter.op_injectors.insert(
         check,
@@ -18,7 +18,7 @@ pub fn status_register_control_patch(cpu: &mut Cpu, lifter: &mut BlockLifter) {
         ),
     );
 
-    let check_async = cpu.arch.sleigh.register_user_op(Some("check_sr_control_bits_async".into()));
+    let check_async = cpu.arch.sleigh.register_user_op(Some("check_sr_control_bits_async"));
     cpu.set_helper(check_async, check_sr_control_bits);
 
     let status_reg = cpu.arch.sleigh.get_reg("SR").unwrap().var;
@@ -29,7 +29,7 @@ pub fn status_register_control_patch(cpu: &mut Cpu, lifter: &mut BlockLifter) {
 
         let old = const_prop.get_value(status_reg.into());
         for stmt in &block.instructions {
-            if const_prop.eval(stmt.clone()).is_err() {
+            if const_prop.eval(*stmt).is_err() {
                 return;
             }
         }

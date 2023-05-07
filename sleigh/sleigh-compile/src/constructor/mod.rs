@@ -95,7 +95,7 @@ pub(crate) fn build(
         constraints,
         disasm_actions,
         semantics,
-        span: constructor.span.clone(),
+        span: constructor.span,
     })
 }
 
@@ -174,7 +174,7 @@ impl<'a> Scope<'a> {
         local: impl Into<Local>,
     ) -> Result<Local, String> {
         let local = local.into();
-        if let Some(_) = self.mapping.insert(name.clone(), local) {
+        if self.mapping.insert(name, local).is_some() {
             return Err(format!("redeclaration of variable: {}", self.debug(&name)));
         }
         Ok(local)
@@ -182,13 +182,13 @@ impl<'a> Scope<'a> {
 
     pub fn add_field(&mut self, ident: ast::Ident, field: Field) -> Result<FieldIndex, String> {
         match self.lookup(ident) {
-            Some(Local::Field(index)) => Ok(index as u32),
+            Some(Local::Field(index)) => Ok(index),
             Some(other) => Err(format!("invalid field: {:?}<{}>", other, self.debug(&ident))),
             None => {
                 let index = self.fields.len().try_into().unwrap();
                 self.fields.push(field);
-                self.declare_local(ident.clone(), Local::Field(index))?;
-                Ok(index as u32)
+                self.declare_local(ident, Local::Field(index))?;
+                Ok(index)
             }
         }
     }
@@ -200,7 +200,7 @@ impl<'a> Scope<'a> {
             None => {
                 let index = self.subtables.len().try_into().unwrap();
                 self.subtables.push(table);
-                self.declare_local(ident.clone(), Local::Subtable(index))?;
+                self.declare_local(ident, Local::Subtable(index))?;
                 Ok(index)
             }
         }
@@ -218,14 +218,14 @@ impl<'a> Scope<'a> {
         size: Option<ValueSize>,
     ) -> Result<Local, String> {
         let local = Local::PcodeTmp(self.temporaries.len().try_into().unwrap());
-        self.temporaries.push(PcodeTmp { name: Some(ident.clone()), size });
+        self.temporaries.push(PcodeTmp { name: Some(ident), size });
         self.declare_local(ident, local)?;
         Ok(local)
     }
 
     pub fn size_of(&self, local: Local) -> Option<ValueSize> {
         match local {
-            Local::Register(id) => Some(self.globals.registers[id as usize].size.try_into().ok()?),
+            Local::Register(id) => Some(self.globals.registers[id as usize].size),
             Local::Subtable(index) => {
                 self.globals.tables[self.subtables[index as usize] as usize].export
             }
@@ -233,7 +233,7 @@ impl<'a> Scope<'a> {
             Local::Field(idx) => {
                 let field = &self.fields[idx as usize];
                 match field.attached.map(|attach| &self.globals.attachments[attach as usize]) {
-                    Some(Attachment::Register(_, size)) => size.and_then(|x| x.try_into().ok()),
+                    Some(Attachment::Register(_, size)) => *size,
                     Some(Attachment::Value(_)) => None,
                     _ => None,
                 }

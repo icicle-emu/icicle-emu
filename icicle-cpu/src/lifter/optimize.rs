@@ -24,7 +24,7 @@ impl OptimizerState {
             return value;
         }
 
-        match self.const_eval.get_const(value.into()) {
+        match self.const_eval.get_const(value) {
             Some(x) => pcode::Value::Const(x, value.size()),
             None => {
                 let existing = self.const_eval.get_value(value);
@@ -242,7 +242,7 @@ fn simplify(exec: &mut Optimizer, stmt: &Instruction) -> Result<Option<Instructi
 
     if let Some(value) = output.get_const() {
         // Copy from constant.
-        return Ok(Some(stmt.output.copy_from(pcode::Value::Const(value, stmt.output.size))));
+        Ok(Some(stmt.output.copy_from(pcode::Value::Const(value, stmt.output.size))))
     }
     else if output == input_values[0] {
         // Copy from first input.
@@ -399,10 +399,7 @@ impl DeadStoreDetector {
 }
 
 fn external_state_modifications(op: Op) -> bool {
-    match op {
-        Op::Hook(_) => true,
-        _ => false,
-    }
+    matches!(op, Op::Hook(_) | Op::HookIf(_))
 }
 
 #[cfg(test)]

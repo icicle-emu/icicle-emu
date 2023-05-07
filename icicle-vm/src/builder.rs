@@ -378,7 +378,7 @@ fn build_sleigh(config: &SpecConfig) -> Result<sleigh_runtime::SleighData, Build
     if !path.exists() {
         return Err(BuildError::SpecNotFound(path));
     }
-    sleigh_compile::from_path(&path).map_err(|e| BuildError::SpecCompileError(e))
+    sleigh_compile::from_path(&path).map_err(BuildError::SpecCompileError)
 }
 
 // @fixme: avoid making this pub when we refactor architecture specific CPU state.
@@ -403,8 +403,7 @@ pub mod x86 {
     /// * longMode(0, 0)       = 1 (64-bit mode)
     /// * bit64(4, 4)          = 1 (64-bit mode)
     /// * opsize(6, 7)         = 1 (32-bit operands)
-    pub const LONG_MODE_CTX: u64 =
-        0b_0000_0000_0000_0000_0000_0000_1001_0001_u32.reverse_bits() as u64;
+    pub const LONG_MODE_CTX: u64 = 0b_0000_0000_0000_0000_0000_0000_1001_0001_u64.reverse_bits();
 
     /// Initial context register state for `x86_64` processor running `x32` compatability mode.
     ///
@@ -412,8 +411,7 @@ pub mod x86 {
     /// * addrSize(4, 5)       = 1 (32-bit addresses)
     /// * bit64(4, 4)          = 0 (32-bit mode)
     /// * opsize(6, 7)         = 1 (32-bit operands)
-    pub const COMPAT_MODE_CTX: u64 =
-        0b_0000_0000_0000_0000_0000_0000_1010_0000_u32.reverse_bits() as u64;
+    pub const COMPAT_MODE_CTX: u64 = 0b_0000_0000_0000_0000_0000_0000_1010_0000_u64.reverse_bits();
 
     /// Get merged flags from internal registers
     // @todo: This could possibly be implemented as a Sleigh extension.

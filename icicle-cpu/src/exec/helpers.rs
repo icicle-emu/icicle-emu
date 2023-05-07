@@ -93,11 +93,8 @@ fn bcd_add8(a: u8, b: u8) -> u8 {
     let mut result = 0;
     let mut carry = 0;
     for digit in 0..2 {
-        let (result_digit, next_carry) = bcd_add_digit(
-            ((a >> (4 * digit)) & 0xF) as u8,
-            ((b >> (4 * digit)) & 0xF) as u8,
-            carry,
-        );
+        let (result_digit, next_carry) =
+            bcd_add_digit((a >> (4 * digit)) & 0xF, (b >> (4 * digit)) & 0xF, carry);
         carry = next_carry;
         result |= result_digit << (4 * digit);
     }
@@ -138,6 +135,45 @@ fn unsigned_saturate(cpu: &mut Cpu, dst: pcode::VarNode, args: [Value; 2]) {
     let value: u64 = cpu.read_dynamic(args[0]).zxt();
     cpu.write_trunc(dst, value.min(max));
 }
+
+#[allow(unused)]
+fn saturating_sub(cpu: &mut Cpu, dst: pcode::VarNode, args: [Value; 2]) {
+    let size = dst.size;
+
+    if args[0].size() != size || args[1].size() != size {
+        cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
+        cpu.exception.value = args[0].size() as u64;
+        return;
+    }
+
+    match size {
+        1 => {
+            let a = cpu.read::<u8>(args[0]);
+            let b = cpu.read::<u8>(args[1]);
+            cpu.write_var(dst, a.saturating_sub(b))
+        }
+        2 => {
+            let a = cpu.read::<u16>(args[0]);
+            let b = cpu.read::<u16>(args[1]);
+            cpu.write_var(dst, a.saturating_sub(b))
+        }
+        4 => {
+            let a = cpu.read::<u32>(args[0]);
+            let b = cpu.read::<u32>(args[1]);
+            cpu.write_var(dst, a.saturating_sub(b))
+        }
+        8 => {
+            let a = cpu.read::<u64>(args[0]);
+            let b = cpu.read::<u64>(args[1]);
+            cpu.write_var(dst, a.saturating_sub(b))
+        }
+        _ => {
+            cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
+            cpu.exception.value = args[0].size() as u64;
+        }
+    }
+}
+
 pub mod x86 {
     use super::*;
 
@@ -148,9 +184,9 @@ pub mod x86 {
         ("cpuid_Extended_Feature_Enumeration_info", cpuid_extended_feature_enumeration_info),
         ("cpuid", cpuid),
         ("movmskpd", movmskpd),
-        ("pinsrw", pinsrw),
+        ("pinsrw", pinsrw), // Note: implemented in SLEIGH in Ghidra 10.3.
         ("pshuflw", pshuflw),
-        ("shufpd", shufpd),
+        ("shufpd", shufpd), // Note: implemented in SLEIGH in Ghidra 10.3.
         ("pmaddwd", pmaddwd),
         ("in", in_io),
         ("out", out_io),
@@ -169,6 +205,12 @@ pub mod x86 {
 
     // Basic processor information
     fn cpuid_basic_info(cpu: &mut Cpu, dst: VarNode, _: [Value; 2]) {
+        if dst.size != 16 {
+            tracing::warn!(
+                "Using unpatched SLEIGH specification, CPUID instruction will behave incorrectly"
+            );
+            return;
+        }
         tracing::debug!("cpuid(BASIC_INFO)");
         if true {
             // Pretend to be an Intel CPU
@@ -187,6 +229,12 @@ pub mod x86 {
 
     // Processor info and feature bits
     fn cpuid_version_info(cpu: &mut Cpu, dst: VarNode, _: [Value; 2]) {
+        if dst.size != 16 {
+            tracing::warn!(
+                "Using unpatched SLEIGH specification, CPUID instruction will behave incorrectly"
+            );
+            return;
+        }
         tracing::debug!("cpuid(VERSION_INFO)");
         // Copied from `Coffee Lake` microarchitecture
         let extended_family = 0x0;
@@ -204,6 +252,12 @@ pub mod x86 {
 
     // Return structured extended feature enumeration info leaf
     fn cpuid_extended_feature_enumeration_info(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
+        if dst.size != 16 {
+            tracing::warn!(
+                "Using unpatched SLEIGH specification, CPUID instruction will behave incorrectly"
+            );
+            return;
+        }
         let count: u32 = cpu.read(args[1]);
         tracing::debug!("cpuid(EXTENDED_FEATURE_ENUMERATION_INFO, {:#0x})", count);
 
@@ -234,6 +288,12 @@ pub mod x86 {
     }
 
     fn cpuid(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
+        if dst.size != 16 {
+            tracing::warn!(
+                "Using unpatched SLEIGH specification, CPUID instruction will behave incorrectly"
+            );
+            return;
+        }
         let index: u32 = cpu.read(args[0]);
         let count: u32 = cpu.read(args[1]);
         tracing::debug!("cpuid({:#0x}, {:#0x})", index, count);
@@ -271,6 +331,7 @@ pub mod x86 {
     }
 
     // Insert word
+    #[allow(unused)]
     fn pinsrw(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
         // The byte offset to insert the word at
         let offset = 2 * (cpu.args[0] as u64).min(7);
@@ -292,6 +353,7 @@ pub mod x86 {
     }
 
     // Packed interleave shuffle
+    #[allow(unused)]
     fn shufpd(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
         let index = cpu.args[0] as u64;
 

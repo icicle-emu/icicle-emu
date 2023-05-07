@@ -16,7 +16,7 @@ fn main() {
         Some(filter) => dbg!(filter),
         None => "warn".to_string(),
     };
-    tracing_subscriber::fmt().with_env_filter(&log_filter).init();
+    tracing_subscriber::fmt().with_env_filter(log_filter).init();
     let args: Vec<_> = std::env::args().collect();
 
     let target = args.get(1).expect("Expected target triple");

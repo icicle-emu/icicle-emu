@@ -487,18 +487,15 @@ impl SleighData {
     }
 
     /// Finds a matching constructor given the current decoder state using the matcher `matcher_id`.
-    /// If last_constructor is provided search from the next constructor onward.
+    /// On a match, returns the constructor ID of the matching constructor, and the offset of the
+    /// _next_ case to match to use for backtracking.
     fn match_constructor_with(
         &self,
         state: &Decoder,
         matcher_id: MatcherIndex,
-        last_constructor: Option<ConstructorId>,
-    ) -> Option<ConstructorId> {
-        match &self.matchers[matcher_id as usize] {
-            Matcher::SequentialMatcher(matcher) => {
-                matcher.match_constructor(state, last_constructor)
-            }
-        }
+        offset: usize,
+    ) -> Option<(ConstructorId, usize)> {
+        self.matchers[matcher_id as usize].match_constructor(state, offset)
     }
 
     fn get_context_mod_expr(&self, expr: DisasmExprRange) -> &[DisasmExprOp<ContextModValue>] {

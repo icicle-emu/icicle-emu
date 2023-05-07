@@ -87,7 +87,7 @@ pub struct Regs([u8; REGISTER_SPACE_BYTES]);
 
 impl Clone for Regs {
     fn clone(&self) -> Self {
-        Self(self.0.clone())
+        Self(self.0)
     }
 
     fn clone_from(&mut self, source: &Self) {

@@ -65,7 +65,7 @@ ADD EDX,0x1
 	SF = EDX s< 0x0:4
 	ZF = EDX == 0x0:4
 	$U1:4 = EDX & 0xff:4
-	$U2:1 = count_ones($U1:4)
+	$U2:1 = popcount($U1:4)
 	$U3:1 = $U2:1 & 0x1:1
 	PF = $U3:1 == 0x0:1
 
@@ -75,7 +75,7 @@ TEST CL,CL
 	OF = 0x0:1
 	SF = CL s< 0x0:1
 	ZF = CL == 0x0:1
-	$U3:1 = count_ones(CL)
+	$U3:1 = popcount(CL)
 	$U4:1 = $U3:1 & 0x1:1
 	PF = $U4:1 == 0x0:1
 
@@ -125,7 +125,7 @@ ADD dword ptr [ESP],0xffbfeea2
 	ZF = $U10:4 == 0x0:4
 	$U11:4 = ram[$U4:8]
 	$U1:4 = $U11:4 & 0xff:4
-	$U2:1 = count_ones($U1:4)
+	$U2:1 = popcount($U1:4)
 	$U3:1 = $U2:1 & 0x1:1
 	PF = $U3:1 == 0x0:1
 
@@ -179,7 +179,7 @@ CMP EBX,dword ptr [EBP + 0xfffffff8]
 	SF = $U1:4 s< 0x0:4
 	ZF = $U1:4 == 0x0:4
 	$U2:4 = $U1:4 & 0xff:4
-	$U3:1 = count_ones($U2:4)
+	$U3:1 = popcount($U2:4)
 	$U4:1 = $U3:1 & 0x1:1
 	PF = $U4:1 == 0x0:1
 
@@ -227,7 +227,7 @@ INC EAX
 	SF = EAX s< 0x0:4
 	ZF = EAX == 0x0:4
 	$U1:4 = EAX & 0xff:4
-	$U2:1 = count_ones($U1:4)
+	$U2:1 = popcount($U1:4)
 	$U3:1 = $U2:1 & 0x1:1
 	PF = $U3:1 == 0x0:1
 

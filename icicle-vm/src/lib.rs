@@ -422,7 +422,10 @@ impl Vm {
                     let addr = block.start;
                     self.cpu.exception.code = ExceptionCode::InvalidTarget as u32;
                     self.cpu.exception.value = addr;
-                    tracing::error!("{}", debug::debug_addr(self, addr).unwrap());
+                    tracing::debug!(
+                        "End of block has invalid target\n{}",
+                        debug::debug_addr(self, addr).unwrap()
+                    );
                     break;
                 }
             }
@@ -544,10 +547,10 @@ impl Vm {
         // Add breakpoints to the lifted code.
         for block in &mut self.code.blocks[group.range()] {
             for inst in &block.pcode.instructions {
-                if matches!(inst.op, pcode::Op::InstructionMarker) {
-                    if self.code.breakpoints.contains(&inst.inputs.first().as_u64()) {
-                        block.breakpoints += 1;
-                    }
+                if matches!(inst.op, pcode::Op::InstructionMarker)
+                    && self.code.breakpoints.contains(&inst.inputs.first().as_u64())
+                {
+                    block.breakpoints += 1;
                 }
             }
         }
@@ -580,7 +583,7 @@ impl Vm {
 
         tracing::trace!(
             "lifted: {key:x?} => {}",
-            group.to_string(&mut self.code.blocks, &self.cpu.arch.sleigh, false).unwrap()
+            group.to_string(&self.code.blocks, &self.cpu.arch.sleigh, false).unwrap()
         );
 
         Some(group)
@@ -625,7 +628,7 @@ impl Vm {
 
         if self.prev_isa_mode != key.isa_mode as u8 {
             // ISA mode has changed so we need to prevent addresses from the previous ISA mode from
-            // being inclused in the fast look up table (which doesn't check the ISA mode).
+            // being included in the fast look up table (which doesn't check the ISA mode).
             self.prev_isa_mode = key.isa_mode as u8;
             self.jit.clear_fast_lookup();
         }

@@ -160,7 +160,7 @@ impl SymbolTable {
 
     /// Maps `ident` to `symbol`, returning an error if `ident` was previously defined.
     pub fn map_symbol(&mut self, ident: ast::Ident, symbol: Symbol) -> Result<Symbol, String> {
-        if let Some(_) = self.mapping.insert(ident, symbol) {
+        if self.mapping.insert(ident, symbol).is_some() {
             // @todo: propagate span information
             return Err(format!("redeclaration of symbol: {}", ident.display(&self.parser)));
         }
@@ -240,7 +240,7 @@ impl SymbolTable {
     /// Handles the definition of a context field
     pub fn define_context(&mut self, ctx: ast::Context) -> Result<(), String> {
         let register = self.lookup_kind(ctx.name, SymbolKind::Register)?;
-        let register_bits = self.registers[register as usize].size as u16 * 8;
+        let register_bits = self.registers[register as usize].size * 8;
 
         for field in ctx.fields {
             let (offset, num_bits) = inverted_field_range(field.range, register_bits);
@@ -325,7 +325,7 @@ impl SymbolTable {
             mapping.push(Some(id));
         }
 
-        if size == None {
+        if size.is_none() {
             // There were no registers actually mapped as part of this attach statement.
             return Ok(());
         }
@@ -363,7 +363,7 @@ impl SymbolTable {
             }
             _ => return Err("invalid symbol type for attachment".into()),
         };
-        if let Some(_) = dst.attached.replace(attachment_id) {
+        if dst.attached.replace(attachment_id).is_some() {
             return Err(format!("multiple attached meanings to: {}", ident.display(&self.parser)));
         }
         Ok(())
@@ -405,7 +405,7 @@ impl SymbolTable {
         if let Some(table) = constructor.table {
             existing_table = self.contains(table);
             if !existing_table {
-                self.define_table(table.clone()).unwrap();
+                self.define_table(table).unwrap();
             }
         }
 
@@ -413,7 +413,7 @@ impl SymbolTable {
             format!("Failed to build constructor: \"{}\": {}", constructor.display(&self.parser), e)
         })?;
 
-        let mut table = &mut self.tables[result.table as usize];
+        let table = &mut self.tables[result.table as usize];
 
         let export_size = result.semantics.export.and_then(|value| value.size());
         if existing_table && table.export != export_size {

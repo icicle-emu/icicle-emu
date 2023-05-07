@@ -460,7 +460,7 @@ impl<'a> Parser<'a> {
         }
 
         let token = self.expect_any(&[TokenKind::HexNum, TokenKind::Num])?;
-        let value = self.token_str(token).replace("_", "");
+        let value = self.token_str(token).replace('_', "");
         let result = match token.kind {
             TokenKind::HexNum => u128::from_str_radix(trim_leading_zeros(&value), 16),
             TokenKind::Num => value.parse(),
@@ -468,8 +468,7 @@ impl<'a> Parser<'a> {
         };
         let value = result.map_err(|e| self.error(&e.to_string(), token.start, token.end))?;
         let signed_value = if has_minus { -(value as i128) as u128 } else { value };
-        Ok(T::try_from(signed_value)
-            .map_err(|_| self.error("value too large", token.start, token.end))?)
+        T::try_from(signed_value).map_err(|_| self.error("value too large", token.start, token.end))
     }
 
     /// Get the current line number

@@ -72,6 +72,7 @@ fn run() -> anyhow::Result<()> {
             enable_jit: !disable_jit,
             optimize_instructions: config.optimize,
             optimize_block: config.optimize,
+            enable_shadow_stack: false,
             ..Default::default()
         };
 

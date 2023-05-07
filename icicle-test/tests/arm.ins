@@ -73,6 +73,11 @@
     sp = 0x20004f70, r4 = 0x4, r5 = 0x5, pc = 0x1234_5678;
 }
 
+0x00011000|1 [0e cb]          "ldmia r3,{r1,r2,r3}";
+
+// Alternate way of returning from a function (e.g., used in software float intrinsics)
+0x00000000|1 [5d f8 08 fb]    "ldr.w pc,[sp],#0x8";
+
 0x00000000|1 [05 46]          "mov r5, r0"
     r0 = 0x1234, r5 = 0 => r5 = 0x1234;
 0x00000000|1 [0e 48]          "ldr r0,[0x3c]"
@@ -100,6 +105,8 @@
     GE1 = 0, GE2 = 1, GE3 = 0, GE4 = 0, r5 = 0x9fba7f1c, r6 = 0xe2b5319a, r7 = 0x7547029a => r6 = 0x75477f9a;
     GE1 = 1, GE2 = 0, GE3 = 1, GE4 = 1, r5 = 0x9fba7f1c, r6 = 0xe2b5319a, r7 = 0x7547029a => r6 = 0x9fba021c;
 }
+0x08000000|1 [4f ea 23 1a]  "asr.w r10,r3, asr #0x4"
+    r10 = 0, r3 = 0x12345678 => r10 = 0x1234567;
 
 0x00000000|1 {
     [a5 bf]        "ittet ge"
@@ -114,6 +121,12 @@
 0x00000000|1 [62 b6]        "cpsie i";
 
 0x00000000|1 [ef f3 08 80]  "mrs r0,msp";
+0x00000000|1 [ef f3 14 80]  "mrs r0,control";
+0x00000000|1 [80 f3 14 88]  "msr control,r0";
+
+0x08000000|1 [5f f8 28 19]  "ldr.w r1,[0x7fff6dc]"
+    mem[0x7fff6dc]:READ = [91 f7 00 08], r1 = 0 => r1 = 0x0800f791;
+
 
 0x08011ea6|1 {
     [02 bf]                "ittt       eq"
@@ -200,3 +213,30 @@
 
 0x80009ce|1 [5d f8 08 fb]   "ldr.w      pc,[sp],#0x8";
 0x0001100|1 [b8 ef 05 9b]   "vext.8     d9,d8,d5,#0xb";
+
+0x11000|1 [53 e8 00 3f] "ldrex r3,[r3,#0x0]"
+    r3 = 0x1000, mem[0x1000]:READ = [04 03 02 01] => r3 = 0x01020304, exclusive_addr = 0x1000;
+0x11000|1 [46 e8 00 33] "strex r3,r3,[r6,#0x0]"
+{
+    exclusive_addr = 0x1000, r6 = 0x1000, r3 = 0x01020304, mem[0x1000]:WRITE = [aa aa aa aa] => r3 = 0, mem[0x1000] = [04 03 02 01];
+    exclusive_addr = 0x2000, r6 = 0x1000, r3 = 0x01020304, mem[0x1000]:WRITE = [aa aa aa aa] => r3 = 1, mem[0x1000] = [aa aa aa aa];
+}
+0x11000|1 [bf f3 2f 8f] "clrex"
+    exclusive_addr = 0x1000 => exclusive_addr = 0xffff_ffff;
+
+0x11000|1 [30 bf] "wfi";
+0x11000|1 [20 bf] "wfe";
+
+0x11000|1 {
+    [18 8d] "ldrh r0,[r3,#0x28]"
+    [c0 b2] "uxtb r0,r0"
+};
+
+0x11000|1 [12 06] "lsls r2,r2,#0x18"
+    r2 = 0x1234_5678 => r2 = 0x7800_0000;
+
+
+// VFP instructions
+
+0x11000|1 [b8 ee 40 0a] "vcvt.f32.u32 s0,s0"
+    s0 = 1 => s0 = 0x3f800000;

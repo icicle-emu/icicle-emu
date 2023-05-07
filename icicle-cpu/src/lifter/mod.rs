@@ -82,10 +82,16 @@ impl InstructionLifter {
             self.disasm_current(src);
             tracing::trace!("disasm: {vaddr:#x} \"{}\"", self.disasm)
         }
-        let block = self.lifter.lift(&src.arch().sleigh, &self.decoded).ok()?;
-        self.lifted.clone_from(&block);
 
+        let block = self.lifter.lift(&src.arch().sleigh, &self.decoded).ok()?;
         tracing::trace!("lift:   {vaddr:#x}\n{}", block.display(&src.arch().sleigh));
+
+        self.lifted.clear();
+        self.lifted.next_tmp = block.next_tmp();
+
+        for inst in &block.instructions {
+            rewrite_instruction(*inst, &mut self.lifted);
+        }
 
         Some(next)
     }
@@ -204,6 +210,172 @@ impl InstructionLifter {
                     .slice(inst.output.offset, inst.output.size);
             }
         }
+    }
+}
+
+fn rewrite_instruction(inst: pcode::Instruction, block: &mut pcode::Block) {
+    use pcode::Op;
+
+    let x = inst.output;
+    let [a, b] = inst.inputs.get();
+
+    // Ensure that the operation uses supported varnode sizes.
+    let (x_size, (a_size, b_size)) = inst.op.native_var_sizes();
+    if x_size.contains(&x.size) && a_size.contains(&a.size()) && b_size.contains(&b.size()) {
+        block.push(inst);
+        return;
+    }
+
+    // Rewrite operations on non-natively sized
+    match inst.op {
+        // Copy/Load/Store operations have special cases for non-native sizes.
+        Op::Copy | Op::Load(_) | Op::Store(_) => block.push(inst),
+
+        // Convert a ZXT instruction to a zero then copy instruction.
+        Op::ZeroExtend => {
+            let value = emit_non_native_zxt(block, a, x.size);
+            block.push((x, pcode::Op::Copy, value));
+        }
+
+        // Convert a SXT instruction to copy and shift operations.
+        Op::SignExtend => {
+            let value = emit_non_native_sxt(block, a, x.size);
+            block.push((x, pcode::Op::Copy, value));
+        }
+
+        // Handle integer operations by sign-extending, executing the op, then copying the lower
+        // bits. (@todo: add extra operations here).
+        Op::IntAdd | Op::IntSub | Op::IntMul => {
+            let widened = a.size().next_power_of_two();
+            let a_sxt = emit_non_native_sxt(block, a, widened);
+            let b_sxt = emit_non_native_sxt(block, b, widened);
+            let result = block.alloc_tmp(widened);
+            block.push((result, inst.op, (a_sxt, b_sxt)));
+            block.push((x, pcode::Op::Copy, result.truncate(x.size)));
+        }
+
+        Op::FloatToFloat => block.push(inst),
+
+        // @fixme: 80-bit floats need to be handled manually to avoid losing precision.
+        //
+        // Handle 16-bit and 80-bit floating operations using native float operations.
+        Op::FloatToInt => {
+            let a = emit_cast_float_to_native(block, a);
+            block.push((x, pcode::Op::FloatToInt, a));
+        }
+        Op::IntToFloat => {
+            if a.size() == 9 && [4, 8].contains(&x.size) {
+                // SLEIGH uses 9-byte int-to-float conversions to support _unsigned_ integer to
+                // float conversions. Instead we directly support unsigned float conversions.
+                //
+                // @fixme: we don't always know that the top byte is zeroed.
+                block.push((x, pcode::Op::UintToFloat, a.truncate(8)));
+                return;
+            }
+            let tmp = match x.size {
+                2 => block.alloc_tmp(4),
+                10 => block.alloc_tmp(8),
+                _ => {
+                    block.push(Op::Invalid);
+                    return;
+                }
+            };
+            block.push((tmp, pcode::Op::IntToFloat, a));
+            let result = emit_cast_float(block, tmp.into(), x.size);
+            block.push((x, pcode::Op::Copy, result));
+        }
+
+        Op::FloatAdd | Op::FloatSub | Op::FloatMul | Op::FloatDiv => {
+            let a = emit_cast_float_to_native(block, a);
+            let b = emit_cast_float_to_native(block, b);
+            let result = block.alloc_tmp(a.size());
+            block.push((result, inst.op, (a, b)));
+            let result = emit_cast_float(block, result.into(), x.size);
+            block.push((x, pcode::Op::Copy, result));
+        }
+        Op::FloatNegate
+        | Op::FloatAbs
+        | Op::FloatSqrt
+        | Op::FloatCeil
+        | Op::FloatFloor
+        | Op::FloatRound => {
+            let a = emit_cast_float_to_native(block, a);
+            let result = block.alloc_tmp(a.size());
+            block.push((result, inst.op, a));
+            let result = emit_cast_float(block, result.into(), x.size);
+            block.push((x, pcode::Op::Copy, result));
+        }
+        Op::FloatEqual | Op::FloatNotEqual | Op::FloatLess | Op::FloatLessEqual => {
+            let a = emit_cast_float_to_native(block, a);
+            let b = emit_cast_float_to_native(block, b);
+            block.push((x, inst.op, (a, b)));
+        }
+        Op::FloatIsNan => {
+            let a = emit_cast_float_to_native(block, a);
+            block.push((x, inst.op, a));
+        }
+
+        // Pcode operations do not declare valid operand size (they will be force to check
+        // internally).
+        Op::PcodeOp(_) => block.push(inst),
+
+        // Other operations are not supported.
+        _ => block.push(Op::Invalid),
+    }
+}
+
+fn emit_non_native_zxt(block: &mut pcode::Block, a: pcode::Value, size: u8) -> pcode::Value {
+    let widened = size.next_power_of_two();
+    let tmp = block.alloc_tmp(widened);
+    block.push((tmp, pcode::Op::Copy, pcode::Value::Const(0, widened)));
+    block.push((tmp.truncate(a.size()), pcode::Op::Copy, a));
+    tmp.truncate(size).into()
+}
+
+fn emit_non_native_sxt(block: &mut pcode::Block, a: pcode::Value, size: u8) -> pcode::Value {
+    let widened = size.next_power_of_two();
+    let tmp = block.alloc_tmp(widened);
+    block.push((tmp, pcode::Op::Copy, pcode::Value::Const(0, widened)));
+    block.push((tmp.truncate(a.size()), pcode::Op::Copy, a));
+
+    let shift_size = 8 * (widened - a.size());
+    block.push((tmp, pcode::Op::IntLeft, (tmp, shift_size)));
+    block.push((tmp, pcode::Op::IntSignedRight, (tmp, shift_size)));
+
+    tmp.truncate(size).into()
+}
+
+fn emit_cast_float_to_native(block: &mut pcode::Block, a: pcode::Value) -> pcode::Value {
+    if a.size() == 2 {
+        // 16-bit floats
+        let tmp = block.alloc_tmp(4);
+        block.push((tmp, pcode::Op::FloatToFloat, a));
+        tmp.into()
+    }
+    else if a.size() == 10 {
+        // 80-bit floats
+        let tmp = block.alloc_tmp(8);
+        block.push((tmp, pcode::Op::FloatToFloat, a));
+        tmp.into()
+    }
+    else {
+        pcode::Value::invalid()
+    }
+}
+
+fn emit_cast_float(block: &mut pcode::Block, a: pcode::Value, size: u8) -> pcode::Value {
+    if size == 2 {
+        let tmp = block.alloc_tmp(2);
+        block.push((tmp, pcode::Op::FloatToFloat, a));
+        tmp.into()
+    }
+    else if size == 10 {
+        let tmp = block.alloc_tmp(10);
+        block.push((tmp, pcode::Op::FloatToFloat, a));
+        tmp.into()
+    }
+    else {
+        pcode::Value::invalid()
     }
 }
 
@@ -369,7 +541,7 @@ impl BlockGroup {
         let has_multiple_instructions =
             blocks[self.range()].iter().map(|x| x.num_instructions).sum::<u32>() > 1;
         let mut out = String::new();
-        for (idx, block_id) in self.range().into_iter().enumerate() {
+        for (idx, block_id) in self.range().enumerate() {
             let block = &blocks[block_id];
 
             match idx {
@@ -586,7 +758,7 @@ impl BlockLifter {
                     assert!(cond.const_eq(1), "conditional calls are not supported");
                     ctx.finalize_block(&mut self.current, BlockExit::Call {
                         target,
-                        fallthrough: next_vaddr.into(),
+                        fallthrough: next_vaddr,
                     });
                     block_exit = true;
                 }
@@ -859,10 +1031,66 @@ pub fn register_halt_patcher(lifter: &mut BlockLifter) {
                 if cond.const_eq(1) && next_addr.const_eq(current_addr) {
                     block.instructions.truncate(1);
                     block.push((pcode::Op::Exception, (crate::ExceptionCode::Halt as u32, 0_u64)));
-                    return;
                 }
             }
         }
+    }));
+}
+
+pub fn register_experimental_call_skip(lifter: &mut BlockLifter, addrs: Vec<u64>) {
+    lifter.patchers.push(Box::new(move |block: &mut pcode::Block| {
+        let Some(inst) = block.instructions.last() else { return; };
+        if !matches!(inst.op, pcode::Op::Branch(pcode::BranchHint::Call)) {
+            return;
+        }
+        let [cond, target] = inst.inputs.get();
+        if !target.is_const() {
+            return;
+        }
+
+        let target = target.as_u64();
+        if cond.const_eq(1) && addrs.contains(&target) {
+            tracing::warn!("skipping call to {target:#x}");
+            block.instructions.pop();
+        }
+    }));
+}
+
+pub fn register_experimental_instant_return(
+    lifter: &mut BlockLifter,
+    return_reg: pcode::VarNode,
+    addrs: Vec<u64>,
+) {
+    lifter.patchers.push(Box::new(move |block: &mut pcode::Block| {
+        let Some(inst) = block.instructions.first() else { return; };
+        if !matches!(inst.op, pcode::Op::InstructionMarker) {
+            return;
+        }
+        let current_addr = inst.inputs.first().as_u64();
+
+        if addrs.contains(&current_addr) {
+            tracing::warn!("injecting return at: {current_addr:#x}");
+            block.instructions.truncate(1);
+            let ret = block.alloc_tmp(4);
+            block.push((ret, pcode::Op::IntAnd, (return_reg, !1_u32)));
+            block.push((pcode::Op::Branch(pcode::BranchHint::Return), (1_u8, ret)));
+        }
+    }));
+}
+
+/// Injects code at `addr` to set `reg` to `value`.
+pub fn register_value_patcher(
+    lifter: &mut BlockLifter,
+    addr: u64,
+    reg: pcode::VarNode,
+    value: u64,
+) {
+    lifter.patchers.push(Box::new(move |block: &mut pcode::Block| {
+        let Some(offset) = block.offset_of(addr) else { return };
+        tracing::warn!("[{addr:#x}] injecting `{reg:?} = {value:#x}`");
+        block
+            .instructions
+            .insert(offset, (reg, pcode::Op::Copy, pcode::Value::Const(value, reg.size)).into());
     }));
 }
 

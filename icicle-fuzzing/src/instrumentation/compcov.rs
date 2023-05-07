@@ -292,7 +292,7 @@ fn trace_strncmp_with(cpu: &mut Cpu, addr: u64, cov_map: StoreRef, str1: u64, st
     let cov = cpu.trace[cov_map].data_mut();
     let mask = (cov.len() - 1) as u32;
     for i in 0..(len as usize).min(MAX_CMP_LENGTH) {
-        if str1[i] == 0 || str1[i] == 0 {
+        if str1[i] == 0 || str2[i] == 0 {
             break;
         }
         cov[((key + (2 * i) as u32) & mask) as usize] += 1;

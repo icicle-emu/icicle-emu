@@ -22,7 +22,7 @@ impl Instrumentation {
         cov_slice.fill(0);
         cov_slice[0] = 1;
 
-        if let Some(_) = self.cmplog_map {
+        if self.cmplog_map.is_some() {
             // AFL++ takes care of clearing the cmplog_map after each input
         }
 

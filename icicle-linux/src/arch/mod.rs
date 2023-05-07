@@ -40,8 +40,8 @@ pub trait ArchSyscall {
 
     fn get_args<C: LinuxCpu, const N: usize>(&self, cpu: &mut C) -> Result<[u64; N], LinuxError> {
         let mut args = [0; N];
-        for i in 0..N {
-            args[i] = self.get_arg(cpu, i)?;
+        for (i, arg) in args.iter_mut().enumerate() {
+            *arg = self.get_arg(cpu, i)?;
         }
         Ok(args)
     }
@@ -439,7 +439,7 @@ impl Libc {
         let value = u64::from_le_bytes(buf);
 
         self.offset += size;
-        let value = self.bswap::<T, M>(value);
+        let value = self.bswap::<T>(value);
         Ok(if T::SIGNED { pcode::sxt64(value, size * 8) } else { value })
     }
 
@@ -448,7 +448,7 @@ impl Libc {
     }
 
     pub fn write<T: CDataType, M: LinuxMmu>(&mut self, mem: &mut M, val: u64) -> MemResult<()> {
-        let val = self.bswap::<T, M>(val).to_le_bytes();
+        let val = self.bswap::<T>(val).to_le_bytes();
 
         let size = T::size(&self.data_model);
         self.offset = align_up(self.offset, T::alignment(&self.data_model));
@@ -471,7 +471,7 @@ impl Libc {
         value.write(self, mem)
     }
 
-    fn bswap<T: CDataType, M: LinuxMmu>(&self, value: u64) -> u64 {
+    fn bswap<T: CDataType>(&self, value: u64) -> u64 {
         if self.endianness == Endianness::Little {
             return value;
         }
@@ -479,7 +479,7 @@ impl Libc {
             1 => value,
             2 => (value as u16).swap_bytes() as u64,
             4 => (value as u32).swap_bytes() as u64,
-            8 => (value as u64).swap_bytes() as u64,
+            8 => value.swap_bytes(),
             size => panic!("Bad data type size: {}", size),
         }
     }

@@ -163,7 +163,7 @@ pub struct InstHook {
 
 impl Drop for InstHook {
     fn drop(&mut self) {
-        if self.data != std::ptr::null_mut() {
+        if !self.data.is_null() {
             (self.drop)(self.data);
             self.data = std::ptr::null_mut();
         }

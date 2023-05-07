@@ -14,7 +14,7 @@ use icicle_cpu::mem::{
 };
 use memoffset::offset_of;
 
-use crate::translate::{is_native_size, sized_int, Translator};
+use crate::translate::{is_jit_supported_size, sized_int, Translator};
 
 #[derive(Clone, Copy)]
 enum AccessKind {
@@ -80,7 +80,7 @@ fn tlb_lookup(trans: &mut Translator, addr: Value, kind: AccessKind, not_found: 
 
     // Load the tag
     let kind_offset = kind.tlb_offset();
-    let expected_tag = trans.builder.ins().load(types::I64, mem_flags, tlb_addr, kind_offset + 0);
+    let expected_tag = trans.builder.ins().load(types::I64, mem_flags, tlb_addr, kind_offset);
 
     // Check that the tag matches. Note we can avoid the mask here, since all non-tag bits are
     // already zeroed.
@@ -116,7 +116,7 @@ fn tlb_lookup_const(
 
     // Load the tag
     let kind_offset = kind.tlb_offset();
-    let expected_tag = trans.builder.ins().load(types::I64, mem_flags, tlb_addr, kind_offset + 0);
+    let expected_tag = trans.builder.ins().load(types::I64, mem_flags, tlb_addr, kind_offset);
 
     // Check that the tag matches
     let tag =
@@ -141,21 +141,19 @@ fn check_perm(trans: &mut Translator, host_addr: Value, size: u8, perm: u8, inva
     let perm = splat_const(trans, perm, ty);
 
     // Check if the all the bits in `perm` are set for this address.
-    if size > 4 {
-        // Avoid needing to to compare with a large constant by using the identity:
-        // `a & b == b => !a & b == 0`
-        //
-        // @fixme: This could be done with `band_not` however this is not supported for 64-bit
-        // instructions on x64 in cranelift.
-        let tmp = trans.builder.ins().bnot(value);
-        let value = trans.builder.ins().band(tmp, perm);
-        trans.branch_non_zero(value, invalid_perm);
-    }
-    else {
-        let value = trans.builder.ins().band(value, perm);
-        let cond = trans.builder.ins().icmp(IntCC::Equal, value, perm);
-        trans.branch_zero(cond, invalid_perm);
-    }
+    //
+    // Note we avoid an extra comparison (which is particularly bad for large values) by using the
+    // identity:
+    //
+    // `a & b == b => b & !a == 0`
+    let value = trans.builder.ins().band_not(perm, value);
+    trans.branch_non_zero(value, invalid_perm);
+
+    // TODO: Use the following code if Cranelift adds the same optimization internally.
+    //
+    // let value = trans.builder.ins().band(value, perm);
+    // let cond = trans.builder.ins().icmp(IntCC::Equal, value, perm);
+    // trans.branch_zero(cond, invalid_perm);
 }
 
 /// Create a constant of `ty` that consists of `value` repeated for every byte.
@@ -198,7 +196,7 @@ pub(super) fn load_host(trans: &mut Translator, addr: Value, size: u8) -> Value 
 /// Generate code for loading a value from RAM.
 pub(super) fn load_ram(trans: &mut Translator, guest_addr: pcode::Value, output: pcode::VarNode) {
     let size = output.size;
-    if !is_native_size(size) || trans.ctx.disable_jit_mem {
+    if !is_jit_supported_size(size) || trans.ctx.disable_jit_mem {
         trans.interpret(pcode::Instruction::from((
             output,
             pcode::Op::Load(0),
@@ -297,7 +295,7 @@ pub(super) fn store_host(trans: &mut Translator, addr: Value, mut value: Value) 
 /// Generate code for storing a value to RAM.
 pub(super) fn store_ram(trans: &mut Translator, guest_addr: pcode::Value, value: pcode::Value) {
     let size = value.size();
-    if !is_native_size(size) || trans.ctx.disable_jit_mem {
+    if !is_jit_supported_size(size) || trans.ctx.disable_jit_mem {
         trans.interpret(pcode::Instruction::from((
             pcode::Op::Store(0),
             pcode::Inputs::new(guest_addr, value),
@@ -413,7 +411,7 @@ fn try_inline_access_const(
 ) -> Value {
     let page_ptr = tlb_lookup_const(trans, guest_addr, kind, fallback_block);
     let offset =
-        trans.builder.ins().iconst(types::I64, (guest_addr & (1_u64 << OFFSET_BITS) - 1) as i64);
+        trans.builder.ins().iconst(types::I64, (guest_addr & ((1_u64 << OFFSET_BITS) - 1)) as i64);
     let host_addr = trans.builder.ins().iadd(page_ptr, offset);
 
     check_perm(trans, host_addr, size, kind.perm(), fallback_block);

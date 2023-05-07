@@ -99,8 +99,13 @@ impl TranslationCache {
         self.write[Self::index(addr)].clear(addr);
     }
 
-    pub fn remove_range(&mut self, start: u64, end: u64) {
-        tracing::trace!("Clearing {:#0x} to {:#0x} in TLB", start, end);
+    pub fn remove_range(&mut self, start: u64, len: u64) {
+        if len == 0 {
+            return;
+        }
+        let end =
+            start.checked_add(len - 1).expect("Overflowed ending address in TLB remove range");
+        tracing::trace!("Clearing {start:#x} to {end:#x} in TLB",);
 
         // Check if the range we are removing covers a large enough address space that it will clear
         // the entire TLB.
@@ -108,12 +113,12 @@ impl TranslationCache {
         // If that is the case, perform a single optimized clear of the entire TLB (this avoids
         // performance issues where we end up iterating over the entire TLB address space
         // multiple times for extremely large address space changes).
-        if (end >> OFFSET_BITS) - (start >> OFFSET_BITS) > TLB_ENTRIES as u64 {
+        if (len >> OFFSET_BITS) > TLB_ENTRIES as u64 {
             self.clear();
             return;
         }
 
-        for addr in (start & !(PAGE_SIZE - 1) as u64..end).step_by(PAGE_SIZE) {
+        for addr in (start & !(PAGE_SIZE - 1) as u64..=end).step_by(PAGE_SIZE) {
             self.remove(addr);
         }
     }

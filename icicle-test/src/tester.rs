@@ -19,21 +19,21 @@ impl Tester for icicle_vm::Vm {
         self.reset();
         self.lifter.settings.max_instructions_per_block = test.instructions.len();
 
-        let start = test.load_addr;
-        let end = test.load_addr.checked_add(0x1000).unwrap();
-        self.cpu.mem.map_memory(start, end, mem::Mapping { perm: perm::NONE, value: 0x00 });
-        self.cpu.mem.write_bytes(test.load_addr, &[0; 0x1000], perm::NONE)?;
-
         let mut addr = test.load_addr;
+        self.cpu.mem.map_memory_len(addr, 0x1000, mem::Mapping { perm: perm::NONE, value: 0x00 });
+        self.cpu.mem.write_bytes(addr, &[0; 0x1000], perm::NONE)?;
+
         for entry in &test.instructions {
             self.cpu.mem.write_bytes(addr, &entry.bytes, perm::NONE)?;
             addr += entry.bytes.len() as u64;
         }
+        tracing::trace!("Test case written to memory");
         self.cpu.mem.update_perm(
             test.load_addr,
             addr - test.load_addr,
             perm::READ | perm::INIT | perm::EXEC,
         )?;
+        tracing::trace!("Permissions updated for instruction bytes");
 
         (self.cpu.arch.on_boot)(&mut self.cpu, test.load_addr);
         self.cpu.set_isa_mode(test.isa_mode);
@@ -86,7 +86,7 @@ impl Tester for icicle_vm::Vm {
                 );
             }
 
-            if disasm.replace(" ", "") != expected.disasm.replace(" ", "") {
+            if disasm.replace(' ', "") != expected.disasm.replace(' ', "") {
                 anyhow::bail!(
                     "line {}: decoded instruction disasm {disasm} != expected {}",
                     expected.line,
@@ -95,14 +95,14 @@ impl Tester for icicle_vm::Vm {
             }
 
             output.push_str(disasm);
-            output.push_str("\n");
+            output.push('\n');
         }
 
         if let Some(group) = group {
             let lifted = icicle_vm::debug::debug_block_group(self, &group)?;
             output.push_str(&lifted);
         }
-        output.push_str("\n");
+        output.push('\n');
 
         Ok(output)
     }
@@ -128,7 +128,17 @@ impl Tester for icicle_vm::Vm {
                 | VmExit::UnhandledException((ExceptionCode::ShadowStackInvalid, _))
         ) {
             let offset = self.cpu.block_offset;
-            anyhow::bail!("Unexpected exit: {exit:?} (offset={offset})");
+            match self
+                .code
+                .blocks
+                .get(self.cpu.block_id as usize)
+                .and_then(|b| b.pcode.instructions.get(offset as usize))
+            {
+                Some(inst) => {
+                    anyhow::bail!("Unexpected exit: {exit:?} (offset={offset}): {inst:?}")
+                }
+                None => anyhow::bail!("Unexpected exit: {exit:?} (offset={offset})"),
+            }
         }
 
         Ok(())
@@ -138,12 +148,15 @@ impl Tester for icicle_vm::Vm {
         match assignment {
             Assignment::Mem { addr, perm, value } => {
                 let start = utils::align_down(*addr, 0x1000);
-                let end = utils::align_up(start + value.len() as u64, 0x1000);
+                let len = utils::align_up(value.len() as u64, 0x1000);
 
-                self.cpu.mem.unmap_memory(start, end);
+                self.cpu.mem.unmap_memory_len(start, len);
 
                 let mapping = mem::Mapping { perm: *perm, value: 0x0 };
-                anyhow::ensure!(self.cpu.mem.map_memory(start, end, mapping), "failed to map memory");
+                anyhow::ensure!(
+                    self.cpu.mem.map_memory_len(start, len, mapping),
+                    "failed to map memory"
+                );
 
                 self.cpu.mem.write_bytes(*addr, value, perm::NONE)?;
             }
