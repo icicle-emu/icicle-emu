@@ -7,7 +7,9 @@ pub enum BuildError {
     UnsupportedArchitecture,
     SpecNotFound(std::path::PathBuf),
     SpecCompileError(String),
+    FailedToParsePspec(String),
     FailedToInitEnvironment(String),
+    UnknownContextField(String),
     UnsupportedOperatingSystem,
     InvalidConfig,
 }
@@ -18,8 +20,12 @@ impl std::fmt::Display for BuildError {
             Self::UnsupportedArchitecture => write!(f, "Unsupported architecture"),
             Self::SpecNotFound(path) => write!(f, "Sleigh spec not found: {}", path.display()),
             Self::SpecCompileError(err) => write!(f, "Sleigh spec compile error: {err}"),
+            Self::FailedToParsePspec(err) => write!(f, "Failed to parse pspec file: {err}"),
             Self::FailedToInitEnvironment(err) => {
                 write!(f, "Failed to initialize environment: {err}")
+            }
+            Self::UnknownContextField(name) => {
+                write!(f, "Unknown context field found in pspec: {name}")
             }
             Self::UnsupportedOperatingSystem => write!(f, "Unsupported operating system"),
             Self::InvalidConfig => write!(f, "Invalid config"),
@@ -94,6 +100,24 @@ fn build_arch(
         stack_offset: config.calling_cov.stack_offset,
     };
 
+    let mut ctx = config.context.clone();
+    if let Some(pspec_path) = config.processor_spec_path {
+        let path = get_path_to_ghidra_file(pspec_path);
+        let pspec: PSpec = serde_xml_rs::from_reader(
+            std::fs::read(&path).map_err(|_| BuildError::SpecNotFound(path))?.as_slice(),
+        )
+        .map_err(|e| BuildError::FailedToParsePspec(e.to_string()))?;
+
+        let mut initial_ctx = 0_u64;
+        for entry in &pspec.context_data.context_set.set {
+            let field = sleigh
+                .get_context_field(&entry.name)
+                .ok_or_else(|| BuildError::UnknownContextField(entry.name.clone()))?;
+            field.field.set(&mut initial_ctx, entry.val as i64);
+        }
+        ctx.push(initial_ctx);
+    }
+
     Ok(Arch {
         triple: triple.clone(),
         reg_pc,
@@ -102,7 +126,7 @@ fn build_arch(
         reg_isa_mode: sleigh.get_reg("ISAModeSwitch").map(|x| x.var),
         reg_init,
         on_boot: config.on_boot,
-        isa_mode_context: config.context.clone(),
+        isa_mode_context: ctx,
         calling_cov,
         sleigh,
     })
@@ -161,6 +185,8 @@ struct CallingCovSpec {
 struct SpecConfig {
     /// The path to the root level sleigh specification for this architecture.
     path: &'static str,
+    /// Path to processor specification file (pspec). If `None` some defaults will be inferred.
+    processor_spec_path: Option<&'static str>,
     /// The name of the varnode this architecture uses as the program counter.
     reg_pc: &'static str,
     /// The name of the varnode this architecture uses as the stack pointer.
@@ -181,6 +207,49 @@ struct SpecConfig {
     on_boot: fn(&mut Cpu, u64),
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct Set {
+    pub name: String,
+    pub val: u64,
+}
+
+#[allow(unused)]
+#[derive(Debug, serde::Deserialize)]
+struct ProgramCounter {
+    register: String,
+}
+
+#[allow(unused)]
+#[derive(Debug, serde::Deserialize)]
+struct ContextSet {
+    pub space: String,
+    #[serde(rename = "$value")]
+    pub set: Vec<Set>,
+}
+
+#[allow(unused)]
+#[derive(Debug, serde::Deserialize)]
+struct ContextData {
+    context_set: ContextSet,
+    #[serde(skip)]
+    tracked_set: Vec<()>,
+}
+
+/// A SLEIGH processor specification file
+#[derive(Debug, serde::Deserialize)]
+struct PSpec {
+    #[allow(unused)]
+    #[serde(skip)]
+    properties: Vec<()>,
+    #[allow(unused)]
+    programcounter: ProgramCounter,
+    context_data: ContextData,
+    #[allow(unused)]
+    #[serde(skip)]
+    register_data: Vec<()>,
+}
+
+// @todo: load more information from pspec/ldef files.
 fn get_spec_config(arch: target_lexicon::Architecture) -> Option<SpecConfig> {
     use target_lexicon::{Aarch64Architecture, Architecture, ArmArchitecture, Mips32Architecture};
 
@@ -204,6 +273,7 @@ fn get_spec_config(arch: target_lexicon::Architecture) -> Option<SpecConfig> {
             };
             SpecConfig {
                 path,
+                processor_spec_path: None,
                 reg_pc: "pc",
                 reg_sp: "sp",
                 context,
@@ -228,6 +298,7 @@ fn get_spec_config(arch: target_lexicon::Architecture) -> Option<SpecConfig> {
         }
         Architecture::Aarch64(Aarch64Architecture::Aarch64) => SpecConfig {
             path: "AARCH64/data/languages/AARCH64.slaspec",
+            processor_spec_path: None,
             reg_pc: "pc",
             reg_sp: "sp",
             context: vec![generic::CTX],
@@ -252,6 +323,7 @@ fn get_spec_config(arch: target_lexicon::Architecture) -> Option<SpecConfig> {
             };
             SpecConfig {
                 path,
+                processor_spec_path: None,
                 reg_pc: "pc",
                 reg_sp: "sp",
                 context: vec![generic::CTX],
@@ -267,6 +339,7 @@ fn get_spec_config(arch: target_lexicon::Architecture) -> Option<SpecConfig> {
         }
         Architecture::Msp430 => SpecConfig {
             path: "TI_MSP430/data/languages/TI_MSP430X.slaspec",
+            processor_spec_path: None,
             reg_pc: "PC",
             reg_sp: "SP",
             context: vec![generic::CTX],
@@ -281,6 +354,7 @@ fn get_spec_config(arch: target_lexicon::Architecture) -> Option<SpecConfig> {
         },
         Architecture::Powerpc => SpecConfig {
             path: "PowerPC/data/languages/ppc_32_be.slaspec",
+            processor_spec_path: None,
             reg_pc: "pc",
             reg_sp: "r1",
             context: vec![generic::CTX],
@@ -295,6 +369,7 @@ fn get_spec_config(arch: target_lexicon::Architecture) -> Option<SpecConfig> {
         },
         Architecture::Riscv32(_) => SpecConfig {
             path: "RISCV/data/languages/riscv.ilp32d.slaspec",
+            processor_spec_path: None,
             reg_pc: "pc",
             reg_sp: "sp",
             context: vec![generic::CTX],
@@ -309,6 +384,7 @@ fn get_spec_config(arch: target_lexicon::Architecture) -> Option<SpecConfig> {
         },
         Architecture::Riscv64(_) => SpecConfig {
             path: "RISCV/data/languages/riscv.lp64d.slaspec",
+            processor_spec_path: None,
             reg_pc: "pc",
             reg_sp: "sp",
             context: vec![generic::CTX],
@@ -323,9 +399,10 @@ fn get_spec_config(arch: target_lexicon::Architecture) -> Option<SpecConfig> {
         },
         Architecture::X86_32(_) => SpecConfig {
             path: "x86/data/languages/x86-64.slaspec",
+            processor_spec_path: Some("x86/data/languages/x86.pspec"),
             reg_pc: "EIP",
             reg_sp: "ESP",
-            context: vec![x86::COMPAT_MODE_CTX],
+            context: vec![],
             init_registers: vec![],
             temp_registers: vec![],
             calling_cov: CallingCovSpec { integers: vec![], stack_align: 4, stack_offset: 0 },
@@ -333,9 +410,10 @@ fn get_spec_config(arch: target_lexicon::Architecture) -> Option<SpecConfig> {
         },
         Architecture::X86_64 => SpecConfig {
             path: "x86/data/languages/x86-64.slaspec",
+            processor_spec_path: Some("x86/data/languages/x86-64.pspec"),
             reg_pc: "RIP",
             reg_sp: "RSP",
-            context: vec![x86::LONG_MODE_CTX],
+            context: vec![],
             init_registers: vec![],
             temp_registers: vec![],
             calling_cov: CallingCovSpec {
@@ -347,6 +425,7 @@ fn get_spec_config(arch: target_lexicon::Architecture) -> Option<SpecConfig> {
         },
         Architecture::XTensa => SpecConfig {
             path: "xtensa/data/languages/xtensa.slaspec",
+            processor_spec_path: None,
             reg_pc: "pc",
             reg_sp: "a1",
             context: vec![generic::CTX],
@@ -371,14 +450,18 @@ pub fn build_sleigh_for(
 }
 
 fn build_sleigh(config: &SpecConfig) -> Result<sleigh_runtime::SleighData, BuildError> {
-    let path = std::env::var_os("GHIDRA_SRC")
-        .map_or_else(|| ".".into(), std::path::PathBuf::from)
-        .join("Ghidra/Processors")
-        .join(config.path);
+    let path = get_path_to_ghidra_file(config.path);
     if !path.exists() {
         return Err(BuildError::SpecNotFound(path));
     }
     sleigh_compile::from_path(&path).map_err(BuildError::SpecCompileError)
+}
+
+fn get_path_to_ghidra_file(file: &str) -> std::path::PathBuf {
+    std::env::var_os("GHIDRA_SRC")
+        .map_or_else(|| ".".into(), std::path::PathBuf::from)
+        .join("Ghidra/Processors")
+        .join(file)
 }
 
 // @fixme: avoid making this pub when we refactor architecture specific CPU state.
@@ -398,14 +481,15 @@ mod generic {
 pub mod x86 {
     use icicle_cpu::ValueSource;
 
-    /// Initial context register state for `x86_64` processor running in long mode.
+    /// Initial context register state (Ghidra 10.3) for `x86_64` processor running in long mode.
     ///
     /// * longMode(0, 0)       = 1 (64-bit mode)
     /// * bit64(4, 4)          = 1 (64-bit mode)
     /// * opsize(6, 7)         = 1 (32-bit operands)
     pub const LONG_MODE_CTX: u64 = 0b_0000_0000_0000_0000_0000_0000_1001_0001_u64.reverse_bits();
 
-    /// Initial context register state for `x86_64` processor running `x32` compatability mode.
+    /// Initial context register state (Ghidra 10.3)  for `x86_64` processor running `x32`
+    /// compatability mode.
     ///
     /// * longMode(0, 0)       = 0 (32-bit mode)
     /// * addrSize(4, 5)       = 1 (32-bit addresses)

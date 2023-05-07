@@ -45,6 +45,8 @@ pub fn build_inner(mut parser: Parser, verbose: bool) -> Result<SleighData, Stri
         symbols.default_space.map(|i| symbols.spaces[i as usize].size).unwrap_or(8);
 
     for entry in &symbols.context_fields {
+        let name_str = symbols.parser.get_ident_str(entry.name);
+        ctx.data.context_field_mapping.insert(name_str.to_owned(), ctx.data.context_fields.len());
         ctx.data
             .context_fields
             .push(sleigh_runtime::ContextField { field: entry.field, flow: entry.flow });
