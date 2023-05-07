@@ -332,6 +332,8 @@ pub struct SleighData {
     pub matchers: Vec<Matcher>,
 
     pub context_fields: Vec<ContextField>,
+    /// An index for looking up context fields by name.
+    pub context_field_mapping: HashMap<String, usize>,
 
     pub constructors: Vec<Constructor>,
     pub fields: Vec<Field>,
@@ -419,6 +421,11 @@ impl SleighData {
     pub fn get_userop(&self, name: &str) -> Option<pcode::HookId> {
         // @fixme: avoid sequential scan
         self.user_ops.iter().position(|x| self.get_str(*x) == name).map(|x| x as pcode::HookId)
+    }
+
+    /// Lookup a context field
+    pub fn get_context_field(&self, name: &str) -> Option<ContextField> {
+        self.context_field_mapping.get(name).map(|x| self.context_fields[*x as usize])
     }
 
     /// Get the register for a given name.

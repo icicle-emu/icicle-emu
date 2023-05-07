@@ -251,6 +251,7 @@ impl SymbolTable {
                 SymbolKind::ContextField,
                 ContextField {
                     register,
+                    name: field.name,
                     field: Field {
                         offset,
                         num_bits,
@@ -497,6 +498,9 @@ pub(crate) struct ContextField {
     /// The register this field is associated with.
     #[allow(unused)] // Currently we only support a single context register.
     pub register: RegisterId,
+
+    /// The name of the field.
+    pub name: ast::Ident,
 
     /// Describes how to extract the value of the field
     pub field: Field,
