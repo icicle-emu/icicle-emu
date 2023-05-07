@@ -166,7 +166,7 @@ impl<'a, 'b> ConstraintVisitor<'a, 'b> {
 
                         let entry = &self.scope.globals.token_fields[symbol.id as usize];
                         let token = Token::new(
-                            (self.scope.globals.tokens[entry.token as usize].num_bits / 8) as u8,
+                            self.scope.globals.tokens[entry.token as usize].num_bits / 8,
                         );
 
                         let index = self.scope.add_field(ident, entry.field)?;
@@ -179,7 +179,7 @@ impl<'a, 'b> ConstraintVisitor<'a, 'b> {
 
                     SymbolKind::Table => {
                         let index = self.scope.add_subtable(ident, symbol.id)?;
-                        self.add_action(DecodeAction::Subtable(index as u32, symbol.id as u32));
+                        self.add_action(DecodeAction::Subtable(index, symbol.id));
                     }
 
                     // Registers can appear in a bare identifier in a constraint expression,
@@ -204,7 +204,7 @@ impl<'a, 'b> ConstraintVisitor<'a, 'b> {
 
                         let entry = &self.scope.globals.token_fields[symbol.id as usize];
                         let token_bytes =
-                            self.scope.globals.tokens[entry.token as usize].num_bits as u8 / 8;
+                            self.scope.globals.tokens[entry.token as usize].num_bits / 8;
 
                         let operand = self.token_operand(value)?;
                         self.current_constraints.push(Constraint::Token {

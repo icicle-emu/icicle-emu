@@ -44,7 +44,7 @@ pub fn call_block_contains_breakpoint() -> JitFunction {
 
 #[inline(always)]
 fn load<const N: usize>(cpu_ptr: *mut Cpu, addr: u64) -> [u8; N] {
-    let result = unsafe { (*cpu_ptr).mem.read_tlb_miss(addr, perm::READ | perm::INIT) };
+    let result = unsafe { (*cpu_ptr).mem.read(addr, perm::READ | perm::INIT) };
     match result {
         Ok(v) => v,
         Err(e) => {
@@ -87,7 +87,7 @@ pub extern "C" fn load128be(cpu_ptr: *mut Cpu, addr: u64, out: &mut u128) {
 
 #[inline(always)]
 fn store<const N: usize>(cpu_ptr: *mut Cpu, addr: u64, value: [u8; N]) {
-    let result = unsafe { (*cpu_ptr).mem.write_tlb_miss(addr, value, perm::WRITE) };
+    let result = unsafe { (*cpu_ptr).mem.write(addr, value, perm::WRITE) };
     if let Err(e) = result {
         unsafe {
             (*cpu_ptr).exception.code = ExceptionCode::from_store_error(e) as u32;
@@ -126,14 +126,6 @@ pub extern "C" fn store128be(cpu_ptr: *mut Cpu, addr: u64, low: u64, high: u64) 
     store(cpu_ptr, addr, value.to_be_bytes())
 }
 
-pub extern "C" fn run_dynamic_hook(cpu_ptr: *mut Cpu, addr: u64, data_ptr: *mut ()) {
-    unsafe {
-        let id: u64 = std::mem::transmute(data_ptr);
-        let cpu = &mut *cpu_ptr;
-        cpu.call_hook(id as u16, addr)
-    }
-}
-
 pub fn pack_instruction(inst: pcode::Instruction) -> [u64; 4] {
     assert!(std::mem::size_of::<pcode::Instruction>() == std::mem::size_of::<[u64; 4]>());
     unsafe { std::mem::transmute_copy(&inst) }
@@ -144,25 +136,21 @@ pub fn unpack_instruction(op_bytes: [u64; 4]) -> pcode::Instruction {
     unsafe { std::mem::transmute_copy(&op_bytes) }
 }
 
-pub extern "C" fn run_interpreter(cpu_ptr: *mut Cpu, a: u64, b: u64, c: u64, d: u64) {
-    unsafe {
-        let cpu = &mut (*cpu_ptr);
-        cpu.interpret_unchecked(unpack_instruction([a, b, c, d]));
-    }
+/// Interprets the instruction packed in the input arguments.
+///
+/// # Safety
+///
+/// The input arguments must represent a valid instruction.
+pub unsafe extern "C" fn run_interpreter(cpu: &mut Cpu, a: u64, b: u64, c: u64, d: u64) {
+    cpu.interpret_unchecked(unpack_instruction([a, b, c, d]));
 }
 
-pub extern "C" fn push_shadow_stack(cpu_ptr: *mut Cpu, addr: u64) {
-    unsafe {
-        let cpu = &mut (*cpu_ptr);
-        cpu.push_shadow_stack(addr);
-    }
+pub extern "C" fn push_shadow_stack(cpu: &mut Cpu, addr: u64) {
+    cpu.push_shadow_stack(addr);
 }
 
-pub extern "C" fn pop_shadow_stack(cpu_ptr: *mut Cpu, target: u64) {
-    unsafe {
-        let cpu = &mut (*cpu_ptr);
-        cpu.pop_shadow_stack(target);
-    }
+pub extern "C" fn pop_shadow_stack(cpu: &mut Cpu, target: u64) {
+    cpu.pop_shadow_stack(target);
 }
 
 #[test]

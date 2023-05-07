@@ -23,11 +23,11 @@ use icicle_cpu::{
 };
 
 pub trait LinuxMmu {
-    fn memmap(&mut self, start: u64, end: u64, mapping: Mapping) -> bool;
-    fn unmap(&mut self, start: u64, end: u64) -> bool;
+    fn memmap(&mut self, start: u64, len: u64, mapping: Mapping) -> bool;
+    fn unmap(&mut self, start: u64, len: u64) -> bool;
     fn next_free(&self, layout: AllocLayout) -> MemResult<u64>;
     fn alloc(&mut self, layout: AllocLayout, mapping: Mapping) -> MemResult<u64>;
-    fn free(&mut self, start: u64, end: u64) -> bool;
+    fn free(&mut self, start: u64, len: u64) -> bool;
 
     fn take_virtual_mapping(&mut self) -> VirtualMemoryMap;
     fn restore_virtual_mapping(&mut self, map: VirtualMemoryMap);
@@ -54,12 +54,12 @@ pub trait LinuxMmu {
 }
 
 impl LinuxMmu for mem::Mmu {
-    fn memmap(&mut self, start: u64, end: u64, mapping: Mapping) -> bool {
-        mem::Mmu::map_memory(self, start, end, mapping)
+    fn memmap(&mut self, start: u64, len: u64, mapping: Mapping) -> bool {
+        mem::Mmu::map_memory_len(self, start, len, mapping)
     }
 
-    fn unmap(&mut self, start: u64, end: u64) -> bool {
-        mem::Mmu::unmap_memory(self, start, end)
+    fn unmap(&mut self, start: u64, len: u64) -> bool {
+        mem::Mmu::unmap_memory_len(self, start, len)
     }
 
     fn next_free(&self, layout: AllocLayout) -> MemResult<u64> {
@@ -70,8 +70,8 @@ impl LinuxMmu for mem::Mmu {
         mem::Mmu::alloc_memory(self, layout, mapping)
     }
 
-    fn free(&mut self, start: u64, end: u64) -> bool {
-        mem::Mmu::unmap_memory(self, start, end)
+    fn free(&mut self, start: u64, len: u64) -> bool {
+        mem::Mmu::unmap_memory_len(self, start, len)
     }
 
     fn take_virtual_mapping(&mut self) -> VirtualMemoryMap {
@@ -110,8 +110,8 @@ impl LinuxMmu for mem::Mmu {
         mem::Mmu::map_physical(self, addr, id)
     }
 
-    fn move_region(&mut self, old_addr: u64, old_end: u64, new_addr: u64) -> MemResult<()> {
-        mem::Mmu::move_region(self, old_addr, old_end, new_addr)
+    fn move_region(&mut self, old_addr: u64, size: u64, new_addr: u64) -> MemResult<()> {
+        mem::Mmu::move_region_len(self, old_addr, size, new_addr)
     }
 
     fn get_perm(&self, addr: u64) -> u8 {
@@ -1090,11 +1090,11 @@ impl Kernel {
     }
 
     /// Free a region of memory
-    pub fn free<M>(&mut self, mem: &mut M, start: u64, end: u64) -> MemResult<()>
+    pub fn free<M>(&mut self, mem: &mut M, start: u64, len: u64) -> MemResult<()>
     where
         M: LinuxMmu,
     {
-        match mem.free(start, end) {
+        match mem.free(start, len) {
             true => Ok(()),
             false => Err(MemError::Unmapped),
         }
@@ -1304,7 +1304,7 @@ impl Kernel {
 
         // Find the lowest pending signal and pop it.
         let signal_idx = self.process.pending_signals.trailing_zeros() as u64;
-        self.process.pending_signals &= !(1 << signal_idx as u64);
+        self.process.pending_signals &= !(1 << signal_idx);
         let signal = signal_idx + 1;
 
         match self.process.signal_handlers.get_action(signal) {
@@ -1503,7 +1503,7 @@ impl icicle_cpu::Environment for Kernel {
         self.process.mapping.clear();
 
         tracing::info!("Reserving null page");
-        cpu.mem.map_memory(0x0, 0x0 + sys::PAGE_SIZE, Mapping { perm: perm::NONE, value: 0xAA });
+        cpu.mem.map_memory_len(0x0, sys::PAGE_SIZE, Mapping { perm: perm::NONE, value: 0xAA });
         self.process
             .mapping
             .insert(0x0, MemMappedFile { path: b"(null page)".to_vec(), end: sys::PAGE_SIZE });

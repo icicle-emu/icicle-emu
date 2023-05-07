@@ -5,7 +5,7 @@ use icicle_cpu::{Cpu, ExceptionCode};
 use memoffset::offset_of;
 
 use crate::{
-    translate::{is_native_size, sized_float, sized_int, Translator},
+    translate::{is_jit_supported_size, sized_float, sized_int, Translator},
     HookData, TracerMemEntry, VmCtx,
 };
 
@@ -66,8 +66,8 @@ impl<'a, 'b> Ctx<'a, 'b> {
 
         let current_pc = self.trans.builder.ins().iconst(types::I64, self.trans.last_addr as i64);
 
-        // Fuzzware assumes PC is flushed to memory before calling the hook (even though
-        // the correct value is available as a parameter), so write it here now.
+        // Some hooks assumes PC is flushed to memory before the call (even though the correct value
+        // is available as a parameter), so write it here now.
         let reg_pc = self.trans.ctx.reg_pc;
         let pc_sized = self.trans.resize_int(current_pc, 8, reg_pc.size);
         self.trans.vm_ptr.store_var(&mut self.trans.builder, reg_pc, pc_sized);
@@ -86,7 +86,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
     pub fn emit_copy(&mut self) {
         let input = self.instruction.inputs.first();
 
-        if !is_native_size(input.size()) {
+        if !is_jit_supported_size(input.size()) {
             for i in 0..input.size() {
                 let x = self.trans.read_int(input.slice(i, 1));
                 self.trans.write(self.instruction.output.slice(i, 1), x);
@@ -101,8 +101,8 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let input = self.instruction.inputs.first();
         let output = self.instruction.output;
 
-        if input.size() == output.size {
-            return self.emit_copy();
+        if output.size <= input.size() {
+            unreachable!("Expected ZXT to larger type to be converted to copy operation.");
         }
 
         let x = self.trans.read_int(input);
@@ -114,8 +114,8 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let input = self.instruction.inputs.first();
         let output = self.instruction.output;
 
-        if input.size() == output.size {
-            return self.emit_copy();
+        if output.size <= input.size() {
+            unreachable!("Expected SXT to larger type to be converted to copy operation.");
         }
 
         let value = self.trans.read_int(input);
@@ -125,13 +125,13 @@ impl<'a, 'b> Ctx<'a, 'b> {
 
     pub fn emit_int_op(&mut self, op: fn(&mut Translator, Value, Value) -> Value) {
         let (a, b) = self.read_int_inputs();
-        let result = op(&mut self.trans, a, b);
+        let result = op(self.trans, a, b);
         self.trans.write(self.instruction.output, result);
     }
 
     pub fn emit_int_unary_op(&mut self, op: fn(&mut Translator, Value) -> Value) {
         let x = self.trans.read_int(self.instruction.inputs.first());
-        let result = op(&mut self.trans, x);
+        let result = op(self.trans, x);
         self.trans.write(self.instruction.output, result);
     }
 
@@ -158,7 +158,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
     pub fn emit_div_op(&mut self, op: fn(&mut Translator, Value, Value) -> Value) {
         if self.instruction.output.size > 8 {
             // 128-bit division is not currently supported in cranelift
-            self.trans.interpret(self.instruction.clone());
+            self.trans.interpret(self.instruction);
             // Check for div by 0 exception
             self.trans.maybe_exit_jit(None);
             return;
@@ -186,7 +186,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
             self.trans.builder.switch_to_block(ok_block);
             self.trans.builder.seal_block(ok_block);
 
-            let result = op(&mut self.trans, a, b);
+            let result = op(self.trans, a, b);
             self.trans.write(self.instruction.output, result);
         }
     }
@@ -227,13 +227,13 @@ impl<'a, 'b> Ctx<'a, 'b> {
             },
         };
 
-        let result = op(&mut self.trans, ty, x, shift, overflow);
+        let result = op(self.trans, ty, x, shift, overflow);
         self.trans.write(output, result);
     }
 
     pub fn emit_int_cmp(&mut self, op: fn(&mut Translator, Value, Value) -> Value) {
         let (a, b) = self.read_int_inputs();
-        let result = op(&mut self.trans, a, b);
+        let result = op(self.trans, a, b);
         self.trans.write(self.instruction.output, result);
     }
 
@@ -241,7 +241,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let inputs = self.instruction.inputs.get();
         let a = self.trans.read_bool(inputs[0]);
         let b = self.trans.read_bool(inputs[1]);
-        let result = op(&mut self.trans, a, b);
+        let result = op(self.trans, a, b);
         self.trans.write(self.instruction.output, result);
     }
 
@@ -249,14 +249,14 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let inputs = self.instruction.inputs.get();
         let a = self.trans.read_float(inputs[0]);
         let b = self.trans.read_float(inputs[1]);
-        let result = op(&mut self.trans, a, b);
+        let result = op(self.trans, a, b);
         self.trans.write(self.instruction.output, result);
         self.trans.invalidate_var(self.instruction.output);
     }
 
     pub fn emit_float_unary_op(&mut self, op: fn(&mut Translator, Value) -> Value) {
         let x = self.trans.read_float(self.instruction.inputs.first());
-        let result = op(&mut self.trans, x);
+        let result = op(self.trans, x);
         self.trans.write(self.instruction.output, result);
         self.trans.invalidate_var(self.instruction.output);
     }
@@ -267,7 +267,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let tmp = match input.size() {
             4 => self.trans.builder.ins().f32const(0.0),
             8 => self.trans.builder.ins().f64const(0.0),
-            _ => return self.trans.interpret(self.instruction.clone()),
+            _ => return self.trans.interpret(self.instruction),
         };
 
         let x = self.trans.read_float(input);
@@ -279,7 +279,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let inputs = self.instruction.inputs.get();
         let a = self.trans.read_float(inputs[0]);
         let b = self.trans.read_float(inputs[1]);
-        let result = op(&mut self.trans, a, b);
+        let result = op(self.trans, a, b);
         self.trans.write(self.instruction.output, result);
     }
 
@@ -287,8 +287,9 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let input = self.instruction.inputs.first();
         let output = self.instruction.output;
 
-        if !is_native_size(input.size()) || !is_native_size(output.size) {
-            return self.trans.interpret(self.instruction.clone());
+        if ![4, 8].contains(&input.size()) || ![4, 8].contains(&output.size) {
+            // Cranelift currently only supports f32 and f64 conversions.
+            return self.trans.interpret(self.instruction);
         }
 
         let x = self.trans.read_float(input);
@@ -303,11 +304,27 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let input = self.instruction.inputs.first();
         let output = self.instruction.output;
 
-        if !is_native_size(output.size) {
-            return self.trans.interpret(self.instruction.clone());
+        if ![4, 8].contains(&output.size) {
+            // Should be unreachable, currently we rewrite these operations to use f32/f64 then
+            // perform a float-to-float cast to get the final value, but we might want to support
+            // direct conversions in the future.
+            return self.trans.interpret(self.instruction);
         }
         let x = self.trans.read_int(input);
         let result = self.trans.builder.ins().fcvt_from_sint(sized_float(output.size), x);
+        self.trans.write(output, result);
+    }
+
+    pub fn emit_uint_to_float(&mut self) {
+        let input = self.instruction.inputs.first();
+        let output = self.instruction.output;
+
+        if ![4, 8].contains(&output.size) {
+            // Should be unreachable (see above).
+            return self.trans.interpret(self.instruction);
+        }
+        let x = self.trans.read_int(input);
+        let result = self.trans.builder.ins().fcvt_from_uint(sized_float(output.size), x);
         self.trans.write(output, result);
     }
 
@@ -315,8 +332,9 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let input = self.instruction.inputs.first();
         let output = self.instruction.output;
 
-        if !is_native_size(output.size) {
-            return self.trans.interpret(self.instruction.clone());
+        if ![4, 8].contains(&input.size()) {
+            // Should be unreachable (see above).
+            return self.trans.interpret(self.instruction);
         }
         let x = self.trans.read_float(input);
         let result = match output.size {
@@ -336,10 +354,10 @@ pub(super) fn sign_extend(
     in_size: u8,
     out_size: u8,
 ) -> Value {
-    if is_native_size(in_size) && is_native_size(out_size) {
+    if is_jit_supported_size(in_size) && is_jit_supported_size(out_size) {
         return trans.builder.ins().sextend(sized_int(out_size), value);
     }
-    if !is_native_size(out_size) {
+    if !is_jit_supported_size(out_size) {
         tracing::warn!("[{:#x}] sign extend to a non-natively sized integer", trans.last_addr);
     }
 
@@ -471,47 +489,12 @@ pub(super) fn int_signed_right(
     let max_shift = (ty.bits() - 1) as i64;
     match of {
         Overflow::True => trans.builder.ins().sshr_imm(x, max_shift),
-        Overflow::False => match CHECK_FOR_SIGNED_SHIFT_RIGHT_BUG {
-            true => check_for_signed_shift_right_bug(trans, x, ty, shift),
-            false => trans.builder.ins().sshr(x, shift),
-        },
+        Overflow::False => trans.builder.ins().sshr(x, shift),
         Overflow::Unknown(overflow) => {
             let max_shift = trans.builder.ins().iconst(types::I16, max_shift);
             let shift = trans.builder.ins().select(overflow, max_shift, shift);
             trans.builder.ins().sshr(x, shift)
         }
-    }
-}
-
-/// Previously there was a bug in the emulator where performing a signed-shift-right operation where
-/// the shift amount was a constant would result in unsigned shift right being generated.
-const CHECK_FOR_SIGNED_SHIFT_RIGHT_BUG: bool = false;
-
-fn check_for_signed_shift_right_bug(
-    trans: &mut Translator,
-    x: Value,
-    ty: Type,
-    shift: Value,
-) -> Value {
-    // Check whether the sign bit is set.
-    let tmp = trans.builder.ins().ushr_imm(x, (ty.bits() - 1) as i64);
-    let ok_block = trans.builder.create_block();
-    let err_block = trans.builder.create_block();
-
-    trans.builder.set_cold_block(err_block);
-    trans.builder.ins().brif(tmp, err_block, &[], ok_block, &[]);
-
-    // err:
-    {
-        trans.builder.switch_to_block(err_block);
-        trans.builder.seal_block(err_block);
-        trans.exit_with_exception(ExceptionCode::JitError, trans.last_addr);
-    }
-    // ok:
-    {
-        trans.builder.switch_to_block(ok_block);
-        trans.builder.seal_block(ok_block);
-        trans.builder.ins().sshr(x, shift)
     }
 }
 
@@ -681,13 +664,13 @@ mod test {
     }
 
     impl Checker {
-        fn new(op: pcode::Op) -> Self {
+        fn new(op: pcode::Op, out_size: u8) -> Self {
             let cpu = Cpu::new_boxed(Arch::none());
             let mut jit = crate::JIT::new(&cpu);
 
             let a = cpu.arch.sleigh.get_reg("a").unwrap().var.slice(0, 4);
             let b = cpu.arch.sleigh.get_reg("b").unwrap().var.slice(0, 4);
-            let out = cpu.arch.sleigh.get_reg("c").unwrap().var.slice(0, 4);
+            let out = cpu.arch.sleigh.get_reg("c").unwrap().var.slice(0, out_size);
 
             let inst = pcode::Instruction::from((out, op, (a, b)));
             let jit_fn = compile_instruction(&mut jit, inst);
@@ -704,25 +687,25 @@ mod test {
             }
         }
 
-        fn eval(&self, a: u32, b: u32) -> (u32, u32) {
+        fn eval_binop(&self, a: u32, b: u32) -> (u32, u32) {
             let mut cpu = self.cpu.borrow_mut();
 
             cpu.write_var(self.a, a);
             cpu.write_var(self.b, b);
-            cpu.write_var(self.out, 0xaaaa_aaaa_u32);
+            cpu.write_trunc(self.out, 0xaaaa_aaaa_u32);
             unsafe { cpu.interpret_unchecked(self.inst) };
-            let interpreter_out = cpu.read_var::<u32>(self.out);
+            let interpreter_out = cpu.read_dynamic(self.out.into()).zxt();
 
             cpu.write_var(self.a, a);
             cpu.write_var(self.b, b);
-            cpu.write_var(self.out, 0xaaaa_aaaa_u32);
+            cpu.write_trunc(self.out, 0xaaaa_aaaa_u32);
 
             let mut jit_ctx = self.jit_ctx.borrow_mut();
             jit_ctx.tlb_ptr = cpu.mem.tlb.as_mut();
             unsafe {
                 (self.jit_fn)((*cpu).as_mut() as *mut Cpu, &mut jit_ctx, 0x0);
             }
-            let jit_out = cpu.read_var::<u32>(self.out);
+            let jit_out = cpu.read_dynamic(self.out.into()).zxt();
             (interpreter_out, jit_out)
         }
     }
@@ -732,7 +715,7 @@ mod test {
             let a: u32 = quickcheck::Arbitrary::arbitrary(gen);
             let b: u32 = quickcheck::Arbitrary::arbitrary(gen);
 
-            let (interpreter_out, jit_out) = self.eval(a, b);
+            let (interpreter_out, jit_out) = self.eval_binop(a, b);
 
             if interpreter_out != jit_out {
                 quickcheck::TestResult::error(format!(
@@ -747,37 +730,58 @@ mod test {
         }
     }
 
+    fn test_binop(op: pcode::Op) {
+        quickcheck::QuickCheck::new().quickcheck(Checker::new(op, 4));
+    }
+
+    fn test_cmp_op(op: pcode::Op) {
+        quickcheck::QuickCheck::new().quickcheck(Checker::new(op, 1));
+    }
+
+    #[test]
+    fn test_simple_int_binop() {
+        test_binop(pcode::Op::IntAdd);
+        test_binop(pcode::Op::IntSub);
+        test_binop(pcode::Op::IntXor);
+        test_binop(pcode::Op::IntOr);
+        test_binop(pcode::Op::IntAnd);
+        test_binop(pcode::Op::IntMul);
+        test_binop(pcode::Op::IntDiv);
+        test_binop(pcode::Op::IntSignedDiv);
+    }
+
     #[test]
     fn carry() {
-        quickcheck::QuickCheck::new().quickcheck(Checker::new(pcode::Op::IntCarry));
+        test_cmp_op(pcode::Op::IntCarry);
     }
 
     #[test]
     fn signed_carry() {
-        quickcheck::QuickCheck::new().quickcheck(Checker::new(pcode::Op::IntSignedCarry));
+        test_cmp_op(pcode::Op::IntSignedCarry);
     }
 
     #[test]
     fn signed_borrow() {
-        quickcheck::QuickCheck::new().quickcheck(Checker::new(pcode::Op::IntSignedBorrow));
+        test_cmp_op(pcode::Op::IntSignedBorrow);
     }
 
     #[test]
     fn sshr() {
-        quickcheck::QuickCheck::new().quickcheck(Checker::new(pcode::Op::IntSignedRight));
+        test_binop(pcode::Op::IntSignedRight);
     }
 
     #[test]
     fn ushr() {
-        let checker = Checker::new(pcode::Op::IntRight);
-        let (int, jit) = checker.eval(0x67879a2f, 0xe29e001b);
+        // Regression test
+        let checker = Checker::new(pcode::Op::IntRight, 4);
+        let (int, jit) = checker.eval_binop(0x67879a2f, 0xe29e001b);
         assert_eq!(int, jit);
 
-        quickcheck::QuickCheck::new().quickcheck(Checker::new(pcode::Op::IntRight));
+        test_binop(pcode::Op::IntRight);
     }
 
     #[test]
     fn shl() {
-        quickcheck::QuickCheck::new().quickcheck(Checker::new(pcode::Op::IntLeft));
+        test_binop(pcode::Op::IntLeft);
     }
 }

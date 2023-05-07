@@ -81,15 +81,9 @@ impl<W: std::io::Write + 'static> IoMemory for AsciiLogger<W> {
 }
 
 // @fixme: better tracing support for peripheral outputs.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct DebugOutput {
     data: Vec<u8>,
-}
-
-impl Default for DebugOutput {
-    fn default() -> Self {
-        Self { data: Default::default() }
-    }
 }
 
 impl DebugOutput {

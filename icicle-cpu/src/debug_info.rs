@@ -122,14 +122,28 @@ impl DebugInfo {
         let ctx = self.ctx.get(&library_base)?;
 
         // @todo: revisit the way inline frames are displayed
-        let mut frame_iter = trace_err(ctx.find_frames(local_addr))?;
+        // @todo: add support for split DWARF.
+        let mut frame_iter = trace_err(ctx.find_frames(local_addr).skip_all_loads())?;
         let last_frame = (trace_err(frame_iter.next())?)?;
 
         let mut output = SourceLocation::default();
-
         output.function = Some(match get_function_name(&last_frame) {
-            Some(inner) => inner.to_string(),
-            None => self.get_symbol(addr).unwrap_or_default().to_string(),
+            Some(inner) => {
+                // Attempt to resolve the starting address of the function containing the current
+                // address, by inspecting additional debug info depending on whether we are in a
+                // regular function frame or an inlined function.
+                let function_start = (|| {
+                    let (_dwarf, unit) = ctx.find_dwarf_and_unit(local_addr).skip_all_loads()?;
+                    let entry = unit.entry(last_frame.dw_die_offset?).ok()?;
+                    resolve_start_address(&entry)
+                })()
+                .unwrap_or(local_addr);
+                (inner.to_string(), function_start)
+            }
+            None => {
+                let (name, base) = self.symbols.resolve_addr(addr).unwrap_or(("<unknown>", 0));
+                (name.to_string(), base)
+            }
         });
 
         let location = trace_err(ctx.find_location(local_addr))?;
@@ -173,6 +187,33 @@ impl DebugInfo {
             None => path.to_string(),
         }
     }
+}
+
+fn resolve_start_address<R, Offset>(
+    entry: &addr2line::gimli::DebuggingInformationEntry<R, Offset>,
+) -> Option<u64>
+where
+    R: addr2line::gimli::Reader<Offset = Offset>,
+    Offset: addr2line::gimli::ReaderOffset,
+{
+    match entry.tag() {
+        addr2line::gimli::constants::DW_TAG_subprogram => {
+            if let Some(addr2line::gimli::AttributeValue::Addr(addr)) =
+                entry.attr_value(addr2line::gimli::constants::DW_AT_low_pc).ok().flatten()
+            {
+                return Some(addr);
+            }
+        }
+        addr2line::gimli::constants::DW_TAG_inlined_subroutine => {
+            if let Some(addr2line::gimli::AttributeValue::Addr(addr)) =
+                entry.attr_value(addr2line::gimli::constants::DW_AT_entry_pc).ok().flatten()
+            {
+                return Some(addr);
+            }
+        }
+        _ => {}
+    }
+    None
 }
 
 fn get_function_name<'a, T: 'a>(
@@ -242,7 +283,7 @@ impl SymbolTable {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SourceLocation {
     pub symbol_with_offset: Option<(String, u64)>,
-    pub function: Option<String>,
+    pub function: Option<(String, u64)>,
     pub file: Option<String>,
     pub line: Option<u32>,
     pub column: Option<u32>,
@@ -258,7 +299,7 @@ impl SourceLocation {
 impl std::fmt::Display for SourceLocation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match (self.function.as_ref(), self.symbol_with_offset.as_ref()) {
-            (Some(function), _) => write!(f, "{}", function)?,
+            (Some((function, _)), _) => write!(f, "{}", function)?,
             (_, Some((symbol, 0))) => write!(f, "{}", symbol)?,
             (_, Some((symbol, offset))) => write!(f, "{}+{:#0x}", symbol, offset)?,
             _ => {

@@ -116,10 +116,17 @@ pub fn current_disasm(vm: &Vm) -> String {
 }
 
 pub fn backtrace(vm: &mut Vm) -> String {
+    backtrace_with_limit(vm, 64)
+}
+
+pub fn backtrace_with_limit(vm: &mut Vm, max_frames: usize) -> String {
     use std::fmt::Write;
 
     let mut buf = String::new();
-    for (i, addr) in vm.get_callstack().into_iter().rev().enumerate() {
+    let callstack = vm.get_callstack();
+    let is_truncated = max_frames < callstack.len();
+
+    for (i, addr) in callstack.into_iter().rev().enumerate().take(max_frames) {
         // For all return address subtract 1 so we get the address of the call not the return for
         // the symbol.
         let symbol_addr = if i == 0 { addr } else { addr - 1 };
@@ -128,6 +135,9 @@ pub fn backtrace(vm: &mut Vm) -> String {
         writeln!(buf, "{addr:#012x}: {location}").unwrap();
     }
 
+    if is_truncated {
+        writeln!(buf, "<callstack truncated after {max_frames} frames>").unwrap();
+    }
     buf
 }
 

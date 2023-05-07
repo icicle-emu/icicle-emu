@@ -49,8 +49,8 @@ pub trait ElfLoader {
 
     fn read_file(&mut self, path: &[u8]) -> Result<Vec<u8>, String> {
         let path = std::str::from_utf8(path)
-            .map_err(|e| format!("@fixme: only utf-8 paths are supported: {}", e))?;
-        std::fs::read(&path).map_err(|e| format!("Failed to read {}: {}", path, e))
+            .map_err(|e| format!("@fixme: only utf-8 paths are supported: {e}"))?;
+        std::fs::read(path).map_err(|e| format!("Failed to read {path}: {e}"))
     }
 
     fn load_elf(&mut self, cpu: &mut Cpu, path: &[u8]) -> Result<LoadedElf, String> {
@@ -99,7 +99,7 @@ where
         let base_addr = cpu
             .mem
             .alloc_memory(layout, Mapping { perm: perm::MAP, value: 0xaa })
-            .map_err(|e| format!("Failed to allocate memory: {:?}", e))?;
+            .map_err(|e| format!("Failed to allocate memory: {e:?}"))?;
 
         (base_addr, base_addr - requested_base_addr)
     }
@@ -108,8 +108,8 @@ where
     };
 
     info!(
-        "base_addr={:0x}, relocation_offset={:0x}, size={:0x}",
-        base_addr, relocation_offset, layout.size
+        "base_addr={base_addr:0x}, relocation_offset={relocation_offset:0x}, size={:0x}",
+        layout.size
     );
 
     let mut phdr_ptr = None;

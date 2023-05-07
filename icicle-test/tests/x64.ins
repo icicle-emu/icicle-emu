@@ -35,6 +35,7 @@
 0x00001a [48 f7 e3]                         "MUL RBX"
 {
     RAX = 0x4, RBX = 0x10 => RAX = 0x40, RDX = 0;
+    RAX = 0x16aa32c4a0a10755, RBX = 0x2d5e54b248e27455 => RAX = 0xecdc0964add3f339, RDX = 0x40444ead5e305ab;
 }
 
 0x000000 [41 83 f8 fc]                      "CMP R8D,-0x4"
@@ -501,6 +502,9 @@
 }
 0x000000 [66 0f e1 00]                      "PSRAW XMM0,xmmword ptr [RAX]";
 
+@skip
+0x000000 [66 0f 3a 14 00 01]                "PEXTRB byte ptr [RAX], XMM0, 0x1";
+
 ///
 /// Repeat prefixed (REP/REPNZ/REPZ) instructions
 /// (@fixme: tester needs to support executing multiple steps so we can write proper tests here).
@@ -646,7 +650,17 @@
     // -0.5 -> -0.29289321881345254
     ST0 = 0xbfe0000000000000 => ST0 = 0xbfd2bec333018868;
 }
-0x000000 [de c1]                   "FADDP";
+
+0x000000 [de c1]                   "FADDP"
+{
+    // = 1234.0_f64 + 1234.0_f64 = 2468.0_f64
+    ST0 = 0x4093480000000000, ST1 = 0x4093480000000000 => ST0 = 0x40a3480000000000;
+}
+0x000000 [de c2]                   "FADDP ST2,ST0"
+{
+    // = 1234.0_f64 + 1234.0_f64 = 2468.0_f64
+    ST0 = 0x4093480000000000, ST2 = 0x4093480000000000 => ST1 = 0x40a3480000000000;
+}
 0x000000 [d9 fd]                   "FSCALE"
 {
     // 4 * 2^trunc(1) == 8
@@ -712,6 +726,8 @@
 0x000000 [0f c1 0d f9 0f 00 00]              "XADD dword ptr [0x1000],ECX"
 {
     ECX = 2, mem[0x1000]:READ_WRITE = [01 00 00 00] => mem[0x1000] = [03 00 00 00], ECX = 1;
+    // Ensure upper bits are zeroed.
+    RCX = -1, mem[0x1000]:READ_WRITE = [01 00 00 00] => mem[0x1000] = [00 00 00 00], RCX = 1;
 }
 
 

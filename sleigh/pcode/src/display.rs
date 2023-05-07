@@ -56,11 +56,15 @@ where
 
         match self.op {
             Op::Copy => write!(f, "{out} = {a}"),
+            Op::Select(var) => {
+                write!(f, "{out} = select({})({a}, {b})", VarNode::new(var, 1).display(ctx))
+            }
             Op::Subpiece(offset) => write!(f, "{out} = {a}[{offset}]"),
             Op::ZeroExtend => write!(f, "{out} = zext({a})"),
             Op::SignExtend => write!(f, "{out} = sext({a})"),
 
             Op::IntToFloat => write!(f, "{out} = int2float({a})"),
+            Op::UintToFloat => write!(f, "{out} = uint2float({a})"),
             Op::FloatToFloat => write!(f, "{out} = float2float({a})"),
             Op::FloatToInt => write!(f, "{out} = float2int({a})"),
 
@@ -142,6 +146,10 @@ where
                     false => write!(f, "{out} = {}({})", hook.display(&()), inputs.display(ctx)),
                     true => write!(f, "{}({})", hook.display(&()), inputs.display(ctx)),
                 }
+            }
+            Op::HookIf(id) => {
+                let hook = HookIdD(id);
+                write!(f, "if {} {}()", inputs[0].display(ctx), hook.display(&()))
             }
 
             Op::TracerLoad(id) => write!(f, "{out} = {}[{a}]", StoreIdD(id).display(&())),

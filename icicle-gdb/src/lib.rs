@@ -33,8 +33,8 @@ fn listen<T>(addr: &str, mut target: stub::VmState<T>) -> anyhow::Result<()>
 where
     T: stub::DynamicTarget,
 {
-    let server = TcpListener::bind(&addr)
-        .with_context(|| format!("Failed to bind to TCP listener to: {}", addr))?;
+    let server = TcpListener::bind(addr)
+        .with_context(|| format!("Failed to bind to TCP listener to: {addr}"))?;
     for stream in server.incoming() {
         let stream = match stream {
             Ok(stream) => stream,

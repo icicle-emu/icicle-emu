@@ -132,7 +132,9 @@ impl Comms {
     }
 }
 
-/// Safety: `ptr` must reference a region of memory with at least 64-bit alignment and where
+/// # Safety
+///
+/// `ptr` must reference a region of memory with at least 64-bit alignment and where
 /// the first 32-bits correspond to the length of the region, and be valid for a static lifetime
 pub unsafe fn input_from_ptr(ptr: *mut u8) -> &'static [u8] {
     use crate::is_cmplog_server;

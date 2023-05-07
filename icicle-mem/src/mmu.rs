@@ -68,7 +68,7 @@ macro_rules! active_hooks {
                     ($action)(&mut *hook.handler);
                 }
             }
-            assert!($list.is_empty());
+            debug_assert!($list.is_empty());
             $list = hooks;
         }
     }};
@@ -262,7 +262,7 @@ impl Mmu {
 
         for byte in buf {
             *byte = self.read::<1>(addr, perm)?[0];
-            addr += 1;
+            addr = addr.wrapping_add(1);
         }
         Ok(())
     }
@@ -271,24 +271,24 @@ impl Mmu {
     #[cold]
     pub fn read_bytes_large(&mut self, mut addr: u64, buf: &mut [u8], perm: u8) -> MemResult<()> {
         // Read unaligned bytes at the start
-        let aligned_addr = crate::align_up(addr, 16);
+        let aligned_addr = crate::align_up(addr, 16); // @fixme: possible integer overflow
         let (start, buf) = buf.split_at_mut(((aligned_addr - addr) as usize).min(buf.len()));
         for byte in start {
             *byte = self.read::<1>(addr, perm)?[0];
-            addr += 1;
+            addr = addr.wrapping_add(1);
         }
 
         // Read aligned chunks
         let mut chunks = buf.chunks_exact_mut(16);
         for chunk in &mut chunks {
             chunk.copy_from_slice(&self.read::<16>(addr, perm)?);
-            addr += 16;
+            addr = addr.wrapping_add(16);
         }
 
         // Read unaligned bytes at the end
         for byte in chunks.into_remainder() {
             *byte = self.read::<1>(addr, perm)?[0];
-            addr += 1;
+            addr = addr.wrapping_add(1);
         }
 
         Ok(())
@@ -303,7 +303,7 @@ impl Mmu {
 
         for byte in buf {
             self.write(addr, [*byte], perm)?;
-            addr += 1;
+            addr = addr.wrapping_add(1);
         }
         Ok(())
     }
@@ -313,24 +313,24 @@ impl Mmu {
     #[cold]
     pub fn write_bytes_large(&mut self, mut addr: u64, buf: &[u8], perm: u8) -> MemResult<()> {
         // Write unaligned bytes at the start
-        let aligned_addr = crate::align_up(addr, 16);
+        let aligned_addr = crate::align_up(addr, 16); // @fixme: possible integer overflow
         let (start, buf) = buf.split_at(((aligned_addr - addr) as usize).min(buf.len()));
         for byte in start {
             self.write(addr, [*byte], perm)?;
-            addr += 1;
+            addr = addr.wrapping_add(1);
         }
 
         // Write aligned chunks
         let mut chunks = buf.chunks_exact(16);
         for chunk in &mut chunks {
             self.write::<16>(addr, chunk.try_into().unwrap(), perm)?;
-            addr += 16;
+            addr = addr.wrapping_add(16);
         }
 
         // Write unaligned bytes at the end
         for byte in chunks.remainder() {
             self.write(addr, [*byte], perm)?;
-            addr += 1;
+            addr = addr.wrapping_add(1);
         }
 
         Ok(())
@@ -348,47 +348,75 @@ impl Mmu {
         &mut *self.io[handler.0]
     }
 
-    /// Attempts to maps a region of memory starting between `start` and `end` to `mapping`
+    #[deprecated(
+        note = "The behavior of this function may change in the future. Use `map_memory_len"
+    )]
+    pub fn map_memory(&mut self, start: u64, end: u64, mapping: impl Into<MemoryMapping>) -> bool {
+        self.map_memory_len(start, end - start, mapping)
+    }
+
+    /// Attempts to maps a region of memory starting between `start` and `start + len` to `mapping`.
+    /// If `start + len` is greater than u64::MAX, memory will wrap around to zero.
     ///
     /// Returns `true` if the memory was succesfully mapped.
-    pub fn map_memory(&mut self, start: u64, end: u64, mapping: impl Into<MemoryMapping>) -> bool {
-        assert!(start <= end);
+    pub fn map_memory_len(
+        &mut self,
+        start: u64,
+        len: u64,
+        mapping: impl Into<MemoryMapping>,
+    ) -> bool {
+        if len == 0 {
+            return false; // @todo: should mapping nothing count as being valid?
+        }
+        let Some(end) = start.checked_add(len - 1) else { return false };
         let mapping = mapping.into();
         debug!("map_memory: start={:#0x}, end={:#0x}, mapping={:?}", start, end, mapping);
 
-        if let Err(e) = self.mapping.insert((start, end), mapping) {
+        if let Err(e) = self.mapping.insert(start..=end, mapping) {
             debug!("map_memory: failed: {:0x?}", e);
             return false;
         }
         self.mapping_changed = true;
-        self.tlb.remove_range(start, end);
+        self.tlb.remove_range(start, len);
 
         true
     }
 
     pub fn map_physical(&mut self, addr: u64, index: physical::Index) -> bool {
-        self.map_memory(
+        self.map_memory_len(
             addr,
-            addr + self.page_size(),
+            self.page_size(),
             MemoryMapping::Physical(PhysicalMapping { index, addr }),
         )
     }
 
-    /// Unmaps the region of memory between `start` and `end`
+    /// Unmaps the region of memory between `start` and `start+len`
+    #[deprecated(
+        note = "The behavior of this function may change in the future. Use `unmap_memory_len`"
+    )]
     pub fn unmap_memory(&mut self, start: u64, end: u64) -> bool {
-        assert!(start <= end);
+        self.unmap_memory_len(start, start - end)
+    }
+
+    /// Unmaps the region of memory between `start` and `start+len`
+    pub fn unmap_memory_len(&mut self, start: u64, len: u64) -> bool {
+        if len == 0 {
+            return false; // @todo: should unmapping nothing count as being valid?
+        }
+        let Some(end) = start.checked_add(len - 1) else { return false };
+
         debug!("unmap_memory: start={:#0x}, end={:#0x}", start, end);
         self.mapping_changed = true;
 
         let physical = &mut self.physical;
         let tlb = &mut self.tlb;
         let mut partially_unmapped = false;
-        let _ = self.mapping.overlapping_mut::<_, ()>((start, end), |start, end, entry| {
-            tracing::trace!("unmap: ({:#0x}, {:#0x}): {:0x?}", start, end, entry);
+        let _ = self.mapping.overlapping_mut::<_, ()>(start..=end, |start, len, entry| {
+            tracing::trace!("unmap: ({:#0x}, {:#0x}): {:0x?}", start, len, entry);
             match entry.take() {
                 Some(MemoryMapping::Physical(inner)) => {
-                    tlb.remove_range(start, end);
-                    if end - start == physical.page_size() {
+                    tlb.remove_range(start, len);
+                    if len == physical.page_size() {
                         return Ok(());
                     }
 
@@ -399,8 +427,8 @@ impl Mmu {
                     let page = physical.get_mut(inner.index);
                     assert!(!page.executed, "Unmapped cached code page. Currently unsupported");
 
-                    let (offset, len) = PageData::offset_and_len(start, end);
-                    page.data_mut().perm[offset..offset + len].fill(perm::NONE);
+                    let offset = PageData::offset(start);
+                    page.data_mut().perm[offset..offset + len as usize].fill(perm::NONE);
                 }
                 Some(_) => {}
 
@@ -416,7 +444,7 @@ impl Mmu {
 
     /// Allocates `count` physical pages, returning an error if we are out of memory.
     pub fn alloc_physical(&mut self, count: usize) -> MemResult<Vec<physical::Index>> {
-        debug!("alloc_physical: count={}", count);
+        debug!("alloc_physical: count={count}");
         (0..count).map(|_| self.physical.alloc().ok_or(MemError::OutOfMemory)).collect()
     }
 
@@ -427,11 +455,10 @@ impl Mmu {
         mapping: impl Into<MemoryMapping>,
     ) -> MemResult<u64> {
         let mapping = mapping.into();
-        debug!("alloc_memory: layout={:0x?}, mapping={:?}", layout, mapping);
+        debug!("alloc_memory: layout={layout:0x?}, mapping={mapping:?}");
 
         let start = self.find_free_memory(layout)?;
-        let end = start.checked_add(layout.size).ok_or(MemError::OutOfMemory)?;
-        self.map_memory(start, end, mapping);
+        self.map_memory_len(start, layout.size, mapping);
         Ok(start)
     }
 
@@ -446,11 +473,10 @@ impl Mmu {
         // available.
         let mut start_addr = crate::align_up(layout.addr.unwrap_or(0), align);
 
-        while let Some((_, end)) = self.mapping.get_range((
-            start_addr,
-            start_addr.checked_add(aligned_length).ok_or(MemError::OutOfMemory)?,
-        )) {
-            start_addr = crate::align_up(end, align);
+        while let Some((_, end)) = self.mapping.get_range(
+            start_addr..=start_addr.checked_add(aligned_length - 1).ok_or(MemError::OutOfMemory)?,
+        ) {
+            start_addr = crate::align_up(end + 1, align);
         }
 
         Ok(start_addr)
@@ -458,25 +484,26 @@ impl Mmu {
 
     /// Updates the mapping value associated with a region of memory
     pub fn update_perm(&mut self, addr: u64, count: u64, perm: u8) -> MemResult<()> {
-        let end = addr.checked_add(count).ok_or(MemError::OutOfMemory)?;
-
-        debug!("update_perm: addr={:#0x}, count={:#0x}, perm={}", addr, count, perm::display(perm));
+        let end = addr.checked_add(count - 1).ok_or(MemError::AddressOverflow)?;
         let perm =
             perm | perm::MAP | if self.track_uninitialized { perm::NONE } else { perm::INIT };
+        debug!("update_perm: addr={addr:#0x}, count={count:#0x}, perm={}", perm::display(perm));
 
         self.mapping_changed = true;
 
         let physical = &mut self.physical;
         let tlb = &mut self.tlb;
-        self.mapping.overlapping_mut((addr, end), |start, end, entry| {
+        self.mapping.overlapping_mut(addr..=end, |start, len, entry| {
             match entry.as_mut().ok_or(MemError::Unmapped)? {
                 MemoryMapping::Physical(entry) => {
-                    tlb.remove_range(start, end);
+                    tlb.remove_range(start, len);
                     let page = physical.get_mut(entry.index);
                     if page.executed {
                         tracing::error!("Changed perms of code page. JIT cache may now be invalid");
                     }
-                    let (offset, len) = PageData::offset_and_len(start, end);
+
+                    let offset = PageData::offset(start);
+                    let len = len as usize;
 
                     if offset == 0
                         && len == physical::PAGE_SIZE
@@ -507,32 +534,35 @@ impl Mmu {
 
     /// Fill a region of memory with `value`
     pub fn fill_mem(&mut self, addr: u64, count: u64, value: u8) -> MemResult<()> {
-        let end = addr.checked_add(count).ok_or(MemError::OutOfMemory)?;
+        if count == 0 {
+            return Ok(());
+        }
+        let end = addr.checked_add(count - 1).ok_or(MemError::AddressOverflow)?;
         debug!("fill_mem: addr={:#0x}, count={:#0x}, value={:#0x}", addr, count, value);
 
         let physical = &mut self.physical;
         let tlb = &mut self.tlb;
-        self.mapping.overlapping_mut((addr, end), |start, end, entry| {
+        self.mapping.overlapping_mut(addr..=end, |start, len, entry| {
             match entry.as_mut().ok_or(MemError::Unmapped)? {
                 MemoryMapping::Physical(entry) => {
-                    tlb.remove_range(start, end);
+                    tlb.remove_range(start, len);
                     let page = physical.get_mut(entry.index);
                     if page.executed {
-                        check_self_modifying_memset(page.data(), start, end, value)?;
+                        check_self_modifying_memset(page.data(), start, len, value)?;
                     }
 
-                    let (offset, len) = PageData::offset_and_len(start, end);
+                    let offset = PageData::offset(start);
 
                     // Check whether we a simply overwritting a zero page with zeros.
                     let write_zero_to_zero_page = value == 0
                         && offset == 0
-                        && len == physical::PAGE_SIZE
+                        && len as usize == physical::PAGE_SIZE
                         && entry.index.is_zero_page();
 
                     if !write_zero_to_zero_page {
                         let page = page.data_mut();
-                        page.data[offset..offset + len].fill(value);
-                        page.add_perm(offset, len, perm::INIT);
+                        page.data[offset..offset + len as usize].fill(value);
+                        page.add_perm(offset, len as usize, perm::INIT);
                     }
                 }
                 MemoryMapping::Unallocated(entry) => {
@@ -547,18 +577,26 @@ impl Mmu {
         })
     }
 
-    pub fn move_region(&mut self, start: u64, mut end: u64, dst: u64) -> MemResult<()> {
+    #[deprecated(
+        note = "The behavior of this function may change in the future. Use `move_region_len`"
+    )]
+    pub fn move_region(&mut self, start: u64, end: u64, dst: u64) -> MemResult<()> {
+        self.move_region_len(start, end - start, dst)
+    }
+
+    pub fn move_region_len(&mut self, start: u64, len: u64, dst: u64) -> MemResult<()> {
         let offset = dst as i64 - start as i64;
+        let mut end = start.checked_add(len - 1).ok_or(MemError::AddressOverflow)?;
 
         while start < end {
             let (prev, (overlap_start, overlap_end)) =
-                self.mapping.remove_last((start, end)).ok_or(MemError::Unmapped)?;
+                self.mapping.remove_last(start..=end).ok_or(MemError::Unmapped)?;
 
             if overlap_end < end {
                 return Err(MemError::Unmapped);
             }
 
-            self.tlb.remove_range(overlap_start, overlap_end);
+            self.tlb.remove_range(overlap_start, (overlap_end - overlap_start) + 1);
 
             let shifted_start = (overlap_start as i64 + offset) as u64;
             let shifted_end = (overlap_end as i64 + offset) as u64;
@@ -688,18 +726,19 @@ impl Mmu {
     /// Check that the region of memory between addr..addr+len is initialized and executable, and
     /// ensure that if it is ever written to in the future it will be detected.
     pub fn ensure_executable(&mut self, start: u64, len: u64) -> bool {
-        let range = (start, start.checked_add(len).unwrap());
+        let Some(end) = start.checked_add(len - 1) else { return false };
 
         let tlb = &mut self.tlb;
         let physical = &mut self.physical;
         self.mapping
-            .overlapping_mut::<_, MemError>(range, |start, end, entry| match entry {
+            .overlapping_mut::<_, MemError>(start..=end, |start, len, entry| match entry {
                 Some(MemoryMapping::Physical(mapping)) => {
                     let page = physical.get_mut(mapping.index);
                     page.executed = true;
 
                     // Check whether the code is actually executable.
-                    let (offset, len) = PageData::offset_and_len(start, end);
+                    let offset = PageData::offset(start);
+                    let len = len as usize;
                     let perm =
                         unsafe { page.write_ptr().ptr.as_mut().get_perm_unchecked(offset, len) };
                     perm::check(perm, perm::READ | perm::INIT | perm::EXEC)?;
@@ -729,7 +768,7 @@ impl Mmu {
         for (start, end, entry) in self.mapping.iter_mut() {
             match entry {
                 MemoryMapping::Physical(entry) => {
-                    let (offset, len) = PageData::offset_and_len(start, end);
+                    let (offset, len) = PageData::offset_and_len(start, end + 1);
                     let page = physical.get_mut(entry.index);
                     page.data_mut().perm[offset..offset + len].iter_mut().for_each(|p| {
                         if *p & perm::INIT == 0 {
@@ -749,13 +788,13 @@ impl Mmu {
     fn init_physical(&mut self, addr: u64, is_write: bool) -> Option<physical::Index> {
         let page_start = self.page_aligned(addr);
         let page_size = self.page_size();
+        let page_end = page_start + (page_size - 1);
 
-        let range = (page_start, page_start.checked_add(page_size)?);
-
+        let range = page_start..=page_end;
         // If we are only reading from this page and the entire region is entirely zero, then map it
         // to a zero page.
         if ENABLE_ZERO_PAGE_OPTIMIZATION && !is_write {
-            if let Some(perm) = self.is_zero_region(range) {
+            if let Some(perm) = self.is_zero_region(page_start, page_size) {
                 let zero_page = match perm & perm::WRITE != 0 {
                     true => self.physical.zero_page(),
                     false => self.physical.read_only_zero_page(),
@@ -782,10 +821,13 @@ impl Mmu {
         let init_perm = if self.track_uninitialized { perm::NONE } else { perm::INIT };
 
         let physical = &mut self.physical;
-        let _ = self.mapping.overlapping_mut::<_, ()>(range, |start, end, entry| {
+        let _ = self.mapping.overlapping_mut::<_, ()>(range, |start, len, entry| {
+            let len = len as usize;
+
             // Determine how this region of the page should be initalized.
             let (value, perm) = match entry {
                 Some(MemoryMapping::Unallocated(x)) => {
+                    tracing::trace!("Replacing unallocated region (start={start:#x}, len={len:#x}) with physical mapping.");
                     let init = (x.value, x.perm | perm::MAP | init_perm);
                     *entry = Some(MemoryMapping::Physical(new_mapping));
                     init
@@ -797,10 +839,12 @@ impl Mmu {
                     //
                     // @fixme: handle this better.
 
-                    tracing::trace!("copy {:#0x} to {:#0x} from: {:?}", start, end, existing.index);
+                    tracing::trace!(
+                        "copy {len:#0x} bytes at {start:#0x} from: {:?}",
+                        existing.index
+                    );
 
                     let offset = (start - page_start) as usize;
-                    let len = (end - start) as usize;
 
                     let (old_page, new_page) = physical.get_pair_mut(existing.index, index);
                     let (old, new) = (old_page.data(), new_page.data_mut());
@@ -815,7 +859,7 @@ impl Mmu {
             };
 
             let page = physical.get_mut(index).data_mut();
-            let (offset, len) = PageData::offset_and_len(start, end);
+            let offset = PageData::offset(start);
             page.data[offset..offset + len].fill(value);
             page.perm[offset..offset + len].fill(perm);
 
@@ -825,11 +869,11 @@ impl Mmu {
         Some(index)
     }
 
-    /// Checks whether the memory between `range` is zero page compatible, returning the permissions
-    /// of the region.
-    fn is_zero_region(&mut self, range: (u64, u64)) -> Option<u8> {
+    /// Checks whether the memory is zero page compatible, returning the permissions of the region.
+    fn is_zero_region(&mut self, start: u64, len: u64) -> Option<u8> {
+        let end = start.checked_add(len - 1)?;
         let mut perm = None;
-        for (_, _, entry) in self.mapping.overlapping_iter(range) {
+        for (_, _, entry) in self.mapping.overlapping_iter(start..=end) {
             match entry {
                 Some(MemoryMapping::Unallocated(x)) if x.is_zero() => {
                     if perm.map_or(false, |perm| x.perm != perm) {
@@ -843,9 +887,10 @@ impl Mmu {
         perm
     }
 
-    /// Checks whether the region `range` entirely consists of mapped regular memory.
-    pub fn is_regular_region(&self, range: (u64, u64)) -> bool {
-        for (_, _, entry) in self.mapping.overlapping_iter(range) {
+    /// Checks whether the memory range entirely consists of mapped regular memory.
+    pub fn is_regular_region(&self, start: u64, len: u64) -> bool {
+        let Some(end) = start.checked_add(len - 1) else { return false };
+        for (_, _, entry) in self.mapping.overlapping_iter((start, end)) {
             match entry {
                 Some(MemoryMapping::Physical(_) | MemoryMapping::Unallocated(_)) => {}
                 _ => return false,
@@ -926,9 +971,8 @@ impl Mmu {
             let copy_mapping = PhysicalMapping { index: copy_index, addr: page_start };
             tracing::trace!("{:?} ({:#0x}) copy-on-write -> {copy_index:?}", index, page_start);
 
-            let page_end = page_start.checked_add(page_size).ok_or(MemError::OutOfMemory)?;
-            let range = (page_start, page_end);
-            self.mapping.overlapping_mut(range, |_start, _end, entry| {
+            let page_end = page_start + (page_size - 1);
+            self.mapping.overlapping_mut(page_start..=page_end, |_start, _end, entry| {
                 if let Some(mapping @ MemoryMapping::Physical(_)) = entry {
                     *mapping = MemoryMapping::Physical(copy_mapping);
                 }
@@ -1102,13 +1146,13 @@ impl Mmu {
 }
 
 #[cold]
-fn check_self_modifying_memset(page: &PageData, start: u64, end: u64, value: u8) -> MemResult<()> {
+fn check_self_modifying_memset(page: &PageData, start: u64, len: u64, value: u8) -> MemResult<()> {
     if !DETECT_SELF_MODIFYING_CODE {
         return Ok(());
     }
 
-    let (offset, len) = PageData::offset_and_len(start, end);
-    for i in offset..offset + len {
+    let offset = PageData::offset(start);
+    for i in offset..offset + len as usize {
         if page.perm[i] & perm::IN_CODE_CACHE != 0 && page.data[i] != value {
             let addr = start + (i - offset) as u64;
             tracing::error!("Self modifying code detected at {addr:#x}. Currently unsupported.");

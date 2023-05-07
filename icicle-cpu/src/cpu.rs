@@ -19,17 +19,23 @@ pub const SHADOW_STACK_SIZE: usize = 0x1000;
 #[repr(C, align(16))]
 pub struct ShadowStack {
     pub stack: [ShadowStackEntry; SHADOW_STACK_SIZE],
-    pub offset: usize,
+    offset: usize,
 }
 
 impl Clone for ShadowStack {
     fn clone(&self) -> Self {
-        Self { stack: self.stack.clone(), offset: self.offset }
+        Self { stack: self.stack, offset: self.offset }
     }
 
     fn clone_from(&mut self, source: &Self) {
         self.stack[..source.offset].clone_from_slice(&source.stack[..source.offset]);
         self.offset = source.offset;
+    }
+}
+
+impl Default for ShadowStack {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -40,7 +46,13 @@ impl ShadowStack {
 
     #[inline(always)]
     pub fn as_slice(&self) -> &[ShadowStackEntry] {
-        &self.stack[..self.offset]
+        // Safety: we always ensure that `self.offset` is in bounds
+        unsafe { self.stack.get_unchecked(..self.offset) }
+    }
+
+    #[inline(always)]
+    pub fn depth(&self) -> usize {
+        self.offset
     }
 }
 
@@ -195,25 +207,6 @@ pub struct Fuel {
     pub start: u64,
 }
 
-enum MemSize {
-    U8,
-    U16,
-    U32,
-    U64,
-}
-
-impl MemSize {
-    fn bytes(bytes: u8) -> Self {
-        match bytes {
-            1 => Self::U8,
-            2 => Self::U16,
-            4 => Self::U32,
-            8 => Self::U64,
-            _ => panic!("invalid mem size"),
-        }
-    }
-}
-
 pub trait RegHandler {
     fn read(&mut self, cpu: &mut Cpu);
     fn write(&mut self, cpu: &mut Cpu);
@@ -240,11 +233,16 @@ pub struct Cpu {
 
     pub trace: Trace,
 
-    /// Handlers perform special operations when reading / writing to registers.
-    reg_handlers: UnsafeCell<hashbrown::HashMap<i16, Box<dyn RegHandler>>>,
+    /// Handlers perform special operations when reading / writing to registers. Currently we
+    /// simply check each handler sequentially, since we expect very few handlers and this allows
+    /// us to avoid code bloat.
+    ///
+    /// Optimization note: In the future we could reassign register IDs such that those with
+    /// handlers associated are contiguous allowing for an easy lookup.
+    reg_handlers: UnsafeCell<Vec<(i16, Box<dyn RegHandler>)>>,
 
     pc_offset: isize,
-    pc_size: MemSize,
+    pc_mask: u64,
 }
 
 impl Cpu {
@@ -257,7 +255,7 @@ impl Cpu {
         }
 
         let pc_offset = Regs::var_offset(arch.reg_pc);
-        let pc_size = MemSize::bytes(arch.reg_pc.size);
+        let pc_mask = pcode::mask(arch.reg_pc.size as u64 * 8);
 
         Box::new(Cpu {
             regs: Regs::new(),
@@ -279,10 +277,10 @@ impl Cpu {
             arch,
 
             trace: Trace::default(),
-            reg_handlers: UnsafeCell::new(hashbrown::HashMap::new()),
+            reg_handlers: UnsafeCell::new(vec![]),
 
             pc_offset,
-            pc_size,
+            pc_mask,
         })
     }
 
@@ -315,7 +313,7 @@ impl Cpu {
     }
 
     pub fn add_reg_handler(&mut self, id: pcode::VarId, handler: Box<dyn RegHandler>) {
-        self.reg_handlers.get_mut().insert(id, handler);
+        self.reg_handlers.get_mut().push((id, handler));
     }
 
     pub fn set_helper(&mut self, idx: u16, helper: PcodeOpHelper) {
@@ -351,7 +349,9 @@ impl Cpu {
     /// Reads the register represented by `var`. For special registers, this may perform additional
     /// operations.
     pub fn read_reg(&mut self, var: pcode::VarNode) -> u64 {
-        if let Some(handler) = unsafe { (&mut *self.reg_handlers.get()).get_mut(&var.id) } {
+        if let Some((_, handler)) =
+            unsafe { (*self.reg_handlers.get()).iter_mut().find(|x| x.0 == var.id) }
+        {
             handler.read(self);
         }
         self.read_dynamic(var.into()).zxt()
@@ -361,40 +361,25 @@ impl Cpu {
     /// additional operations.
     pub fn write_reg(&mut self, var: pcode::VarNode, val: u64) {
         self.write_trunc(var, val);
-        if let Some(handler) = unsafe { (&mut *self.reg_handlers.get()).get_mut(&var.id) } {
+        if let Some((_, handler)) =
+            unsafe { (*self.reg_handlers.get()).iter_mut().find(|x| x.0 == var.id) }
+        {
             handler.write(self);
         }
     }
 
     #[inline(always)]
     pub fn read_pc(&self) -> u64 {
-        // Safety: We ensure that `pc_offset` and `pc_size` are valid during construction
-        let offset = self.pc_offset;
-        unsafe {
-            match self.pc_size {
-                MemSize::U8 => u8::from_le_bytes(self.regs.read_at(offset)) as u64,
-                MemSize::U16 => u16::from_le_bytes(self.regs.read_at(offset)) as u64,
-                MemSize::U32 => u32::from_le_bytes(self.regs.read_at(offset)) as u64,
-                MemSize::U64 => u64::from_le_bytes(self.regs.read_at(offset)) as u64,
-            }
-        }
+        // Safety: We ensure that `pc_offset` is valid during construction
+        let raw_pc = u64::from_le_bytes(unsafe { self.regs.read_at(self.pc_offset) });
+        raw_pc & self.pc_mask
     }
 
     #[inline(always)]
     pub fn write_pc(&mut self, val: u64) {
-        // Safety: We ensure that `pc_offset` and `pc_size` are valid during construction
-        let offset = self.pc_offset;
-        unsafe {
-            match self.pc_size {
-                MemSize::U8 => self.regs.write_at(offset, (val as u8).to_le_bytes()),
-                MemSize::U16 => self.regs.write_at(offset, (val as u16).to_le_bytes()),
-                MemSize::U32 => self.regs.write_at(offset, (val as u32).to_le_bytes()),
-                MemSize::U64 => self.regs.write_at(offset, (val as u64).to_le_bytes()),
-            }
-        }
-
-        // Ensure that the block id is set to an invalid value to avoid copying context after the PC
-        // is modified.
+        // Safety: We ensure that `pc_offset` is valid during construction
+        unsafe { self.regs.write_at(self.pc_offset, (val & self.pc_mask).to_le_bytes()) }
+        // Ensure that the block id is reset to avoid copying context after the PC is modified.
         self.block_id = u64::MAX;
         self.block_offset = 0;
     }
@@ -434,7 +419,7 @@ impl Cpu {
     /// part of the block, this function returns the offset of the operation that generated the
     /// exception. Otherwise the function returns None.
     ///
-    /// Safety: This function assumes that `stmt` has been validated.
+    /// Safety: This function assumes that every statement in `block` is valid.
     pub unsafe fn interpret_block_unchecked(
         &mut self,
         block: &pcode::Block,
@@ -449,7 +434,7 @@ impl Cpu {
         None
     }
 
-    /// Safety: This function assumes that `stmt` has been validated.
+    /// Safety: This function assumes that `stmt` is valid.
     #[inline]
     pub unsafe fn interpret_unchecked(&mut self, stmt: pcode::Instruction) {
         interpret(&mut UncheckedExecutor { cpu: self }, stmt)
@@ -535,10 +520,8 @@ impl Cpu {
 impl ValueSource for Cpu {
     #[inline(always)]
     fn read_var<R: RegValue>(&self, var: pcode::VarNode) -> R {
-        if cfg!(debug_assertions) {
-            if var.size as usize != std::mem::size_of::<R>() {
-                eprintln!("invalid read to register: {}", var.display(&self.arch.sleigh));
-            }
+        if cfg!(debug_assertions) && var.size as usize != std::mem::size_of::<R>() {
+            eprintln!("invalid read to register: {}", var.display(&self.arch.sleigh));
         }
         R::read(&self.regs, var)
     }
@@ -646,7 +629,7 @@ impl Cpu {
     pub fn snapshot(&self) -> Box<CpuSnapshot> {
         Box::new(CpuSnapshot {
             regs: self.regs.clone(),
-            args: self.args.clone(),
+            args: self.args,
             shadow_stack: self.shadow_stack.clone(),
             exception: self.exception,
             pending_exception: self.pending_exception,
@@ -672,28 +655,6 @@ impl Cpu {
         self.block_id = snapshot.block_id;
         self.block_offset = snapshot.block_offset;
     }
-}
-
-pub mod read_pc {
-    use super::*;
-
-    pub fn uninitialized(_: &Cpu) -> u64 {
-        panic!("architecture not initialized");
-    }
-
-    macro_rules! impl_read_pc {
-        ($ty:ident) => {
-            pub fn $ty(cpu: &Cpu) -> u64 {
-                debug_assert!(cpu.regs.is_valid(cpu.arch.reg_pc, std::mem::size_of::<$ty>()));
-                unsafe { <$ty>::from_le_bytes(cpu.regs.read_var_unchecked(cpu.arch.reg_pc)) as u64 }
-            }
-        };
-    }
-
-    impl_read_pc!(u8);
-    impl_read_pc!(u16);
-    impl_read_pc!(u32);
-    impl_read_pc!(u64);
 }
 
 pub fn generic_on_boot(cpu: &mut Cpu, entry: u64) {

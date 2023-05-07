@@ -54,9 +54,16 @@ smlawteq r0,r1,r1,pc
 	$U8:1 = !ZR
 	if $U8:1 jump 0x80000004:8
 <L1>:
-	$U2:6 = sext(r1)
-	$U3:6 = sext($tmp0:2)
-	$U1:6 = $U2:6 * $U3:6
+	$U9:8 = 0x0:8
+	$U9:4 = r1
+	$U9:8 = $U9:8 << 0x20:1
+	$U9:8 = $U9:8 s>> 0x20:1
+	$U10:8 = 0x0:8
+	$U10:2 = $tmp0:2
+	$U10:8 = $U10:8 << 0x30:1
+	$U10:8 = $U10:8 s>> 0x30:1
+	$U13:8 = $U9:8 * $U10:8
+	$U1:6 = $U13:6
 	$U4:4 = $U1[2]:4
 	$U5:1 = $U4:4 scarry 0x80000000:4
 	Q = $U5:1 || Q
@@ -116,6 +123,26 @@ pop {r4,r5,pc}
 	TB = $U2:1
 	$U3:4 = tmp_pc & 0xfffffffe:4
 	return $U3:4
+
+ldmia r3,{r1,r2,r3}
+<L0> (entry=0x11000):
+	r1 = ram[r3]
+	mult_addr = r3 + 0x4:4
+	r2 = ram[mult_addr]
+	mult_addr = mult_addr + 0x4:4
+	r3 = ram[mult_addr]
+
+ldr.w pc,[sp],#0x8
+<L0> (entry=0x0):
+	$U1:4 = sp
+	sp = sp + 0x8:4
+	tmp_pc = ram[$U1:4]
+	$U2:4 = tmp_pc & 0x1:4
+	$U3:1 = $U2:4 != 0x0:4
+	ISAModeSwitch = $U3:1
+	TB = $U3:1
+	$U4:4 = tmp_pc & 0xfffffffe:4
+	jump $U4:4
 
 mov r5,r0
 <L0> (entry=0x0):
@@ -197,6 +224,11 @@ sel r6,r5,r7
 	$U16:1 = $U15:1 * r7[3]:1
 	r6[3]:1 = $U14:1 + $U16:1
 
+asr.w r10,r3, asr #0x4
+<L0> (entry=0x8000000):
+	$U4:4 = r3 s>> 0x4:4
+	r10 = $U4:4
+
 ittet ge
 strb.ge.w r2,[r0,#0x300]
 <L0> (entry=0x0):
@@ -243,6 +275,37 @@ cpsie i
 mrs r0,msp
 <L0> (entry=0x0):
 	r0 = getMainStackPointer()
+
+mrs r0,control
+<L0> (entry=0x0):
+	$U2:1 = isThreadModePrivileged()
+	$U1:1 = $U2:1 != 0x1:1
+	$U4:1 = isUsingMainStack()
+	$U3:1 = $U4:1 != 0x1:1
+	$U5:1 = $U3:1 << 0x1:4
+	$U6:1 = $U5:1 | $U1:1
+	r0 = zext($U6:1)
+
+msr control,r0
+<L0> (entry=0x0):
+	$U1:1 = isCurrentModePrivileged()
+	$U2:1 = !$U1:1
+	if $U2:1 jump 0x4:8
+<L1>:
+	$U4:4 = r0 & 0x1:4
+	$U3:1 = $U4:4 == 0x0:4
+	setThreadModePrivileged($U3:1)
+	$U1:1 = isThreadMode()
+	$U5:1 = !$U1:1
+	if $U5:1 jump 0x4:8
+<L2>:
+	$U7:4 = r0 & 0x2:4
+	$U6:1 = $U7:4 == 0x0:4
+	setStackMode($U6:1)
+
+ldr.w r1,[0x7fff6dc]
+<L0> (entry=0x8000000):
+	r1 = ram[0x7fff6dc:4]
 
 ittt eq
 ldr.eq.w r2,[r0,#0x104]
@@ -551,4 +614,60 @@ vext.8 d9,d8,d5,#0xb
 	$U1:16 = $U3:16 | $U4:16
 	$U1:16 = $U1:16 >> 0x58:1
 	d9 = $U1:8
+
+ldrex r3,[r3,#0x0]
+<L0> (entry=0x11000):
+	exclusive_addr = r3
+	r3 = ram[r3]
+
+strex r3,r3,[r6,#0x0]
+<L0> (entry=0x11000):
+	$tmp0:4 = r3
+	$U3:1 = exclusive_addr == r6
+	r3 = 0x1:4
+	$U4:1 = !$U3:1
+	if $U4:1 jump 0x11004:8
+<L1>:
+	r3 = 0x0:4
+	ram[r6] = $tmp0:4
+
+clrex
+<L0> (entry=0x11000):
+	exclusive_addr = 0xffffffff:4
+
+wfi
+<L0> (entry=0x11000):
+	exception(0x3:4, 0x0:8)
+
+wfe
+<L0> (entry=0x11000):
+	exception(0x3:4, 0x0:8)
+
+ldrh r0,[r3,#0x28]
+uxtb r0, r0
+<L0> (entry=0x11000):
+	instruction(0x11000)
+	$U2:4 = r3 + 0x28:4
+	$U1:2 = ram[$U2:4]
+	r0 = zext($U1:2)
+	instruction(0x11002)
+	$U1:4 = r0
+	r0 = zext($U1:1)
+
+lsls r2,r2,#0x18
+<L0> (entry=0x11000):
+	$U3:4 = r2 << 0x17:4
+	$U1:4 = $U3:4 & 0x80000000:4
+	$U7:1 = $U1:4 != 0x0:4
+	r2 = r2 << 0x18:4
+	tmpNG = r2 s< 0x0:4
+	tmpZR = r2 == 0x0:4
+	CY = $U7:1
+	ZR = tmpZR
+	NG = tmpNG
+
+vcvt.f32.u32 s0,s0
+<L0> (entry=0x11000):
+	$U1:8 = zext(s0)
+	s0 = int2float($U1:8)
 

@@ -131,7 +131,7 @@ impl Value {
         match self {
             Self::Var(v) => Value::Var(v.slice(offset, size)),
             Self::Const(x, _) => {
-                Value::Const((x >> offset * 8) & crate::mask(size as u64 * 8), size)
+                Value::Const((x >> (offset * 8)) & crate::mask(size as u64 * 8), size)
             }
         }
     }
@@ -205,14 +205,6 @@ impl Block {
     }
 
     /// Store `a` in `dst` if `cond` is non-zero, otherwise store `b` in `dst`
-    ///
-    /// Currently implemented as follows:
-    ///
-    /// ```pcode
-    /// is_non_zero = cond != 0
-    /// mask = zxt(is_non_zero) * 0xffff_ffff;
-    /// dst = (mask & a) | ((!mask) & b)
-    /// ```
     pub fn select(
         &mut self,
         dst: VarNode,
@@ -220,9 +212,17 @@ impl Block {
         a: impl Into<Value>,
         b: impl Into<Value>,
     ) {
-        self.gen_select(dst, cond.into(), a.into(), b.into());
+        self.gen_select_v2(dst, cond.into(), a.into(), b.into());
     }
 
+    /// Implements a select-like operation using bit operations.
+    ///
+    /// ```pcode
+    /// is_non_zero = cond != 0
+    /// mask = zxt(is_non_zero) * 0xffff_ffff;
+    /// dst = (mask & a) | ((!mask) & b)
+    /// ```
+    #[allow(unused)]
     fn gen_select(&mut self, dst: VarNode, cond: Value, a: Value, b: Value) {
         assert!(a.size() == dst.size && b.size() == dst.size);
 
@@ -242,6 +242,21 @@ impl Block {
         self.push((dst, Op::IntOr, (dst, tmp)));
     }
 
+    #[allow(unused)]
+    fn gen_select_v2(&mut self, dst: VarNode, cond: Value, a: Value, b: Value) {
+        assert!(a.size() == dst.size && b.size() == dst.size);
+
+        let cond_var = match cond {
+            Value::Var(var) if var.offset == 0 && var.size == 1 => var,
+            _ => {
+                let cond_var = self.alloc_tmp(1);
+                self.push((cond_var, Op::IntNotEqual, (cond, Value::Const(0, cond.size()))));
+                cond_var
+            }
+        };
+        self.push((dst, Op::Select(cond_var.id), (a, b)));
+    }
+
     pub fn invalid(&mut self, msg: &'static str) {
         self.instructions.push(Instruction {
             op: Op::Invalid,
@@ -258,7 +273,11 @@ impl Block {
     }
 
     pub fn recompute_next_tmp(&mut self) {
-        self.next_tmp = self.instructions.iter().map(|x| x.output.id).min().map_or(-1, |x| x - 1)
+        self.next_tmp = self.next_tmp();
+    }
+
+    pub fn next_tmp(&self) -> i16 {
+        self.instructions.iter().map(|x| x.output.id).min().map_or(-1, |x| x - 1)
     }
 
     /// Returns the address of the first instruction marker in the block (or None if there is no
@@ -457,11 +476,13 @@ impl From<Op> for Instruction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Op {
     Copy,
+    Select(VarId),
     Subpiece(VarOffset),
     ZeroExtend,
     SignExtend,
 
     IntToFloat,
+    UintToFloat,
     FloatToFloat,
     FloatToInt,
 
@@ -530,6 +551,7 @@ pub enum Op {
     Arg(u16),
     PcodeOp(PcodeOpId),
     Hook(HookId),
+    HookIf(HookId),
     TracerLoad(StoreId),
     TracerStore(StoreId),
     Exception,
@@ -547,6 +569,7 @@ impl Op {
             | Op::Store(_)
             | Op::PcodeOp(_)
             | Op::Hook(_)
+            | Op::HookIf(_)
             | Op::Arg(_)
             | Op::Branch(_)
             | Op::PcodeBranch(_)
@@ -555,6 +578,113 @@ impl Op {
             | Op::InstructionMarker
             | Op::Invalid => true,
             _ => false,
+        }
+    }
+
+    pub fn is_float(&self) -> bool {
+        match self {
+            Op::IntToFloat
+            | Op::UintToFloat
+            | Op::FloatToFloat
+            | Op::FloatToInt
+            | Op::FloatAdd
+            | Op::FloatSub
+            | Op::FloatMul
+            | Op::FloatDiv
+            | Op::FloatNegate
+            | Op::FloatAbs
+            | Op::FloatSqrt
+            | Op::FloatCeil
+            | Op::FloatFloor
+            | Op::FloatRound
+            | Op::FloatIsNan
+            | Op::FloatEqual
+            | Op::FloatNotEqual
+            | Op::FloatLess
+            | Op::FloatLessEqual => true,
+            _ => false,
+        }
+    }
+
+    pub fn native_var_sizes(&self) -> (&'static [u8], (&'static [u8], &'static [u8])) {
+        static ALL_SIZES: &[u8] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        static NONE_SIZE: &[u8] = &[0];
+        static BOOL_SIZE: &[u8] = &[1];
+        static INT_SIZES: &[u8] = &[1, 2, 4, 8, 16];
+        static FLOAT_SIZES: &[u8] = &[4, 8];
+
+        match self {
+            Op::Copy | Op::Subpiece(_) => (ALL_SIZES, (ALL_SIZES, NONE_SIZE)),
+            Op::Select(_) => (INT_SIZES, (INT_SIZES, INT_SIZES)),
+
+            Op::ZeroExtend | Op::SignExtend => (INT_SIZES, (INT_SIZES, NONE_SIZE)),
+
+            Op::IntToFloat | Op::UintToFloat => (FLOAT_SIZES, (INT_SIZES, NONE_SIZE)),
+            Op::FloatToFloat => (FLOAT_SIZES, (FLOAT_SIZES, NONE_SIZE)),
+            Op::FloatToInt => (INT_SIZES, (FLOAT_SIZES, NONE_SIZE)),
+
+            Op::IntAdd
+            | Op::IntSub
+            | Op::IntXor
+            | Op::IntOr
+            | Op::IntAnd
+            | Op::IntMul
+            | Op::IntDiv
+            | Op::IntSignedDiv
+            | Op::IntRem
+            | Op::IntSignedRem
+            | Op::IntLeft
+            | Op::IntRotateLeft
+            | Op::IntRight
+            | Op::IntSignedRight
+            | Op::IntRotateRight => (INT_SIZES, (INT_SIZES, INT_SIZES)),
+            Op::IntEqual
+            | Op::IntNotEqual
+            | Op::IntLess
+            | Op::IntSignedLess
+            | Op::IntLessEqual
+            | Op::IntSignedLessEqual
+            | Op::IntCarry
+            | Op::IntSignedCarry
+            | Op::IntSignedBorrow => (BOOL_SIZE, (INT_SIZES, INT_SIZES)),
+            Op::IntNot | Op::IntNegate | Op::IntCountOnes | Op::IntCountLeadingZeroes => {
+                (INT_SIZES, (INT_SIZES, NONE_SIZE))
+            }
+
+            Op::BoolAnd | Op::BoolOr | Op::BoolXor => (BOOL_SIZE, (BOOL_SIZE, BOOL_SIZE)),
+            Op::BoolNot => (BOOL_SIZE, (BOOL_SIZE, NONE_SIZE)),
+
+            Op::FloatAdd | Op::FloatSub | Op::FloatMul | Op::FloatDiv => {
+                (FLOAT_SIZES, (FLOAT_SIZES, FLOAT_SIZES))
+            }
+            Op::FloatNegate
+            | Op::FloatAbs
+            | Op::FloatSqrt
+            | Op::FloatCeil
+            | Op::FloatFloor
+            | Op::FloatRound => (FLOAT_SIZES, (FLOAT_SIZES, NONE_SIZE)),
+            Op::FloatIsNan => (BOOL_SIZE, (FLOAT_SIZES, NONE_SIZE)),
+            Op::FloatEqual | Op::FloatNotEqual | Op::FloatLess | Op::FloatLessEqual => {
+                (BOOL_SIZE, (FLOAT_SIZES, FLOAT_SIZES))
+            }
+
+            Op::Load(_) => (ALL_SIZES, (INT_SIZES, NONE_SIZE)),
+            Op::Store(_) => (NONE_SIZE, (INT_SIZES, ALL_SIZES)),
+
+            Op::Branch(_) | Op::PcodeBranch(_) => (NONE_SIZE, (BOOL_SIZE, INT_SIZES)),
+            Op::PcodeLabel(_) => (NONE_SIZE, (NONE_SIZE, NONE_SIZE)),
+
+            Op::Arg(_) => (NONE_SIZE, (INT_SIZES, NONE_SIZE)),
+            Op::PcodeOp(_) => (ALL_SIZES, (ALL_SIZES, ALL_SIZES)),
+            Op::Hook(_) => (NONE_SIZE, (NONE_SIZE, NONE_SIZE)),
+            Op::HookIf(_) => (NONE_SIZE, (BOOL_SIZE, NONE_SIZE)),
+
+            Op::Exception => (NONE_SIZE, (&[8], &[8])),
+
+            Op::InstructionMarker => (NONE_SIZE, (&[8], &[8])),
+            Op::Invalid => (NONE_SIZE, (NONE_SIZE, NONE_SIZE)),
+
+            Op::TracerLoad(_) | Op::TracerStore(_) => unreachable!("deprecated"),
         }
     }
 }

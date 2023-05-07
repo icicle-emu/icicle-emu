@@ -78,7 +78,7 @@ pub struct BlockInfoRef<'a> {
 impl<'a> BlockInfoRef<'a> {
     /// Return an iterator over all (instruction start, instruction len) pairs in the group.
     pub fn instructions(&self) -> impl Iterator<Item = (u64, u64)> + 'a {
-        self.code.blocks[self.group.range()].iter().map(|block| block.instructions()).flatten()
+        self.code.blocks[self.group.range()].iter().flat_map(|block| block.instructions())
     }
 
     /// Return the entry block
@@ -188,6 +188,7 @@ pub enum ExceptionCode {
     ExecViolation = 0x0401,
     SelfModifyingCode = 0x0402,
     OutOfMemory = 0x0501,
+    AddressOverflow = 0x0502,
 
     InvalidInstruction = 0x1001,
     UnknownInterrupt = 0x1002,
@@ -236,6 +237,7 @@ impl ExceptionCode {
             0x0401 => Self::ExecViolation,
             0x0402 => Self::SelfModifyingCode,
             0x0501 => Self::OutOfMemory,
+            0x0502 => Self::AddressOverflow,
 
             0x1001 => Self::InvalidInstruction,
             0x1002 => Self::UnknownInterrupt,
@@ -321,6 +323,7 @@ impl From<icicle_mem::MemError> for ExceptionCode {
             MemError::Unaligned => Self::ReadUnaligned,
             MemError::OutOfMemory => Self::OutOfMemory,
             MemError::SelfModifyingCode => Self::SelfModifyingCode,
+            MemError::AddressOverflow => Self::AddressOverflow,
 
             // These are errors that should be handled by the memory subsystem.
             MemError::Unallocated | MemError::Unknown => Self::UnknownError,

@@ -41,7 +41,7 @@ impl Value {
             return None;
         }
         self.offset += bit_offset / 8;
-        return Some(self.truncate((num_bits / 8).try_into().ok()?));
+        Some(self.truncate(num_bits / 8))
     }
 
     pub fn slice_bytes(mut self, offset: ValueSize, size: ValueSize) -> Self {

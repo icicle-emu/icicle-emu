@@ -34,7 +34,7 @@ impl LoadedSource {
     pub fn line_and_column(&self, char_offset: u32) -> (usize, usize) {
         let line = self.lines.binary_search(&char_offset).unwrap_or_else(|i| i.saturating_sub(1));
         let col = char_offset - self.lines.get(line).unwrap_or(&0);
-        (line as usize, col as usize)
+        (line, col as usize)
     }
 
     /// Get the span associated with the token at `token_offset`
@@ -222,7 +222,7 @@ impl Parser {
             }
         }
         let mut err = token.error_unexpected(expected);
-        err.cause = self.error.take().map(|err| Box::new(err));
+        err.cause = self.error.take().map(Box::new);
         err
     }
 
@@ -1711,5 +1711,5 @@ impl Parse for IdentList {
 struct IdentList(Vec<ast::Ident>);
 
 fn parse_ident_list(p: &mut Parser) -> Result<Vec<ast::Ident>, Error> {
-    parse_item_or_list(p, |p| Ok(p.parse()?))
+    parse_item_or_list(p, Parser::parse)
 }

@@ -72,6 +72,36 @@ pub fn read_user<'a, M: LinuxMmu>(
     Ok(&buf[start..])
 }
 
+macro_rules! syscall_warn {
+    ($msg:literal $(,)?) => {
+        tracing::warn!($msg)
+    };
+    ($fmt:expr, $($arg:tt)*) => {
+        tracing::warn!($fmt, $($arg)*)
+    };
+}
+
+macro_rules! ensure {
+    ($cond:expr) => {
+        if !$cond {
+            return Err(errno::EINVAL.into());
+        }
+    };
+    ($cond:expr, $msg:literal $(,)?) => {
+        if !$cond {
+            syscall_warn!($msg);
+            return Err(errno::EINVAL.into());
+        }
+    };
+    ($cond:expr, $fmt:expr, $($arg:tt)*) => {
+        if !$cond {
+            syscall_warn!($fmt, $($arg)*);
+            return Err(errno::EINVAL.into());
+        }
+    };
+
+}
+
 pub struct Ctx<'cpu, C: LinuxCpu> {
     pub cpu: &'cpu mut C,
     pub kernel: &'cpu mut Kernel,
@@ -396,7 +426,7 @@ pub fn sendto<C: LinuxCpu>(
     let mut sock_addr = fs::socket::SocketAddr::read_user(ctx.cpu.mem(), dst_addr, addrlen)?;
 
     match do_send(ctx, &file, sock_addr.as_mut(), buf, len) {
-        Ok(bytes) => Ok(bytes as u64),
+        Ok(bytes) => Ok(bytes),
         Err(crate::LinuxError::Error(errno::EWOULDBLOCK)) => {
             file.borrow_mut().listeners.insert(ctx.kernel.process.pid);
             ctx.kernel.switch_task(ctx.cpu, crate::PauseReason::WaitFile)
@@ -477,7 +507,7 @@ pub fn recvfrom<C: LinuxCpu>(
         ctx.cpu.mem().write_bytes(src_addr, &addr.addr[..len])?;
     }
 
-    Ok(read_bytes as u64)
+    Ok(read_bytes)
 }
 
 pub fn recvmsg<C: LinuxCpu>(ctx: &mut Ctx<C>, socket: u64, msg: u64, _flags: u64) -> LinuxResult {
@@ -955,12 +985,12 @@ pub fn brk<C: LinuxCpu>(ctx: &mut Ctx<C>, addr: u64) -> LinuxResult {
 
     let is_shrinking = addr < orig_brk;
     if is_shrinking {
-        ctx.cpu.mem().unmap(addr, orig_brk);
+        ctx.cpu.mem().unmap(addr, orig_brk - addr);
     }
     else {
         let mapping =
             mem::Mapping { perm: perm::READ | perm::WRITE | perm::MAP | perm::INIT, value: 0x0 };
-        if !ctx.cpu.mem().memmap(orig_brk, addr, mapping) {
+        if !ctx.cpu.mem().memmap(orig_brk, addr - orig_brk, mapping) {
             // Failed to allocate memory
             return Ok(orig_brk);
         }
@@ -1024,15 +1054,16 @@ pub fn mmap2<C: LinuxCpu>(
     pgoffset: u64,
 ) -> LinuxResult {
     use crate::sys::mmem;
-
-    if addr != align_up(addr, sys::PAGE_SIZE) {
-        tracing::warn!("Unaligned address passed to mmap2: {:#0x}", addr);
-        return Err(errno::EINVAL.into());
-    }
+    ensure!(
+        addr == align_down(addr, sys::PAGE_SIZE),
+        "Unaligned address passed to mmap2: {:#0x}",
+        addr
+    );
 
     // @checkme: what is the correct behaviour is length is unaligned? Is an unaligned length valid
     // if we are mmaping a file?
     let alloc_len = align_up(length, sys::PAGE_SIZE);
+    ensure!(addr.checked_add(alloc_len).is_some());
 
     match flags & 0x0F {
         mmem::MAP_SHARED => {
@@ -1057,8 +1088,7 @@ pub fn mmap2<C: LinuxCpu>(
     if is_fixed {
         // Remove any existing allocation the overlaps with this allocation
         if addr != NULL_PTR {
-            let alloc_end = addr.checked_add(alloc_len).ok_or(errno::EINVAL)?;
-            let _ = ctx.kernel.free(ctx.cpu.mem(), addr, alloc_end);
+            let _ = ctx.kernel.free(ctx.cpu.mem(), addr, alloc_len);
         }
     }
 
@@ -1071,7 +1101,7 @@ pub fn mmap2<C: LinuxCpu>(
     )?;
 
     if is_fixed && alloc_addr != addr {
-        tracing::error!("Wrong allocation address, wanted: {:0x} got: {:0x}", addr, alloc_addr);
+        tracing::error!("Wrong allocation address, wanted: {addr:#x} got: {alloc_addr:#x}");
         return Err(VmExit::OutOfMemory.into());
     }
 
@@ -1094,6 +1124,11 @@ pub fn mmap2<C: LinuxCpu>(
     };
 
     // Any extra data in the page is guaranteed to be zeroed on Linux.
+    tracing::trace!(
+        "zeroing {} additional bytes at: {:#x}",
+        alloc_len - written_bytes,
+        alloc_addr + written_bytes
+    );
     ctx.cpu.mem().fill(alloc_addr + written_bytes, alloc_len - written_bytes, 0x00)?;
 
     Ok(alloc_addr)
@@ -1109,7 +1144,7 @@ pub fn munmap<C: LinuxCpu>(ctx: &mut Ctx<C>, addr: u64, length: u64) -> LinuxRes
     if end <= addr {
         return Err(errno::EINVAL.into());
     }
-    ctx.kernel.free(ctx.cpu.mem(), addr, end)?;
+    ctx.kernel.free(ctx.cpu.mem(), addr, length)?;
     Ok(0)
 }
 
@@ -1146,17 +1181,15 @@ pub fn mremap<C: LinuxCpu>(
 
     if new_size < old_size {
         // Shrink memory map
-        ctx.kernel.free(ctx.cpu.mem(), new_end, old_end)?;
+        ctx.kernel.free(ctx.cpu.mem(), new_end, old_size - new_size)?;
         return Ok(old_addr);
     }
 
     // First try to allocate the memory directly after the current allocation.
     if flags & mmem::MREMAP_MAYMOVE == 0 || !ctx.kernel.force_mremap_move {
-        if ctx
-            .kernel
-            .alloc_fixed(ctx.cpu.mem(), old_end, new_size - old_size, perm | perm::MAP)
-            .is_ok()
-        {
+        let alloc_after =
+            ctx.kernel.alloc_fixed(ctx.cpu.mem(), old_end, new_size - old_size, perm | perm::MAP);
+        if alloc_after.is_ok() {
             return Ok(old_addr);
         }
     }
@@ -1168,7 +1201,7 @@ pub fn mremap<C: LinuxCpu>(
 
     // Find a free region of memory and copy the existing mapping into it
     let new_addr = ctx.kernel.find_free(ctx.cpu.mem(), new_size)?;
-    if let Err(e) = ctx.cpu.mem().move_region(old_addr, old_end, new_addr) {
+    if let Err(e) = ctx.cpu.mem().move_region(old_addr, old_size, new_addr) {
         // @fixme: deliver as SIGSEGV?
         return Err(
             VmExit::UnhandledException((ExceptionCode::from_load_error(e), old_addr)).into()
@@ -1280,17 +1313,17 @@ pub fn lstat64<C: LinuxCpu>(ctx: &mut Ctx<C>, path: u64, buf: u64) -> LinuxResul
 pub fn olduname<C: LinuxCpu>(ctx: &mut Ctx<C>, buf: u64) -> LinuxResult {
     const UTSNAME_LENGTH: u64 = 9;
 
+    let uname_values: &[&[u8]] = &[
+        b"Linux\0",                     // sysname
+        b"node-01\0",                   // nodename
+        b"4.4.0-999\0",                 // release
+        b"#01\0",                       // version
+        &ctx.kernel.arch.platform_name, // machine
+    ];
     let mem = ctx.cpu.mem();
-    // sysname
-    mem.write_bytes(buf + 0 * UTSNAME_LENGTH, b"Linux\0")?;
-    // nodename
-    mem.write_bytes(buf + 1 * UTSNAME_LENGTH, b"node-01\0")?;
-    // release
-    mem.write_bytes(buf + 2 * UTSNAME_LENGTH, b"4.4.0-999\0")?;
-    // version
-    mem.write_bytes(buf + 3 * UTSNAME_LENGTH, b"#01\0")?;
-    // machine
-    mem.write_bytes(buf + 4 * UTSNAME_LENGTH, &ctx.kernel.arch.platform_name)?;
+    for (i, value) in uname_values.iter().enumerate() {
+        mem.write_bytes(buf + i as u64 * UTSNAME_LENGTH, value)?;
+    }
 
     Ok(0)
 }
@@ -1306,21 +1339,24 @@ pub fn newuname<C: LinuxCpu>(ctx: &mut Ctx<C>, buf: u64) -> LinuxResult {
 pub fn write_uname<C: LinuxCpu>(ctx: &mut Ctx<C>, buf: u64, new: bool) -> LinuxResult {
     const UTSNAME_LENGTH: u64 = 65;
 
+    let uname_values: &[&[u8]] = &[
+        b"Linux\0",                     // sysname
+        b"IcicleVM-0001\0",             // nodename
+        b"5.4.0-74-icicle\0",           // release
+        b"#01-Icicle\0",                // version
+        &ctx.kernel.arch.platform_name, // machine
+    ];
     let mem = ctx.cpu.mem();
-    // sysname
-    mem.write_bytes(buf + 0 * UTSNAME_LENGTH, b"Linux\0")?;
-    // nodename
-    mem.write_bytes(buf + 1 * UTSNAME_LENGTH, b"IcicleVM-0001\0")?;
-    // release
-    mem.write_bytes(buf + 2 * UTSNAME_LENGTH, b"5.4.0-74-icicle\0")?;
-    // version
-    mem.write_bytes(buf + 3 * UTSNAME_LENGTH, b"#01-Icicle\0")?;
-    // machine
-    mem.write_bytes(buf + 4 * UTSNAME_LENGTH, &ctx.kernel.arch.platform_name)?;
+    for (i, value) in uname_values.iter().enumerate() {
+        mem.write_bytes(buf + i as u64 * UTSNAME_LENGTH, value)?;
+    }
 
     if new {
         // domain name
-        mem.write_bytes(buf + 5 * UTSNAME_LENGTH, b"icicle.network.internal\0")?;
+        mem.write_bytes(
+            buf + uname_values.len() as u64 * UTSNAME_LENGTH,
+            b"icicle.network.internal\0",
+        )?;
     }
 
     Ok(0)
@@ -1645,7 +1681,7 @@ pub fn set_thread_area_x86<C: LinuxCpu>(ctx: &mut Ctx<C>, user_desc: u64) -> Lin
 #[allow(unused)]
 pub mod clone {
     bitflags::bitflags! {
-        #[derive(Default)]
+        #[derive(Debug, Default)]
         pub struct Flags: u64 {
             const VM = 0x00000100;
             const FS = 0x00000200;
@@ -2081,7 +2117,7 @@ fn do_shmat<C: LinuxCpu>(ctx: &mut Ctx<C>, shmid: u64, shmaddr: u64, shmflg: u64
 
     // @todo check SHM_REMAP flag.
     let addr = ctx.cpu.mem().next_free(AllocLayout {
-        addr: (shmaddr != 0).then(|| shmaddr),
+        addr: (shmaddr != 0).then_some(shmaddr),
         size: shmem.physical_pages.len() as u64 * sys::PAGE_SIZE,
         align: sys::PAGE_SIZE,
     })?;
@@ -2120,7 +2156,7 @@ pub fn shmdt<C: LinuxCpu>(ctx: &mut Ctx<C>, shmaddr: u64) -> LinuxResult {
             let shmem = ctx.kernel.ipc.shmem.get_mut(&id).unwrap();
 
             let size = shmem.physical_pages.len() as u64 * sys::PAGE_SIZE;
-            assert!(ctx.cpu.mem().unmap(shmaddr, shmaddr + size));
+            assert!(ctx.cpu.mem().unmap(shmaddr, size));
 
             shmem.nattach -= 1;
             shmem.lpid = ctx.kernel.process.pid;
@@ -2382,8 +2418,7 @@ pub fn nanosleep<C: LinuxCpu>(ctx: &mut Ctx<C>, req: u64, rem: u64) -> LinuxResu
 
 pub fn nanosleep_time32<C: LinuxCpu>(ctx: &mut Ctx<C>, req: u64, rem: u64) -> LinuxResult {
     let req_time: types::Timespec32 = ctx.read_user_struct(req)?;
-    let duration =
-        std::time::Duration::new(req_time.tv_sec.value as u64, req_time.tv_nsec.value as u32);
+    let duration = std::time::Duration::new(req_time.tv_sec.value, req_time.tv_nsec.value as u32);
 
     // Check if process was previously timed out
     if ctx.kernel.process.timeout.is_some() {

@@ -86,7 +86,7 @@ pub fn build_linux_env(
 ) -> Result<icicle_linux::Kernel, BuildError> {
     let mut kernel = icicle_linux::Kernel::new(&vm.cpu.arch, config);
 
-    kernel.init_vfs(sysroot).map_err(|e| BuildError::FailedToInitEnvironment(e))?;
+    kernel.init_vfs(sysroot).map_err(BuildError::FailedToInitEnvironment)?;
     if mount_stddev {
         kernel
             .mount_stddev(
@@ -94,7 +94,7 @@ pub fn build_linux_env(
                 icicle_linux::fs::devices::WriteOnlyDevice(std::io::stderr()),
                 None,
             )
-            .map_err(|e| BuildError::FailedToInitEnvironment(e))?;
+            .map_err(BuildError::FailedToInitEnvironment)?;
     }
 
     Ok(kernel)

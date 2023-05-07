@@ -41,7 +41,7 @@ NEG EAX
 	SF = EAX s< 0x0:4
 	ZF = EAX == 0x0:4
 	$U1:4 = EAX & 0xff:4
-	$U2:1 = count_ones($U1:4)
+	$U2:1 = popcount($U1:4)
 	$U3:1 = $U2:1 & 0x1:1
 	PF = $U3:1 == 0x0:1
 	RAX = zext(EAX)
@@ -70,8 +70,9 @@ MOV EAX,dword ptr [0x0]
 
 PEXTRW R13D, XMM1, 0x1
 <L0> (entry=0x0):
-	$U1:16 = XMM1 >> 0x10:8
-	R13D = zext($U1:2)
+	$U5:8 = XMM1_Qa >> 0x10:1
+	$U4:8 = $U5:8
+	R13D = zext($U4:2)
 	R13 = zext(R13D)
 
 SYSCALL
@@ -241,7 +242,7 @@ CMP R8D,-0x4
 	SF = $U1:4 s< 0x0:4
 	ZF = $U1:4 == 0x0:4
 	$U2:4 = $U1:4 & 0xff:4
-	$U3:1 = count_ones($U2:4)
+	$U3:1 = popcount($U2:4)
 	$U4:1 = $U3:1 & 0x1:1
 	PF = $U4:1 == 0x0:1
 
@@ -263,7 +264,7 @@ SBB RAX,-0x5e0d9411
 	SF = RAX s< 0x0:8
 	ZF = RAX == 0x0:8
 	$U5:8 = RAX & 0xff:8
-	$U6:1 = count_ones($U5:8)
+	$U6:1 = popcount($U5:8)
 	$U7:1 = $U6:1 & 0x1:1
 	PF = $U7:1 == 0x0:1
 
@@ -276,7 +277,7 @@ AND EAX,0x80808080
 	SF = EAX s< 0x0:4
 	ZF = EAX == 0x0:4
 	$U1:4 = EAX & 0xff:4
-	$U2:1 = count_ones($U1:4)
+	$U2:1 = popcount($U1:4)
 	$U3:1 = $U2:1 & 0x1:1
 	PF = $U3:1 == 0x0:1
 
@@ -327,7 +328,7 @@ SHR EDX,CL
 	$U24:1 = $U16:1 && $U21:1
 	ZF = $U23:1 || $U24:1
 	$U26:4 = EDX & 0xff:4
-	$U27:1 = count_ones($U26:4)
+	$U27:1 = popcount($U26:4)
 	$U28:1 = $U27:1 & 0x1:1
 	$U25:1 = $U28:1 == 0x0:1
 	$U30:1 = $U18:1 && PF
@@ -344,7 +345,7 @@ SAR ECX,0x1
 	SF = ECX s< 0x0:4
 	ZF = ECX == 0x0:4
 	$U2:4 = ECX & 0xff:4
-	$U3:1 = count_ones($U2:4)
+	$U3:1 = popcount($U2:4)
 	$U4:1 = $U3:1 & 0x1:1
 	PF = $U4:1 == 0x0:1
 
@@ -355,7 +356,7 @@ SUB CH,DL
 	CH = CH - DL
 	SF = CH s< 0x0:1
 	ZF = CH == 0x0:1
-	$U2:1 = count_ones(CH)
+	$U2:1 = popcount(CH)
 	$U3:1 = $U2:1 & 0x1:1
 	PF = $U3:1 == 0x0:1
 
@@ -367,7 +368,7 @@ CMP RAX,-0x1000
 	SF = $U1:8 s< 0x0:8
 	ZF = $U1:8 == 0x0:8
 	$U2:8 = $U1:8 & 0xff:8
-	$U3:1 = count_ones($U2:8)
+	$U3:1 = popcount($U2:8)
 	$U4:1 = $U3:1 & 0x1:1
 	PF = $U4:1 == 0x0:1
 
@@ -382,7 +383,7 @@ ADD RAX,qword ptr FS:[0x0]
 	SF = RAX s< 0x0:8
 	ZF = RAX == 0x0:8
 	$U1:8 = RAX & 0xff:8
-	$U2:1 = count_ones($U1:8)
+	$U2:1 = popcount($U1:8)
 	$U3:1 = $U2:1 & 0x1:1
 	PF = $U3:1 == 0x0:1
 
@@ -479,7 +480,7 @@ SHL EAX,0x1
 	SF = EAX s< 0x0:4
 	ZF = EAX == 0x0:4
 	$U2:4 = EAX & 0xff:4
-	$U3:1 = count_ones($U2:4)
+	$U3:1 = popcount($U2:4)
 	$U4:1 = $U3:1 & 0x1:1
 	PF = $U4:1 == 0x0:1
 
@@ -501,7 +502,7 @@ TEST ECX,0x62d08561
 	SF = 0x0:1
 	ZF = $U1:4 == 0x0:4
 	$U2:4 = $U1:4 & 0xff:4
-	$U3:1 = count_ones($U2:4)
+	$U3:1 = popcount($U2:4)
 	$U4:1 = $U3:1 & 0x1:1
 	PF = $U4:1 == 0x0:1
 
@@ -852,7 +853,11 @@ FSUBR dword ptr [0x121100]
 <L0> (entry=0x120000):
 	$U2:4 = ram[0x121100:8]
 	$U1:10 = float2float($U2:4)
-	ST0 = $U1:10 f- ST0
+	$U3:8 = float2float($U1:10)
+	$U4:8 = float2float(ST0)
+	$U5:8 = $U3:8 f- $U4:8
+	$U6:10 = float2float($U5:8)
+	ST0 = $U6:10
 
 SBB AL,0xce
 <L0> (entry=0x120000):
@@ -867,7 +872,7 @@ SBB AL,0xce
 	AL = $U2:1 - $U1:1
 	SF = AL s< 0x0:1
 	ZF = AL == 0x0:1
-	$U6:1 = count_ones(AL)
+	$U6:1 = popcount(AL)
 	$U7:1 = $U6:1 & 0x1:1
 	PF = $U7:1 == 0x0:1
 
@@ -884,7 +889,7 @@ SBB AL,0xce
 	AL = $U2:1 - $U1:1
 	SF = AL s< 0x0:1
 	ZF = AL == 0x0:1
-	$U6:1 = count_ones(AL)
+	$U6:1 = popcount(AL)
 	$U7:1 = $U6:1 & 0x1:1
 	PF = $U7:1 == 0x0:1
 
@@ -899,7 +904,7 @@ SBB EAX,EAX
 	SF = EAX s< 0x0:4
 	ZF = EAX == 0x0:4
 	$U5:4 = EAX & 0xff:4
-	$U6:1 = count_ones($U5:4)
+	$U6:1 = popcount($U5:4)
 	$U7:1 = $U6:1 & 0x1:1
 	PF = $U7:1 == 0x0:1
 
@@ -917,14 +922,14 @@ SBB RAX,-0x80000000
 	SF = RAX s< 0x0:8
 	ZF = RAX == 0x0:8
 	$U5:8 = RAX & 0xff:8
-	$U6:1 = count_ones($U5:8)
+	$U6:1 = popcount($U5:8)
 	$U7:1 = $U6:1 & 0x1:1
 	PF = $U7:1 == 0x0:1
 
 SHUFPD XMM0, XMM3, 0x2
 <L0> (entry=0x0):
-	arg0 = 0x2:8
-	XMM0 = shufpd(XMM0, XMM3)
+	$U2:8 = XMM3_Qb
+	XMM0_Qb = XMM3_Qb
 
 MOVZX EBX,word ptr [0x8277b0]
 <L0> (entry=0x61a9c4):
@@ -951,7 +956,7 @@ ADD R9,R8
 	SF = R9 s< 0x0:8
 	ZF = R9 == 0x0:8
 	$U1:8 = R9 & 0xff:8
-	$U2:1 = count_ones($U1:8)
+	$U2:1 = popcount($U1:8)
 	$U3:1 = $U2:1 & 0x1:1
 	PF = $U3:1 == 0x0:1
 
@@ -969,7 +974,7 @@ ADD byte ptr [RAX],AL
 	$U9:1 = ram[RAX]
 	ZF = $U9:1 == 0x0:1
 	$U10:1 = ram[RAX]
-	$U2:1 = count_ones($U10:1)
+	$U2:1 = popcount($U10:1)
 	$U3:1 = $U2:1 & 0x1:1
 	PF = $U3:1 == 0x0:1
 
@@ -1025,7 +1030,7 @@ ADD AX,BX
 	SF = AX s< 0x0:2
 	ZF = AX == 0x0:2
 	$U1:2 = AX & 0xff:2
-	$U2:1 = count_ones($U1:2)
+	$U2:1 = popcount($U1:2)
 	$U3:1 = $U2:1 & 0x1:1
 	PF = $U3:1 == 0x0:1
 
@@ -1037,7 +1042,7 @@ SUB AX,BX
 	SF = AX s< 0x0:2
 	ZF = AX == 0x0:2
 	$U1:2 = AX & 0xff:2
-	$U2:1 = count_ones($U1:2)
+	$U2:1 = popcount($U1:2)
 	$U3:1 = $U2:1 & 0x1:1
 	PF = $U3:1 == 0x0:1
 
@@ -1049,7 +1054,7 @@ CMP AX,BX
 	SF = $U1:2 s< 0x0:2
 	ZF = $U1:2 == 0x0:2
 	$U2:2 = $U1:2 & 0xff:2
-	$U3:1 = count_ones($U2:2)
+	$U3:1 = popcount($U2:2)
 	$U4:1 = $U3:1 & 0x1:1
 	PF = $U4:1 == 0x0:1
 
@@ -1070,7 +1075,7 @@ XOR AX,0x23ec
 	SF = AX s< 0x0:2
 	ZF = AX == 0x0:2
 	$U1:2 = AX & 0xff:2
-	$U2:1 = count_ones($U1:2)
+	$U2:1 = popcount($U1:2)
 	$U3:1 = $U2:1 & 0x1:1
 	PF = $U3:1 == 0x0:1
 
@@ -1085,7 +1090,7 @@ CMP word ptr [0x100029],0x40
 	SF = $U1:2 s< 0x0:2
 	ZF = $U1:2 == 0x0:2
 	$U2:2 = $U1:2 & 0xff:2
-	$U3:1 = count_ones($U2:2)
+	$U3:1 = popcount($U2:2)
 	$U4:1 = $U3:1 & 0x1:1
 	PF = $U4:1 == 0x0:1
 
@@ -1135,8 +1140,11 @@ CVTSS2SD XMM2, XMM0
 
 PINSRW XMM0, R13D, 0x1
 <L0> (entry=0x0):
-	arg0 = 0x1:8
-	XMM0 = pinsrw(XMM0, R13D)
+	$U5:8 = zext(R13W)
+	$U4:8 = $U5:8 << 0x10:1
+	$U8:8 = XMM0_Qa & 0xffffffff0000ffff:8
+	$U4:8 = $U8:8 | $U4:8
+	XMM0_Qa = $U4:8
 
 UCOMISD XMM0, XMM1
 <L0> (entry=0x0):
@@ -1772,7 +1780,9 @@ FILD qword ptr [RBP + -0x10]
 	ST2 = ST1
 	ST1 = ST0
 	$U3:8 = ram[$U2:8]
-	ST0 = int2float($U3:8)
+	$U4:8 = int2float($U3:8)
+	$U5:10 = float2float($U4:8)
+	ST0 = $U5:10
 
 FLD qword ptr [ESP]
 <L0> (entry=0x0):
@@ -1801,7 +1811,8 @@ FLD tword ptr [RBP + -0x80]
 
 FLDZ
 <L0> (entry=0x0):
-	$U2:10 = int2float(0x0:4)
+	$U3:8 = int2float(0x0:4)
+	$U4:10 = float2float($U3:8)
 	ST7 = ST6
 	ST6 = ST5
 	ST5 = ST4
@@ -1809,11 +1820,12 @@ FLDZ
 	ST3 = ST2
 	ST2 = ST1
 	ST1 = ST0
-	ST0 = $U2:10
+	ST0 = $U4:10
 
 FISTTP word ptr [RAX]
 <L0> (entry=0x0):
-	$U1:2 = float2int(ST0)
+	$U2:8 = float2float(ST0)
+	$U1:2 = float2int($U2:8)
 	ram[RAX] = $U1:2
 	ST0 = ST1
 	ST1 = ST2
@@ -1825,12 +1837,18 @@ FISTTP word ptr [RAX]
 
 FUCOMIP ST0, ST1
 <L0> (entry=0x0):
-	$U1:1 = isnan(ST0)
-	$U2:1 = isnan(ST1)
+	$U5:8 = float2float(ST0)
+	$U1:1 = isnan($U5:8)
+	$U6:8 = float2float(ST1)
+	$U2:1 = isnan($U6:8)
 	PF = $U1:1 || $U2:1
-	$U3:1 = ST0 f== ST1
+	$U7:8 = float2float(ST0)
+	$U8:8 = float2float(ST1)
+	$U3:1 = $U7:8 f== $U8:8
 	ZF = PF | $U3:1
-	$U4:1 = ST0 f< ST1
+	$U9:8 = float2float(ST0)
+	$U10:8 = float2float(ST1)
+	$U4:1 = $U9:8 f< $U10:8
 	CF = PF | $U4:1
 	OF = 0x0:1
 	AF = 0x0:1
@@ -1855,12 +1873,18 @@ FNSTSW AX
 
 FRNDINT
 <L0> (entry=0x0):
-	$U1:10 = round(ST0)
-	ST0 = $U1:10
+	$U2:8 = float2float(ST0)
+	$U3:8 = round($U2:8)
+	$U4:10 = float2float($U3:8)
+	ST0 = $U4:10
 
 FSUB ST1,ST0
 <L0> (entry=0x0):
-	ST1 = ST1 f- ST0
+	$U1:8 = float2float(ST1)
+	$U2:8 = float2float(ST0)
+	$U3:8 = $U1:8 f- $U2:8
+	$U4:10 = float2float($U3:8)
+	ST1 = $U4:10
 
 FXCH
 <L0> (entry=0x0):
@@ -1874,9 +1898,26 @@ F2XM1
 
 FADDP
 <L0> (entry=0x0):
-	ST1 = ST0 f+ ST1
-	ST0 = ST1
+	$U1:8 = float2float(ST0)
+	$U2:8 = float2float(ST1)
+	$U3:8 = $U1:8 f+ $U2:8
+	$U4:10 = float2float($U3:8)
+	ST0 = $U4:10
 	ST1 = ST2
+	ST2 = ST3
+	ST3 = ST4
+	ST4 = ST5
+	ST5 = ST6
+	ST6 = ST7
+
+FADDP ST2, ST0
+<L0> (entry=0x0):
+	$U1:8 = float2float(ST0)
+	$U2:8 = float2float(ST2)
+	$U3:8 = $U1:8 f+ $U2:8
+	$U4:10 = float2float($U3:8)
+	ST0 = ST1
+	ST1 = $U4:10
 	ST2 = ST3
 	ST3 = ST4
 	ST4 = ST5
@@ -1989,7 +2030,7 @@ CMPXCHG dword ptr [0x1010],ESI
 	SF = $U1:4 s< 0x0:4
 	ZF = $U1:4 == 0x0:4
 	$U2:4 = $U1:4 & 0xff:4
-	$U3:1 = count_ones($U2:4)
+	$U3:1 = popcount($U2:4)
 	$U4:1 = $U3:1 & 0x1:1
 	PF = $U4:1 == 0x0:1
 	if ZF jump <L2>
@@ -2009,12 +2050,12 @@ XADD dword ptr [0x1000],ECX
 	$U7:4 = ram[0x1000:8]
 	$U1:4 = $U7:4 + ECX
 	ECX = ram[0x1000:8]
-	ram[0x1000:8] = $U1:4
 	RCX = zext(ECX)
+	ram[0x1000:8] = $U1:4
 	SF = $U1:4 s< 0x0:4
 	ZF = $U1:4 == 0x0:4
 	$U2:4 = $U1:4 & 0xff:4
-	$U3:1 = count_ones($U2:4)
+	$U3:1 = popcount($U2:4)
 	$U4:1 = $U3:1 & 0x1:1
 	PF = $U4:1 == 0x0:1
 

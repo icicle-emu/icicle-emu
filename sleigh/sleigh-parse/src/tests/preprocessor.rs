@@ -220,7 +220,6 @@ define endian = $(TEST1);
     assert!(result.is_err());
 }
 
-
 #[test]
 fn or_expr() {
     let result = preprocess_to_string(

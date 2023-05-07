@@ -204,8 +204,8 @@ impl SocketFs {
         }
 
         let (data, vtable): (Box<dyn std::any::Any>, &InodeVtable) = match kind {
-            SOCK_STREAM => (Box::new(UnixStream::default()), &UNIX_STREAM_VTABLE),
-            SOCK_DGRAM => (Box::new(UnixDgram::default()), &UNIX_DGRAM_VTABLE),
+            SOCK_STREAM => (Box::<UnixStream>::default(), &UNIX_STREAM_VTABLE),
+            SOCK_DGRAM => (Box::<UnixDgram>::default(), &UNIX_DGRAM_VTABLE),
             _ => return Err(errno::ESOCKTNOSUPPORT),
         };
 
@@ -218,8 +218,8 @@ impl SocketFs {
         }
 
         let (data, vtable): (Box<dyn std::any::Any>, &InodeVtable) = match kind {
-            SOCK_STREAM => (Box::new(TcpSocket::default()), &TCP_SOCKET_VTABLE),
-            SOCK_DGRAM => (Box::new(UdpSocket::default()), &UDP_SOCKET_VTABLE),
+            SOCK_STREAM => (Box::<TcpSocket>::default(), &TCP_SOCKET_VTABLE),
+            SOCK_DGRAM => (Box::<UdpSocket>::default(), &UDP_SOCKET_VTABLE),
             _ => return Err(errno::ESOCKTNOSUPPORT),
         };
 
@@ -228,7 +228,7 @@ impl SocketFs {
 
     // @fixme
     fn create_netlink_socket(&mut self, _kind: u64, _protocol: u64) -> fs::Result<InodeRef> {
-        self.create_socket_with(Box::new(UnixStream::default()), &NETLINK_VTABLE)
+        self.create_socket_with(Box::<UnixStream>::default(), &NETLINK_VTABLE)
     }
 
     fn create_socket_with(

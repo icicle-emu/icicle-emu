@@ -11,6 +11,7 @@ pub enum MemError {
     Unaligned,
     OutOfMemory,
     SelfModifyingCode,
+    AddressOverflow,
     Unknown,
 }
 
@@ -30,6 +31,7 @@ impl std::str::FromStr for MemError {
             "Unaligned" => Self::Unaligned,
             "OutOfMemory" => Self::OutOfMemory,
             "SelfModifyingCode" => Self::SelfModifyingCode,
+            "AddressOverflow" => Self::AddressOverflow,
             _ => Self::Unknown,
         })
     }
@@ -49,6 +51,7 @@ impl MemError {
             Self::Unaligned => "Unaligned",
             Self::OutOfMemory => "OutOfMemory",
             Self::SelfModifyingCode => "SelfModifyingCode",
+            Self::AddressOverflow => "AddressOverflow",
             Self::Unknown => "Unknown",
         }
     }
@@ -66,6 +69,7 @@ impl MemError {
             Self::Unaligned => 0x1_0008,
             Self::OutOfMemory => 0x1_0009,
             Self::SelfModifyingCode => 0x1_000a,
+            Self::AddressOverflow => 0x1_000b,
             Self::Unknown => 0x1_FFFF,
         }
     }
@@ -83,6 +87,7 @@ impl MemError {
             0x1_0008 => Self::Unaligned,
             0x1_0009 => Self::OutOfMemory,
             0x1_000a => Self::SelfModifyingCode,
+            0x1_000b => Self::AddressOverflow,
             _ => Self::Unknown,
         }
     }

@@ -327,21 +327,21 @@ POPM.A 0x1,R10
 <L0> (entry=0x0):
 	R10 = ram[SP]
 	$U1:4 = R10 & 0xfffff:4
-	R10 = sext($U1:3)
+	R10 = $U1:4
 	SP = SP + 0x4:4
 
 MOVA @R9, R12
 <L0> (entry=0x0):
 	R12 = ram[R9]
 	$U1:4 = R12 & 0xfffff:4
-	R12 = sext($U1:3)
+	R12 = $U1:4
 
 ADDA #0x4, R9
 <L0> (entry=0x0):
 	$U1:4 = R9
 	$U3:4 = R9 + 0x4:4
 	$U4:4 = $U3:4 & 0xfffff:4
-	R9 = sext($U4:3)
+	R9 = $U4:4
 	$U8:4 = $U1:4
 	$U8:4 = $U8:4 & 0xfffff:4
 	$U5:4 = 0x4:4 + $U8:4
@@ -362,7 +362,7 @@ ADDA R14, R15
 	$U1:4 = R15
 	$U2:4 = R14 + R15
 	$U3:4 = $U2:4 & 0xfffff:4
-	R15 = sext($U3:3)
+	R15 = $U3:4
 	$U5:4 = R14 & 0xfffff:4
 	$U7:4 = $U1:4
 	$U7:4 = $U7:4 & 0xfffff:4
@@ -422,7 +422,7 @@ ADDA #4, SP
 	$U1:4 = SP
 	$U2:4 = 0x4:4 + SP
 	$U3:4 = $U2:4 & 0xfffff:4
-	SP = sext($U3:3)
+	SP = $U3:4
 	$U7:4 = $U1:4
 	$U7:4 = $U7:4 & 0xfffff:4
 	$U4:4 = 0x4:4 + $U7:4
@@ -443,7 +443,7 @@ SUBA #4, SP
 	$U1:4 = SP
 	$U2:4 = SP - 0x4:4
 	$U3:4 = $U2:4 & 0xfffff:4
-	SP = sext($U3:3)
+	SP = $U3:4
 	$U7:4 = $U1:4
 	$U7:4 = $U7:4 & 0xfffff:4
 	$U8:1 = 0x4:4 <= $U7:4
@@ -473,7 +473,7 @@ INCDA SP
 	$U1:4 = SP
 	$U2:4 = 0x2:4 + SP
 	$U3:4 = $U2:4 & 0xfffff:4
-	SP = sext($U3:3)
+	SP = $U3:4
 	$U7:4 = $U1:4
 	$U7:4 = $U7:4 & 0xfffff:4
 	$U4:4 = 0x2:4 + $U7:4
@@ -494,7 +494,7 @@ DECDA SP
 	$U1:4 = SP
 	$U2:4 = SP - 0x2:4
 	$U3:4 = $U2:4 & 0xfffff:4
-	SP = sext($U3:3)
+	SP = $U3:4
 	$U7:4 = $U1:4
 	$U7:4 = $U7:4 & 0xfffff:4
 	$U8:1 = 0x2:4 <= $U7:4
@@ -530,6 +530,25 @@ TSTA SP
 	$U10:4 = zext($U8:1)
 	$U10:4 = $U10:4 << 0x1:4
 	SR = $U9:4 | $U10:4
+
+DADD.B R10, PC
+<L0> (entry=0x12):
+	$U1:4 = SR & 0xfffffffe:4
+	TMP_PC:1 = bcd_add(R10_lo, 0x12:1)
+	$U9:1 = TMP_PC:1
+	TMP_PC = 0x0:4
+	TMP_PC:1 = $U9:1
+	$U3:1 = TMP_PC:1 s< 0x0:1
+	$U4:4 = $U1:4 & 0xfffffffb:4
+	$U5:4 = zext($U3:1)
+	$U5:4 = $U5:4 << 0x2:4
+	SR = $U4:4 | $U5:4
+	$U6:1 = TMP_PC:1 == 0x0:1
+	$U7:4 = SR & 0xfffffffd:4
+	$U8:4 = zext($U6:1)
+	$U8:4 = $U8:4 << 0x1:4
+	SR = $U7:4 | $U8:4
+	jump TMP_PC
 
 MOV.B -0x1f2b(R12), &0x2063
 <L0> (entry=0x4000):
@@ -738,11 +757,11 @@ MOVA @PC, R12
 <L0> (entry=0x4000):
 	R12 = ram[0x4000:4]
 	$U1:4 = R12 & 0xfffff:4
-	R12 = sext($U1:3)
+	R12 = $U1:4
 
 MOVA @PC+, R12
 <L0> (entry=0x4000):
 	R12 = ram[0x4000:4]
 	$U1:4 = R12 & 0xfffff:4
-	R12 = sext($U1:3)
+	R12 = $U1:4
 

@@ -1,3 +1,4 @@
+use half::f16;
 use icicle_mem::MemResult;
 use pcode::{MemId, Value, VarNode};
 
@@ -29,133 +30,531 @@ where
     use pcode::Op;
 
     let output = stmt.output;
-    let inputs = stmt.inputs.get();
+    let [a, b] = stmt.inputs.get();
 
-    match stmt.op {
-        Op::Copy => copy(exec, inputs[0], output),
-        Op::ZeroExtend => zero_extend(exec, inputs[0], output),
-        Op::SignExtend => sign_extend(exec, inputs[0], output),
-        Op::IntToFloat => int_to_float(exec, inputs[0], output),
-        Op::FloatToFloat => float_to_float(exec, inputs[0], output),
-        Op::FloatToInt => float_to_int(exec, inputs[0], output),
+    macro_rules! copy {
+        ($ty:ty) => {
+            exec.write_var(output, exec.read::<$ty>(a))
+        };
+    }
+    macro_rules! zext {
+        ($in_ty:ty, $out_ty:ty) => {{
+            let value = exec.read::<$in_ty>(a) as $out_ty;
+            exec.write_var(output, value);
+        }};
+    }
+    macro_rules! sext {
+        ($in_ty:ty, $out_ty:ty) => {{
+            let value = <$out_ty>::from_ne_bytes(resize_sxt(exec.read::<$in_ty>(a).to_ne_bytes()));
+            exec.write_var(output, value);
+        }};
+    }
+    macro_rules! to_float {
+        ($in:ty) => {{
+            let value = exec.read::<$in>(a);
+            match output.size {
+                4 => exec.write_var::<u32>(output, FromFloat::from_float(value as f32)),
+                8 => exec.write_var::<u64>(output, FromFloat::from_float(value as f64)),
+                10 => exec.write_var::<[u8; 10]>(output, FromFloat::from_float(value as f64)),
+                size => exec.exception(ExceptionCode::InvalidFloatSize, size as u64),
+            }
+        }};
+    }
+    macro_rules! float_cast {
+        ($value:ident: $in_ty:ty => $cast:expr) => {{
+            let $value = exec.read::<$in_ty>(a);
+            let result = $cast;
+            exec.write_var(output, result.to_bits());
+        }};
+    }
+    macro_rules! float_to_int {
+        ($val:expr) => {{
+            let val = $val;
+            match output.size {
+                2 => exec.write_var::<u16>(output, val as u16),
+                4 => exec.write_var::<u32>(output, val as u32),
+                8 => exec.write_var::<u64>(output, val as u64),
+                size => return exec.exception(ExceptionCode::InvalidFloatSize, size as u64),
+            }
+        }};
+    }
+    macro_rules! binary_op {
+        ($op:ty, $ty:ty) => {{
+            let a: $ty = exec.read(a);
+            let b: $ty = exec.read(b);
+            exec.write_var(output, <$op>::eval(a, b));
+        }};
+    }
+    macro_rules! div_op {
+        ($op:ty, $ty:ty) => {{
+            let a: $ty = exec.read(a);
+            let b: $ty = exec.read(b);
+            if b == 0 {
+                exec.exception(ExceptionCode::DivideByZero, 0);
+                return;
+            }
+            exec.write_var(output, <$op>::eval(a, b));
+        }};
+    }
+    macro_rules! cmp_op {
+        ($op:ty, $ty:ty) => {{
+            let a: $ty = exec.read(a);
+            let b: $ty = exec.read(b);
+            exec.write_var(output, <$op>::eval(a, b) as u8);
+        }};
+    }
+    macro_rules! unary_op {
+        ($op:ty, $ty:ty) => {{
+            let input: $ty = exec.read(a);
+            exec.write_var(output, <$op>::eval(input));
+        }};
+    }
+    macro_rules! count_ones {
+        ($ty:ty) => {{
+            exec.write_trunc(output, exec.read::<$ty>(a).count_ones());
+        }};
+    }
+    macro_rules! count_leading_zeros {
+        ($ty:ty) => {{
+            exec.write_trunc(output, exec.read::<$ty>(a).leading_zeros());
+        }};
+    }
+    macro_rules! bool_binary_op {
+        ($op:ty) => {{
+            let a: u8 = exec.read(a);
+            let b: u8 = exec.read(b);
+            exec.write_var(output, <$op>::eval(a, b) as u8);
+        }};
+    }
+    macro_rules! float_is_nan {
+        ($ty:ty) => {{
+            let result = exec.read::<$ty>(a).to_float().is_nan();
+            exec.write_var(output, pcode::cast_bool(result));
+        }};
+    }
 
-        Op::IntAdd => int_op::<IntAdd, _>(exec, inputs, output),
-        Op::IntSub => int_op::<IntSub, _>(exec, inputs, output),
-        Op::IntXor => int_op::<IntXor, _>(exec, inputs, output),
-        Op::IntOr => int_op::<IntOr, _>(exec, inputs, output),
-        Op::IntAnd => int_op::<IntAnd, _>(exec, inputs, output),
-        Op::IntMul => int_op::<IntMul, _>(exec, inputs, output),
-        Op::IntDiv => div_op::<IntDiv, _>(exec, inputs, output),
-        Op::IntSignedDiv => div_op::<IntSignedDiv, _>(exec, inputs, output),
-        Op::IntRem => div_op::<IntRem, _>(exec, inputs, output),
-        Op::IntSignedRem => div_op::<IntSignedRem, _>(exec, inputs, output),
+    // @todo: consider simplifying generation of this table using a macro.
+    match (stmt.op, output.size, (a.size(), b.size())) {
+        (Op::Copy, 1, (1, 0)) => copy!(u8),
+        (Op::Copy, 2, (2, 0)) => copy!(u16),
+        (Op::Copy, 4, (4, 0)) => copy!(u32),
+        (Op::Copy, 8, (8, 0)) => copy!(u64),
+        (Op::Copy, 16, (16, 0)) => copy!(u128),
+        (Op::Copy, ..) => copy_cold(exec, a, output),
 
-        Op::IntLeft => {
-            let x: u128 = exec.read_dynamic(inputs[0]).zxt();
-            let y: u32 = exec.read_dynamic(inputs[1]).zxt();
+        (Op::ZeroExtend, 2, (1, 0)) => zext!(u8, u16),
+        (Op::ZeroExtend, 4, (1, 0)) => zext!(u8, u32),
+        (Op::ZeroExtend, 4, (2, 0)) => zext!(u16, u32),
+        (Op::ZeroExtend, 8, (1, 0)) => zext!(u8, u64),
+        (Op::ZeroExtend, 8, (2, 0)) => zext!(u16, u64),
+        (Op::ZeroExtend, 8, (4, 0)) => zext!(u32, u64),
+        (Op::ZeroExtend, 16, (1, 0)) => zext!(u8, u128),
+        (Op::ZeroExtend, 16, (2, 0)) => zext!(u16, u128),
+        (Op::ZeroExtend, 16, (4, 0)) => zext!(u32, u128),
+        (Op::ZeroExtend, 16, (8, 0)) => zext!(u64, u128),
+        (Op::ZeroExtend, ..) => zext_cold(exec, a, output),
+
+        (Op::SignExtend, 2, (1, 0)) => sext!(u8, u16),
+        (Op::SignExtend, 4, (1, 0)) => sext!(u8, u32),
+        (Op::SignExtend, 4, (2, 0)) => sext!(u16, u32),
+        (Op::SignExtend, 8, (1, 0)) => sext!(u8, u64),
+        (Op::SignExtend, 8, (2, 0)) => sext!(u16, u64),
+        (Op::SignExtend, 8, (4, 0)) => sext!(u32, u64),
+        (Op::SignExtend, 16, (1, 0)) => sext!(u8, u128),
+        (Op::SignExtend, 16, (2, 0)) => sext!(u16, u128),
+        (Op::SignExtend, 16, (4, 0)) => sext!(u32, u128),
+        (Op::SignExtend, 16, (8, 0)) => sext!(u64, u128),
+        (Op::SignExtend, ..) => sext_cold(exec, a, output),
+
+        (Op::IntToFloat, _, (1, 0)) => to_float!(i8),
+        (Op::IntToFloat, _, (2, 0)) => to_float!(i16),
+        (Op::IntToFloat, _, (4, 0)) => to_float!(i32),
+        (Op::IntToFloat, _, (8, 0)) => to_float!(i64),
+        (Op::IntToFloat, ..) => exec.invalid_op_size(0),
+
+        (Op::UintToFloat, _, (1, 0)) => to_float!(u8),
+        (Op::UintToFloat, _, (2, 0)) => to_float!(u16),
+        (Op::UintToFloat, _, (4, 0)) => to_float!(u32),
+        (Op::UintToFloat, _, (8, 0)) => to_float!(u64),
+        (Op::UintToFloat, ..) => exec.invalid_op_size(0),
+
+        (Op::FloatToFloat, 2, (2, 0)) => float_cast!(a: u16 => f16::from_bits(a)),
+        (Op::FloatToFloat, 4, (2, 0)) => float_cast!(a: u16 => f16::from_bits(a).to_f32()),
+        (Op::FloatToFloat, 8, (2, 0)) => float_cast!(a: u16 => f16::from_bits(a).to_f64()),
+        (Op::FloatToFloat, 10, (2, 0)) => float_cast!(a: u16 => f16::from_bits(a).to_f80()),
+
+        (Op::FloatToFloat, 2, (4, 0)) => float_cast!(a: u32 => f16::from_f32(f32::from_bits(a))),
+        (Op::FloatToFloat, 4, (4, 0)) => float_cast!(a: u32 => f32::from_bits(a)),
+        (Op::FloatToFloat, 8, (4, 0)) => float_cast!(a: u32 => f32::from_bits(a) as f64),
+        (Op::FloatToFloat, 10, (4, 0)) => float_cast!(a: u32 => f32::from_bits(a).to_f80()),
+
+        (Op::FloatToFloat, 2, (8, 0)) => float_cast!(a: u64 => f16::from_f64(f64::from_bits(a))),
+        (Op::FloatToFloat, 4, (8, 0)) => float_cast!(a: u64 => f64::from_bits(a) as f32),
+        (Op::FloatToFloat, 8, (8, 0)) => float_cast!(a: u64 => f64::from_bits(a)),
+        (Op::FloatToFloat, 10, (8, 0)) => float_cast!(a: u64 => f64::from_bits(a).to_f80()),
+
+        (Op::FloatToFloat, 4, (10, 0)) => float_cast!(a: [u8; 10] => a.to_f64() as f32),
+        (Op::FloatToFloat, 8, (10, 0)) => float_cast!(a: [u8; 10] => a.to_f64()),
+        (Op::FloatToFloat, 10, (10, 0)) => float_cast!(a: [u8; 10] => a),
+        (Op::FloatToFloat, ..) => exec.invalid_op_size(0),
+
+        (Op::FloatToInt, _, (4, 0)) => float_to_int!(exec.read::<u32>(a).to_float() as i32),
+        (Op::FloatToInt, _, (8, 0)) => float_to_int!(exec.read::<u64>(a).to_float() as i64),
+        (Op::FloatToInt, _, (10, 0)) => float_to_int!(exec.read::<[u8; 10]>(a).to_float() as i64),
+        (Op::FloatToInt, ..) => exec.invalid_op_size(0),
+
+        (Op::IntAdd, 1, (1, 1)) => binary_op!(IntAdd, u8),
+        (Op::IntAdd, 2, (2, 2)) => binary_op!(IntAdd, u16),
+        (Op::IntAdd, 4, (4, 4)) => binary_op!(IntAdd, u32),
+        (Op::IntAdd, 8, (8, 8)) => binary_op!(IntAdd, u64),
+        (Op::IntAdd, 16, (16, 16)) => binary_op!(IntAdd, u128),
+        (Op::IntAdd, ..) => exec.invalid_op_size(0),
+
+        (Op::IntSub, 1, (1, 1)) => binary_op!(IntSub, u8),
+        (Op::IntSub, 2, (2, 2)) => binary_op!(IntSub, u16),
+        (Op::IntSub, 4, (4, 4)) => binary_op!(IntSub, u32),
+        (Op::IntSub, 8, (8, 8)) => binary_op!(IntSub, u64),
+        (Op::IntSub, 16, (16, 16)) => binary_op!(IntSub, u128),
+        (Op::IntSub, ..) => exec.invalid_op_size(0),
+
+        (Op::IntXor, 1, (1, 1)) => binary_op!(IntXor, u8),
+        (Op::IntXor, 2, (2, 2)) => binary_op!(IntXor, u16),
+        (Op::IntXor, 4, (4, 4)) => binary_op!(IntXor, u32),
+        (Op::IntXor, 8, (8, 8)) => binary_op!(IntXor, u64),
+        (Op::IntXor, 16, (16, 16)) => binary_op!(IntXor, u128),
+        (Op::IntXor, ..) => exec.invalid_op_size(0),
+
+        (Op::IntOr, 1, (1, 1)) => binary_op!(IntOr, u8),
+        (Op::IntOr, 2, (2, 2)) => binary_op!(IntOr, u16),
+        (Op::IntOr, 4, (4, 4)) => binary_op!(IntOr, u32),
+        (Op::IntOr, 8, (8, 8)) => binary_op!(IntOr, u64),
+        (Op::IntOr, 16, (16, 16)) => binary_op!(IntOr, u128),
+        (Op::IntOr, ..) => exec.invalid_op_size(0),
+
+        (Op::IntAnd, 1, (1, 1)) => binary_op!(IntAnd, u8),
+        (Op::IntAnd, 2, (2, 2)) => binary_op!(IntAnd, u16),
+        (Op::IntAnd, 4, (4, 4)) => binary_op!(IntAnd, u32),
+        (Op::IntAnd, 8, (8, 8)) => binary_op!(IntAnd, u64),
+        (Op::IntAnd, 16, (16, 16)) => binary_op!(IntAnd, u128),
+        (Op::IntAnd, ..) => exec.invalid_op_size(0),
+
+        (Op::IntMul, 1, (1, 1)) => binary_op!(IntMul, u8),
+        (Op::IntMul, 2, (2, 2)) => binary_op!(IntMul, u16),
+        (Op::IntMul, 4, (4, 4)) => binary_op!(IntMul, u32),
+        (Op::IntMul, 8, (8, 8)) => binary_op!(IntMul, u64),
+        (Op::IntMul, 16, (16, 16)) => binary_op!(IntMul, u128),
+        (Op::IntMul, ..) => exec.invalid_op_size(0),
+
+        (Op::IntDiv, 1, (1, 1)) => div_op!(IntDiv, u8),
+        (Op::IntDiv, 2, (2, 2)) => div_op!(IntDiv, u16),
+        (Op::IntDiv, 4, (4, 4)) => div_op!(IntDiv, u32),
+        (Op::IntDiv, 8, (8, 8)) => div_op!(IntDiv, u64),
+        (Op::IntDiv, 16, (16, 16)) => div_op!(IntDiv, u128),
+        (Op::IntDiv, ..) => exec.invalid_op_size(0),
+
+        (Op::IntSignedDiv, 1, (1, 1)) => div_op!(IntSignedDiv, u8),
+        (Op::IntSignedDiv, 2, (2, 2)) => div_op!(IntSignedDiv, u16),
+        (Op::IntSignedDiv, 4, (4, 4)) => div_op!(IntSignedDiv, u32),
+        (Op::IntSignedDiv, 8, (8, 8)) => div_op!(IntSignedDiv, u64),
+        (Op::IntSignedDiv, 16, (16, 16)) => div_op!(IntSignedDiv, u128),
+        (Op::IntSignedDiv, ..) => exec.invalid_op_size(0),
+
+        (Op::IntRem, 1, (1, 1)) => div_op!(IntRem, u8),
+        (Op::IntRem, 2, (2, 2)) => div_op!(IntRem, u16),
+        (Op::IntRem, 4, (4, 4)) => div_op!(IntRem, u32),
+        (Op::IntRem, 8, (8, 8)) => div_op!(IntRem, u64),
+        (Op::IntRem, 16, (16, 16)) => div_op!(IntRem, u128),
+        (Op::IntRem, ..) => exec.invalid_op_size(0),
+
+        (Op::IntSignedRem, 1, (1, 1)) => div_op!(IntSignedRem, u8),
+        (Op::IntSignedRem, 2, (2, 2)) => div_op!(IntSignedRem, u16),
+        (Op::IntSignedRem, 4, (4, 4)) => div_op!(IntSignedRem, u32),
+        (Op::IntSignedRem, 8, (8, 8)) => div_op!(IntSignedRem, u64),
+        (Op::IntSignedRem, 16, (16, 16)) => div_op!(IntSignedRem, u128),
+        (Op::IntSignedRem, ..) => exec.invalid_op_size(0),
+
+        (Op::IntLeft, ..) => {
+            let x: u128 = exec.read_dynamic(a).zxt();
+            let y: u32 = exec.read_dynamic(b).zxt();
             let result = if y >= output.size as u32 * 8 { 0 } else { x << y };
             exec.write_trunc(output, result);
         }
-        Op::IntRotateLeft => int_op::<IntRotLeft, _>(exec, inputs, output),
-        Op::IntRight => {
-            let x: u128 = exec.read_dynamic(inputs[0]).zxt();
-            let y: u32 = exec.read_dynamic(inputs[1]).zxt();
+
+        (Op::IntRight, ..) => {
+            let x: u128 = exec.read_dynamic(a).zxt();
+            let y: u32 = exec.read_dynamic(b).zxt();
             let result = if y >= output.size as u32 * 8 { 0 } else { x >> y };
             exec.write_trunc(output, result);
         }
-        Op::IntSignedRight => {
-            let x: u128 = exec.read_dynamic(inputs[0]).sxt();
-            let y: u32 = exec.read_dynamic(inputs[1]).zxt();
+
+        (Op::IntSignedRight, ..) => {
+            let x: u128 = exec.read_dynamic(stmt.inputs.get()[0]).sxt();
+            let y: u32 = exec.read_dynamic(stmt.inputs.get()[1]).zxt();
             let shift = y.min(output.size as u32 * 8 - 1);
             exec.write_trunc(output, x >> shift);
         }
-        Op::IntRotateRight => int_op::<IntRotLeft, _>(exec, inputs, output),
 
-        Op::IntEqual => cmp_op::<IntEqual, _>(exec, inputs, output),
-        Op::IntNotEqual => cmp_op::<IntNotEqual, _>(exec, inputs, output),
-        Op::IntLess => cmp_op::<IntLess, _>(exec, inputs, output),
-        Op::IntSignedLess => cmp_op::<IntSignedLess, _>(exec, inputs, output),
-        Op::IntLessEqual => cmp_op::<IntLessEqual, _>(exec, inputs, output),
-        Op::IntSignedLessEqual => cmp_op::<IntSignedLessEqual, _>(exec, inputs, output),
-        Op::IntCarry => cmp_op::<IntCarry, _>(exec, inputs, output),
-        Op::IntSignedCarry => cmp_op::<IntSignedCarry, _>(exec, inputs, output),
-        Op::IntSignedBorrow => cmp_op::<IntSignedBorrow, _>(exec, inputs, output),
+        (Op::IntRotateLeft, 1, (1, 1)) => binary_op!(IntRotateLeft, u8),
+        (Op::IntRotateLeft, 2, (2, 2)) => binary_op!(IntRotateLeft, u16),
+        (Op::IntRotateLeft, 4, (4, 4)) => binary_op!(IntRotateLeft, u32),
+        (Op::IntRotateLeft, 8, (8, 8)) => binary_op!(IntRotateLeft, u64),
+        (Op::IntRotateLeft, 16, (16, 16)) => binary_op!(IntRotateLeft, u128),
+        (Op::IntRotateLeft, ..) => exec.invalid_op_size(0),
 
-        Op::IntNot => int_single_op::<IntNot, _>(exec, inputs[0], output),
-        Op::IntNegate => int_single_op::<IntNeg, _>(exec, inputs[0], output),
-        Op::IntCountOnes => count_ones(exec, inputs[0], output),
-        Op::IntCountLeadingZeroes => count_leading_zeros(exec, inputs[0], output),
+        (Op::IntRotateRight, 1, (1, 1)) => binary_op!(IntRotateRight, u8),
+        (Op::IntRotateRight, 2, (2, 2)) => binary_op!(IntRotateRight, u16),
+        (Op::IntRotateRight, 4, (4, 4)) => binary_op!(IntRotateRight, u32),
+        (Op::IntRotateRight, 8, (8, 8)) => binary_op!(IntRotateRight, u64),
+        (Op::IntRotateRight, 16, (16, 16)) => binary_op!(IntRotateRight, u128),
+        (Op::IntRotateRight, ..) => exec.invalid_op_size(0),
 
-        Op::BoolAnd => bool_op::<BoolAnd, _>(exec, inputs, output),
-        Op::BoolOr => bool_op::<BoolOr, _>(exec, inputs, output),
-        Op::BoolXor => bool_op::<BoolXor, _>(exec, inputs, output),
-        Op::BoolNot => bool_not(exec, inputs[0], output),
+        (Op::IntEqual, 1, (1, 1)) => cmp_op!(IntEqual, u8),
+        (Op::IntEqual, 1, (2, 2)) => cmp_op!(IntEqual, u16),
+        (Op::IntEqual, 1, (4, 4)) => cmp_op!(IntEqual, u32),
+        (Op::IntEqual, 1, (8, 8)) => cmp_op!(IntEqual, u64),
+        (Op::IntEqual, 1, (16, 16)) => cmp_op!(IntEqual, u128),
+        (Op::IntEqual, ..) => exec.invalid_op_size(0),
 
-        Op::FloatAdd => float_op::<FloatAdd, _>(exec, inputs, output),
-        Op::FloatSub => float_op::<FloatSub, _>(exec, inputs, output),
-        Op::FloatMul => float_op::<FloatMul, _>(exec, inputs, output),
-        Op::FloatDiv => float_op::<FloatDiv, _>(exec, inputs, output),
+        (Op::IntNotEqual, 1, (1, 1)) => cmp_op!(IntNotEqual, u8),
+        (Op::IntNotEqual, 1, (2, 2)) => cmp_op!(IntNotEqual, u16),
+        (Op::IntNotEqual, 1, (4, 4)) => cmp_op!(IntNotEqual, u32),
+        (Op::IntNotEqual, 1, (8, 8)) => cmp_op!(IntNotEqual, u64),
+        (Op::IntNotEqual, 1, (16, 16)) => cmp_op!(IntNotEqual, u128),
+        (Op::IntNotEqual, ..) => exec.invalid_op_size(0),
 
-        Op::FloatNegate => float_single_op::<FloatNeg, _>(exec, inputs[0], output),
-        Op::FloatAbs => float_single_op::<FloatAbs, _>(exec, inputs[0], output),
-        Op::FloatSqrt => float_single_op::<FloatSqrt, _>(exec, inputs[0], output),
-        Op::FloatCeil => float_single_op::<FloatCeil, _>(exec, inputs[0], output),
-        Op::FloatFloor => float_single_op::<FloatFloor, _>(exec, inputs[0], output),
-        Op::FloatRound => float_single_op::<FloatRound, _>(exec, inputs[0], output),
-        Op::FloatIsNan => is_nan(exec, inputs[0], output),
+        (Op::IntLess, 1, (1, 1)) => cmp_op!(IntLess, u8),
+        (Op::IntLess, 1, (2, 2)) => cmp_op!(IntLess, u16),
+        (Op::IntLess, 1, (4, 4)) => cmp_op!(IntLess, u32),
+        (Op::IntLess, 1, (8, 8)) => cmp_op!(IntLess, u64),
+        (Op::IntLess, 1, (16, 16)) => cmp_op!(IntLess, u128),
+        (Op::IntLess, ..) => exec.invalid_op_size(0),
 
-        Op::FloatEqual => float_cmp_op::<FloatEq, _>(exec, inputs, output),
-        Op::FloatNotEqual => float_cmp_op::<FloatNe, _>(exec, inputs, output),
-        Op::FloatLess => float_cmp_op::<FloatLt, _>(exec, inputs, output),
-        Op::FloatLessEqual => float_cmp_op::<FloatLe, _>(exec, inputs, output),
+        (Op::IntSignedLess, 1, (1, 1)) => cmp_op!(IntSignedLess, u8),
+        (Op::IntSignedLess, 1, (2, 2)) => cmp_op!(IntSignedLess, u16),
+        (Op::IntSignedLess, 1, (4, 4)) => cmp_op!(IntSignedLess, u32),
+        (Op::IntSignedLess, 1, (8, 8)) => cmp_op!(IntSignedLess, u64),
+        (Op::IntSignedLess, 1, (16, 16)) => cmp_op!(IntSignedLess, u128),
+        (Op::IntSignedLess, ..) => exec.invalid_op_size(0),
 
-        Op::Load(id) => {
-            let addr: u64 = exec.read_dynamic(inputs[0]).zxt();
+        (Op::IntLessEqual, 1, (1, 1)) => cmp_op!(IntLessEqual, u8),
+        (Op::IntLessEqual, 1, (2, 2)) => cmp_op!(IntLessEqual, u16),
+        (Op::IntLessEqual, 1, (4, 4)) => cmp_op!(IntLessEqual, u32),
+        (Op::IntLessEqual, 1, (8, 8)) => cmp_op!(IntLessEqual, u64),
+        (Op::IntLessEqual, 1, (16, 16)) => cmp_op!(IntLessEqual, u128),
+        (Op::IntLessEqual, ..) => exec.invalid_op_size(0),
+
+        (Op::IntSignedLessEqual, 1, (1, 1)) => cmp_op!(IntSignedLessEqual, u8),
+        (Op::IntSignedLessEqual, 1, (2, 2)) => cmp_op!(IntSignedLessEqual, u16),
+        (Op::IntSignedLessEqual, 1, (4, 4)) => cmp_op!(IntSignedLessEqual, u32),
+        (Op::IntSignedLessEqual, 1, (8, 8)) => cmp_op!(IntSignedLessEqual, u64),
+        (Op::IntSignedLessEqual, 1, (16, 16)) => cmp_op!(IntSignedLessEqual, u128),
+        (Op::IntSignedLessEqual, ..) => exec.invalid_op_size(0),
+
+        (Op::IntCarry, 1, (1, 1)) => cmp_op!(IntCarry, u8),
+        (Op::IntCarry, 1, (2, 2)) => cmp_op!(IntCarry, u16),
+        (Op::IntCarry, 1, (4, 4)) => cmp_op!(IntCarry, u32),
+        (Op::IntCarry, 1, (8, 8)) => cmp_op!(IntCarry, u64),
+        (Op::IntCarry, 1, (16, 16)) => cmp_op!(IntCarry, u128),
+        (Op::IntCarry, ..) => exec.invalid_op_size(0),
+
+        (Op::IntSignedCarry, 1, (1, 1)) => cmp_op!(IntSignedCarry, u8),
+        (Op::IntSignedCarry, 1, (2, 2)) => cmp_op!(IntSignedCarry, u16),
+        (Op::IntSignedCarry, 1, (4, 4)) => cmp_op!(IntSignedCarry, u32),
+        (Op::IntSignedCarry, 1, (8, 8)) => cmp_op!(IntSignedCarry, u64),
+        (Op::IntSignedCarry, 1, (16, 16)) => cmp_op!(IntSignedCarry, u128),
+        (Op::IntSignedCarry, ..) => exec.invalid_op_size(0),
+
+        (Op::IntSignedBorrow, 1, (1, 1)) => cmp_op!(IntSignedBorrow, u8),
+        (Op::IntSignedBorrow, 1, (2, 2)) => cmp_op!(IntSignedBorrow, u16),
+        (Op::IntSignedBorrow, 1, (4, 4)) => cmp_op!(IntSignedBorrow, u32),
+        (Op::IntSignedBorrow, 1, (8, 8)) => cmp_op!(IntSignedBorrow, u64),
+        (Op::IntSignedBorrow, 1, (16, 16)) => cmp_op!(IntSignedBorrow, u128),
+        (Op::IntSignedBorrow, ..) => exec.invalid_op_size(0),
+
+        (Op::IntNot, 1, (1, 0)) => unary_op!(IntNot, u8),
+        (Op::IntNot, 2, (2, 0)) => unary_op!(IntNot, u16),
+        (Op::IntNot, 4, (4, 0)) => unary_op!(IntNot, u32),
+        (Op::IntNot, 8, (8, 0)) => unary_op!(IntNot, u64),
+        (Op::IntNot, 16, (16, 0)) => unary_op!(IntNot, u128),
+        (Op::IntNot, ..) => exec.invalid_op_size(0),
+
+        (Op::IntNegate, 1, (1, 0)) => unary_op!(IntNegate, u8),
+        (Op::IntNegate, 2, (2, 0)) => unary_op!(IntNegate, u16),
+        (Op::IntNegate, 4, (4, 0)) => unary_op!(IntNegate, u32),
+        (Op::IntNegate, 8, (8, 0)) => unary_op!(IntNegate, u64),
+        (Op::IntNegate, 16, (16, 0)) => unary_op!(IntNegate, u128),
+        (Op::IntNegate, ..) => exec.invalid_op_size(0),
+
+        (Op::IntCountOnes, _, (1, 0)) => count_ones!(u8),
+        (Op::IntCountOnes, _, (2, 0)) => count_ones!(u16),
+        (Op::IntCountOnes, _, (4, 0)) => count_ones!(u32),
+        (Op::IntCountOnes, _, (8, 0)) => count_ones!(u64),
+        (Op::IntCountOnes, _, (16, 0)) => count_ones!(u128),
+        (Op::IntCountOnes, ..) => exec.invalid_op_size(0),
+
+        (Op::IntCountLeadingZeroes, _, (1, 0)) => count_leading_zeros!(u8),
+        (Op::IntCountLeadingZeroes, _, (2, 0)) => count_leading_zeros!(u16),
+        (Op::IntCountLeadingZeroes, _, (4, 0)) => count_leading_zeros!(u32),
+        (Op::IntCountLeadingZeroes, _, (8, 0)) => count_leading_zeros!(u64),
+        (Op::IntCountLeadingZeroes, _, (16, 0)) => count_leading_zeros!(u128),
+        (Op::IntCountLeadingZeroes, ..) => exec.invalid_op_size(0),
+
+        (Op::BoolAnd, 1, (1, 1)) => bool_binary_op!(BoolAnd),
+        (Op::BoolAnd, ..) => exec.invalid_op_size(0),
+
+        (Op::BoolOr, 1, (1, 1)) => bool_binary_op!(BoolOr),
+        (Op::BoolOr, ..) => exec.invalid_op_size(0),
+
+        (Op::BoolXor, 1, (1, 1)) => bool_binary_op!(BoolXor),
+        (Op::BoolXor, ..) => exec.invalid_op_size(0),
+
+        (Op::BoolNot, 1, (1, 0)) => {
+            exec.write_var(output, pcode::cast_bool(exec.read::<u8>(a) == 0));
+        }
+        (Op::BoolNot, ..) => exec.invalid_op_size(0),
+
+        // (Op::FloatAdd, 2, (2, 2)) => binary_op!(FloatAdd, u16), // TODO: 16-bit floats
+        (Op::FloatAdd, 4, (4, 4)) => binary_op!(FloatAdd, u32),
+        (Op::FloatAdd, 8, (8, 8)) => binary_op!(FloatAdd, u64),
+        (Op::FloatAdd, 10, (10, 10)) => binary_op!(FloatAdd, [u8; 10]),
+        (Op::FloatAdd, ..) => exec.invalid_op_size(0),
+
+        (Op::FloatSub, 4, (4, 4)) => binary_op!(FloatSub, u32),
+        (Op::FloatSub, 8, (8, 8)) => binary_op!(FloatSub, u64),
+        (Op::FloatSub, 10, (10, 10)) => binary_op!(FloatSub, [u8; 10]),
+        (Op::FloatSub, ..) => exec.invalid_op_size(0),
+
+        (Op::FloatMul, 4, (4, 4)) => binary_op!(FloatMul, u32),
+        (Op::FloatMul, 8, (8, 8)) => binary_op!(FloatMul, u64),
+        (Op::FloatMul, 10, (10, 10)) => binary_op!(FloatMul, [u8; 10]),
+        (Op::FloatMul, ..) => exec.invalid_op_size(0),
+
+        (Op::FloatDiv, 4, (4, 4)) => binary_op!(FloatDiv, u32),
+        (Op::FloatDiv, 8, (8, 8)) => binary_op!(FloatDiv, u64),
+        (Op::FloatDiv, 10, (10, 10)) => binary_op!(FloatDiv, [u8; 10]),
+        (Op::FloatDiv, ..) => exec.invalid_op_size(0),
+
+        (Op::FloatNegate, 4, (4, _)) => unary_op!(FloatNegate, u32),
+        (Op::FloatNegate, 8, (8, _)) => unary_op!(FloatNegate, u64),
+        (Op::FloatNegate, 10, (10, _)) => unary_op!(FloatNegate, [u8; 10]),
+        (Op::FloatNegate, ..) => exec.invalid_op_size(0),
+
+        (Op::FloatAbs, 4, (4, _)) => unary_op!(FloatAbs, u32),
+        (Op::FloatAbs, 8, (8, _)) => unary_op!(FloatAbs, u64),
+        (Op::FloatAbs, 10, (10, _)) => unary_op!(FloatAbs, [u8; 10]),
+        (Op::FloatAbs, ..) => exec.invalid_op_size(0),
+
+        (Op::FloatSqrt, 4, (4, _)) => unary_op!(FloatSqrt, u32),
+        (Op::FloatSqrt, 8, (8, _)) => unary_op!(FloatSqrt, u64),
+        (Op::FloatSqrt, 10, (10, _)) => unary_op!(FloatSqrt, [u8; 10]),
+        (Op::FloatSqrt, ..) => exec.invalid_op_size(0),
+
+        (Op::FloatCeil, 4, (4, _)) => unary_op!(FloatCeil, u32),
+        (Op::FloatCeil, 8, (8, _)) => unary_op!(FloatCeil, u64),
+        (Op::FloatCeil, 10, (10, _)) => unary_op!(FloatCeil, [u8; 10]),
+        (Op::FloatCeil, ..) => exec.invalid_op_size(0),
+
+        (Op::FloatFloor, 4, (4, _)) => unary_op!(FloatFloor, u32),
+        (Op::FloatFloor, 8, (8, _)) => unary_op!(FloatFloor, u64),
+        (Op::FloatFloor, 10, (10, _)) => unary_op!(FloatFloor, [u8; 10]),
+        (Op::FloatFloor, ..) => exec.invalid_op_size(0),
+
+        (Op::FloatRound, 4, (4, _)) => unary_op!(FloatRound, u32),
+        (Op::FloatRound, 8, (8, _)) => unary_op!(FloatRound, u64),
+        (Op::FloatRound, 10, (10, _)) => unary_op!(FloatRound, [u8; 10]),
+        (Op::FloatRound, ..) => exec.invalid_op_size(0),
+
+        (Op::FloatIsNan, 1, (4, _)) => float_is_nan!(u32),
+        (Op::FloatIsNan, 1, (8, _)) => float_is_nan!(u64),
+        (Op::FloatIsNan, 1, (10, _)) => float_is_nan!([u8; 10]),
+        (Op::FloatIsNan, ..) => exec.invalid_op_size(0),
+
+        (Op::FloatEqual, 1, (4, 4)) => cmp_op!(FloatEqual, u32),
+        (Op::FloatEqual, 1, (8, 8)) => cmp_op!(FloatEqual, u64),
+        (Op::FloatEqual, 1, (10, 10)) => cmp_op!(FloatEqual, [u8; 10]),
+        (Op::FloatEqual, ..) => exec.invalid_op_size(0),
+
+        (Op::FloatNotEqual, 1, (4, 4)) => cmp_op!(FloatNotEqual, u32),
+        (Op::FloatNotEqual, 1, (8, 8)) => cmp_op!(FloatNotEqual, u64),
+        (Op::FloatNotEqual, 1, (10, 10)) => cmp_op!(FloatNotEqual, [u8; 10]),
+        (Op::FloatNotEqual, ..) => exec.invalid_op_size(0),
+
+        (Op::FloatLess, 1, (4, 4)) => cmp_op!(FloatLess, u32),
+        (Op::FloatLess, 1, (8, 8)) => cmp_op!(FloatLess, u64),
+        (Op::FloatLess, 1, (10, 10)) => cmp_op!(FloatLess, [u8; 10]),
+        (Op::FloatLess, ..) => exec.invalid_op_size(0),
+
+        (Op::FloatLessEqual, 1, (4, 4)) => cmp_op!(FloatLessEqual, u32),
+        (Op::FloatLessEqual, 1, (8, 8)) => cmp_op!(FloatLessEqual, u64),
+        (Op::FloatLessEqual, 1, (10, 10)) => cmp_op!(FloatLessEqual, [u8; 10]),
+        (Op::FloatLessEqual, ..) => exec.invalid_op_size(0),
+
+        (Op::Select(cond_var), ..) => {
+            let cond = exec.read_var::<u8>(VarNode::new(cond_var, 1));
+            let input = if cond != 0 { a } else { b };
+            copy(exec, input, output)
+        }
+
+        (Op::Load(id), ..) => {
+            let addr: u64 = exec.read_dynamic(stmt.inputs.get()[0]).zxt();
             if let Err(e) = load(exec, id, output, addr) {
                 exec.exception(ExceptionCode::from_load_error(e), addr)
             }
         }
-        Op::Store(id) => {
-            let addr: u64 = exec.read_dynamic(inputs[0]).zxt();
-            if let Err(e) = store(exec, id, addr, inputs[1]) {
+        (Op::Store(id), ..) => {
+            let addr: u64 = exec.read_dynamic(stmt.inputs.get()[0]).zxt();
+            if let Err(e) = store(exec, id, addr, stmt.inputs.get()[1]) {
                 exec.exception(ExceptionCode::from_store_error(e), addr)
             }
         }
 
-        Op::Arg(id) => {
-            let value = exec.read_dynamic(inputs[0]).zxt();
+        (Op::Arg(id), ..) => {
+            let value = exec.read_dynamic(stmt.inputs.get()[0]).zxt();
             exec.set_arg(id, value);
         }
-        Op::PcodeOp(id) => exec.call_helper(id, output, inputs),
-        Op::Hook(id) => exec.call_hook(id),
-        Op::Exception => {
-            let a: u32 = exec.read_dynamic(inputs[0]).zxt();
-            let b: u64 = exec.read_dynamic(inputs[1]).zxt();
-            exec.exception(ExceptionCode::from_u32(a), b);
+        (Op::PcodeOp(id), ..) => exec.call_helper(id, output, stmt.inputs.get()),
+        (Op::Hook(id), ..) => exec.call_hook(id),
+        (Op::HookIf(id), ..) => {
+            let cond: u8 = exec.read(stmt.inputs.get()[0]);
+            if cond != 0 {
+                exec.call_hook(id);
+            }
         }
 
-        Op::InstructionMarker => exec.next_instruction(inputs[0].as_u64(), inputs[1].as_u64()),
-        Op::Invalid => exec.exception(ExceptionCode::InvalidInstruction, 0),
+        (Op::InstructionMarker, 0, (8, 8)) => {
+            exec.next_instruction(stmt.inputs.get()[0].as_u64(), stmt.inputs.get()[1].as_u64())
+        }
+        (Op::InstructionMarker, ..) => exec.invalid_op_size(0),
 
-        Op::Subpiece(_)
-        | Op::Branch(_)
-        | Op::PcodeBranch(_)
-        | Op::PcodeLabel(_)
-        | Op::TracerLoad(_)
-        | Op::TracerStore(_) => panic!("Unexpected operation in interpreter: {stmt:?}"),
+        (Op::Exception, ..) => {
+            let a: u32 = exec.read_dynamic(stmt.inputs.get()[0]).zxt();
+            let b: u64 = exec.read_dynamic(stmt.inputs.get()[1]).zxt();
+            exec.exception(ExceptionCode::from_u32(a), b);
+        }
+        (Op::Invalid, ..) => exec.exception(ExceptionCode::InvalidInstruction, 0),
+
+        (
+            Op::Subpiece(_)
+            | Op::Branch(_)
+            | Op::PcodeBranch(_)
+            | Op::PcodeLabel(_)
+            | Op::TracerLoad(_)
+            | Op::TracerStore(_),
+            ..,
+        ) => panic!("Unexpected operation in interpreter: {stmt:?}"),
+    }
+}
+
+#[inline(never)]
+#[cold]
+fn copy_cold<E: ValueSource>(exec: &mut E, input: Value, output: VarNode) {
+    for i in 0..output.size {
+        let byte = exec.read::<u8>(input.slice(i, 1));
+        exec.write_var(output.slice(i, 1), byte);
     }
 }
 
 fn copy<E: ValueSource>(exec: &mut E, input: Value, output: VarNode) {
-    #[inline(never)]
-    #[cold]
-    fn cold<E: ValueSource>(exec: &mut E, input: Value, output: VarNode) {
-        for i in 0..output.size {
-            let byte = exec.read::<u8>(input.slice(i, 1));
-            exec.write_var(output.slice(i, 1), byte);
-        }
-    }
-
     macro_rules! copy {
         ($ty:ty) => {{
             let value = exec.read::<$ty>(input);
@@ -169,107 +568,46 @@ fn copy<E: ValueSource>(exec: &mut E, input: Value, output: VarNode) {
         4 => copy!(u32),
         8 => copy!(u64),
         16 => copy!(u128),
-        _ => cold(exec, input, output),
+        _ => copy_cold(exec, input, output),
     }
 }
 
-fn zero_extend<E: ValueSource>(exec: &mut E, input: Value, output: VarNode) {
-    #[inline(never)]
-    #[cold]
-    fn cold<E: ValueSource>(exec: &mut E, input: Value, output: VarNode) {
-        // Copy value
-        for i in 0..input.size() {
-            let byte = exec.read::<u8>(input.slice(i, 1));
-            exec.write_var(output.slice(i, 1), byte);
-        }
-
-        // Zero extend
-        for i in input.size()..output.size {
-            exec.write_var(output.slice(i, 1), 0_u8);
-        }
+#[inline(never)]
+#[cold]
+fn zext_cold<E: ValueSource>(exec: &mut E, input: Value, output: VarNode) {
+    // Copy value
+    for i in 0..input.size() {
+        let byte = exec.read::<u8>(input.slice(i, 1));
+        exec.write_var(output.slice(i, 1), byte);
     }
 
-    macro_rules! eval {
-        ($in_ty:ty, $out_ty:ty) => {{
-            let value = exec.read::<$in_ty>(input) as $out_ty;
-            exec.write_var(output, value);
-        }};
-
-        ($in_ty:ty) => {
-            match output.size {
-                1 => eval!($in_ty, u8),
-                2 => eval!($in_ty, u16),
-                4 => eval!($in_ty, u32),
-                8 => eval!($in_ty, u64),
-                16 => eval!($in_ty, u128),
-                _ => cold(exec, input, output),
-            }
-        };
-    }
-
-    match input.size() {
-        1 => eval!(u8),
-        2 => eval!(u16),
-        4 => eval!(u32),
-        8 => eval!(u64),
-        16 => eval!(u128),
-        _ => cold(exec, input, output),
+    // Zero extend
+    for i in input.size()..output.size {
+        exec.write_var(output.slice(i, 1), 0_u8);
     }
 }
 
-pub fn sign_extend<E>(exec: &mut E, input: Value, output: VarNode)
+#[inline(never)]
+#[cold]
+fn sext_cold<E>(exec: &mut E, input: Value, output: VarNode)
 where
     E: ValueSource,
 {
-    #[inline(never)]
-    #[cold]
-    fn cold<E>(exec: &mut E, input: Value, output: VarNode)
-    where
-        E: ValueSource,
-    {
-        if input.size() == output.size {
-            return copy(exec, input, output);
-        }
-
-        // Copy value
-        let mut byte = 0;
-        for i in 0..input.size() {
-            byte = exec.read::<u8>(input.slice(i, 1));
-            exec.write_var(output.slice(i, 1), byte);
-        }
-
-        // Sign-extend
-        let fill: u8 = if byte >> 7 == 0 { 0x00 } else { 0xff };
-        for i in input.size()..output.size {
-            exec.write_var::<u8>(output.slice(i, 1), fill);
-        }
+    if input.size() == output.size {
+        return copy(exec, input, output);
     }
 
-    macro_rules! eval {
-        ($in_ty:ty, $out_ty:ty) => {{
-            let value =
-                <$out_ty>::from_ne_bytes(resize_sxt(exec.read::<$in_ty>(input).to_ne_bytes()));
-            exec.write_var(output, value);
-        }};
-
-        ($in_ty:ty) => {
-            match output.size {
-                1 => eval!($in_ty, u8),
-                2 => eval!($in_ty, u16),
-                4 => eval!($in_ty, u32),
-                8 => eval!($in_ty, u64),
-                16 => eval!($in_ty, u128),
-                _ => cold(exec, input, output),
-            }
-        };
+    // Copy value
+    let mut byte = 0;
+    for i in 0..input.size() {
+        byte = exec.read::<u8>(input.slice(i, 1));
+        exec.write_var(output.slice(i, 1), byte);
     }
-    match input.size() {
-        1 => eval!(u8),
-        2 => eval!(u16),
-        4 => eval!(u32),
-        8 => eval!(u64),
-        16 => eval!(u128),
-        _ => cold(exec, input, output),
+
+    // Sign-extend
+    let fill: u8 = if byte >> 7 == 0 { 0x00 } else { 0xff };
+    for i in input.size()..output.size {
+        exec.write_var::<u8>(output.slice(i, 1), fill);
     }
 }
 
@@ -378,6 +716,7 @@ macro_rules! impl_primitive {
     ($unsigned:ty, $signed:ty) => {
         impl Signed for $unsigned {
             type Signed = $signed;
+            #[inline(always)]
             fn to_signed(self) -> Self::Signed {
                 self as Self::Signed
             }
@@ -385,6 +724,7 @@ macro_rules! impl_primitive {
 
         impl ToUnsigned for $signed {
             type Unsigned = $unsigned;
+            #[inline(always)]
             fn to_unsigned(self) -> Self::Unsigned {
                 self as Self::Unsigned
             }
@@ -397,35 +737,6 @@ impl_primitive!(u16, i16);
 impl_primitive!(u32, i32);
 impl_primitive!(u64, i64);
 impl_primitive!(u128, i128);
-
-#[inline(always)]
-fn int_op<O, E>(exec: &mut E, inputs: [Value; 2], output: VarNode)
-where
-    O: IntOp<u8>,
-    O: IntOp<u16>,
-    O: IntOp<u32>,
-    O: IntOp<u64>,
-    O: IntOp<u128>,
-    E: PcodeExecutor,
-{
-    let [a, b] = inputs;
-    macro_rules! eval {
-        ($ty:ty) => {{
-            let a: $ty = exec.read(a);
-            let b: $ty = exec.read(b);
-            exec.write_var(output, O::eval(a, b));
-        }};
-    }
-
-    match output.size {
-        1 => eval!(u8),
-        2 => eval!(u16),
-        4 => eval!(u32),
-        8 => eval!(u64),
-        16 => eval!(u128),
-        size => exec.invalid_op_size(size),
-    }
-}
 
 /// Represents an operation taking two integers as input and producing an output where the input and
 /// output sizes are the type.
@@ -459,75 +770,13 @@ impl_eval_int_op! { IntOr,          (a, b, a | b) }
 impl_eval_int_op! { IntAnd,         (a, b, a & b) }
 impl_eval_int_op! { IntMul,         (a, b, a.wrapping_mul(b)) }
 
-impl_eval_int_op! { IntRotLeft,     (a, b, a.rotate_left(b as u32)) }
-impl_eval_int_op! { IntRotRight,    (a, b, a.rotate_right(b as u32)) }
-
-#[inline(always)]
-fn div_op<O, E>(exec: &mut E, inputs: [Value; 2], output: VarNode)
-where
-    O: IntOp<u8>,
-    O: IntOp<u16>,
-    O: IntOp<u32>,
-    O: IntOp<u64>,
-    O: IntOp<u128>,
-    E: PcodeExecutor,
-{
-    let [a, b] = inputs;
-    macro_rules! eval {
-        ($ty:ty) => {{
-            let a: $ty = exec.read(a);
-            let b: $ty = exec.read(b);
-            if b == 0 {
-                exec.exception(ExceptionCode::DivideByZero, 0);
-                return;
-            }
-            exec.write_var(output, O::eval(a, b));
-        }};
-    }
-
-    match output.size {
-        1 => eval!(u8),
-        2 => eval!(u16),
-        4 => eval!(u32),
-        8 => eval!(u64),
-        16 => eval!(u128),
-        size => exec.invalid_op_size(size),
-    }
-}
+impl_eval_int_op! { IntRotateLeft,  (a, b, a.rotate_left(b as u32)) }
+impl_eval_int_op! { IntRotateRight, (a, b, a.rotate_right(b as u32)) }
 
 impl_eval_int_op! { IntDiv,         (a, b, a / b) }
 impl_eval_int_op! { IntSignedDiv,   (a, b, a.to_signed().wrapping_div(b.to_signed()).to_unsigned()) }
 impl_eval_int_op! { IntRem,         (a, b, a % b) }
 impl_eval_int_op! { IntSignedRem,   (a, b, a.to_signed().wrapping_rem(b.to_signed()).to_unsigned()) }
-
-#[inline(always)]
-fn cmp_op<O, E>(exec: &mut E, inputs: [Value; 2], output: VarNode)
-where
-    O: CmpOp<u8>,
-    O: CmpOp<u16>,
-    O: CmpOp<u32>,
-    O: CmpOp<u64>,
-    O: CmpOp<u128>,
-    E: PcodeExecutor,
-{
-    let [a, b] = inputs;
-    macro_rules! eval {
-        ($ty:ty) => {{
-            let a: $ty = exec.read(a);
-            let b: $ty = exec.read(b);
-            exec.write_var(output, O::eval(a, b) as u8);
-        }};
-    }
-
-    match a.size() {
-        1 => eval!(u8),
-        2 => eval!(u16),
-        4 => eval!(u32),
-        8 => eval!(u64),
-        16 => eval!(u128),
-        size => exec.invalid_op_size(size),
-    }
-}
 
 /// Represents an operation taking two inputs of the same size producing a boolean output
 trait CmpOp<T>: Sized {
@@ -566,33 +815,6 @@ trait IntSingleOp<T>: Sized {
     fn eval(a: T) -> T;
 }
 
-#[inline(always)]
-fn int_single_op<O, E>(exec: &mut E, input: Value, output: VarNode)
-where
-    O: IntSingleOp<u8>,
-    O: IntSingleOp<u16>,
-    O: IntSingleOp<u32>,
-    O: IntSingleOp<u64>,
-    O: IntSingleOp<u128>,
-    E: PcodeExecutor,
-{
-    macro_rules! eval {
-        ($ty:ty) => {{
-            let input: $ty = exec.read(input);
-            exec.write_var(output, O::eval(input));
-        }};
-    }
-
-    match input.size() {
-        1 => eval!(u8),
-        2 => eval!(u16),
-        4 => eval!(u32),
-        8 => eval!(u64),
-        16 => eval!(u128),
-        size => exec.invalid_op_size(size),
-    }
-}
-
 macro_rules! impl_eval_int_single_op {
     ($struct:ident, ($a:ident, $impl:expr)) => {
         impl_eval_int_single_op! { $struct, ($a, $impl), u8, u16, u32, u64, u128 }
@@ -611,50 +833,8 @@ macro_rules! impl_eval_int_single_op {
     };
 }
 
-impl_eval_int_single_op! { IntNeg, (a, (-a.to_signed()).to_unsigned()) }
+impl_eval_int_single_op! { IntNegate, (a, (-a.to_signed()).to_unsigned()) }
 impl_eval_int_single_op! { IntNot, (a, !a) }
-
-pub fn count_ones<E>(exec: &mut E, input: Value, output: VarNode)
-where
-    E: PcodeExecutor,
-{
-    let result = match input.size() {
-        1 => exec.read::<u8>(input).count_ones(),
-        2 => exec.read::<u16>(input).count_ones(),
-        4 => exec.read::<u32>(input).count_ones(),
-        8 => exec.read::<u64>(input).count_ones(),
-        16 => exec.read::<u128>(input).count_ones(),
-        size => return exec.invalid_op_size(size),
-    };
-    exec.write_trunc(output, result);
-}
-
-fn count_leading_zeros<E>(exec: &mut E, input: Value, output: VarNode)
-where
-    E: PcodeExecutor,
-{
-    let result = match input.size() {
-        1 => exec.read::<u8>(input).leading_zeros(),
-        2 => exec.read::<u16>(input).leading_zeros(),
-        4 => exec.read::<u32>(input).leading_zeros(),
-        8 => exec.read::<u64>(input).leading_zeros(),
-        16 => exec.read::<u128>(input).leading_zeros(),
-        size => return exec.invalid_op_size(size),
-    };
-    exec.write_trunc(output, result);
-}
-
-#[inline(always)]
-fn bool_op<O, E>(exec: &mut E, inputs: [Value; 2], output: VarNode)
-where
-    O: BoolOp,
-    E: PcodeExecutor,
-{
-    let [a, b] = inputs;
-    let a: u8 = exec.read(a);
-    let b: u8 = exec.read(b);
-    exec.write_var(output, O::eval(a, b) as u8);
-}
 
 /// Represents an operation taking two inputs of the same size producing a boolean output
 trait BoolOp: Sized {
@@ -677,39 +857,6 @@ impl_bool_op! { BoolAnd,    (a, b, a & b != 0) }
 impl_bool_op! { BoolOr,     (a, b, a | b != 0) }
 impl_bool_op! { BoolXor,    (a, b, a ^ b != 0) }
 
-pub fn bool_not<E>(exec: &mut E, input: Value, output: VarNode)
-where
-    E: PcodeExecutor,
-{
-    let x = exec.read::<u8>(input);
-    exec.write_var(output, pcode::cast_bool(x == 0));
-}
-
-#[inline(always)]
-fn float_op<O, E>(exec: &mut E, inputs: [Value; 2], output: VarNode)
-where
-    O: FloatOp<u32>,
-    O: FloatOp<u64>,
-    O: FloatOp<[u8; 10]>,
-    E: PcodeExecutor,
-{
-    let [a, b] = inputs;
-    macro_rules! eval {
-        ($ty:ty) => {{
-            let a: $ty = exec.read(a);
-            let b: $ty = exec.read(b);
-            exec.write_var(output, O::eval(a, b));
-        }};
-    }
-
-    match a.size() {
-        4 => eval!(u32),
-        8 => eval!(u64),
-        10 => eval!([u8; 10]),
-        size => exec.invalid_op_size(size),
-    }
-}
-
 trait ToFloat {
     type FloatType;
     fn to_float(self) -> Self::FloatType;
@@ -719,14 +866,31 @@ trait FromFloat<T> {
     fn from_float(self) -> T;
 }
 
+impl ToFloat for u16 {
+    type FloatType = f16;
+    #[inline(always)]
+    fn to_float(self) -> f16 {
+        f16::from_bits(self)
+    }
+}
+
+impl FromFloat<u16> for half::f16 {
+    #[inline(always)]
+    fn from_float(self) -> u16 {
+        self.to_bits()
+    }
+}
+
 impl ToFloat for u32 {
     type FloatType = f32;
+    #[inline(always)]
     fn to_float(self) -> f32 {
         f32::from_bits(self)
     }
 }
 
 impl FromFloat<u32> for f32 {
+    #[inline(always)]
     fn from_float(self) -> u32 {
         self.to_bits()
     }
@@ -734,12 +898,14 @@ impl FromFloat<u32> for f32 {
 
 impl ToFloat for u64 {
     type FloatType = f64;
+    #[inline(always)]
     fn to_float(self) -> f64 {
         f64::from_bits(self)
     }
 }
 
 impl FromFloat<u64> for f64 {
+    #[inline(always)]
     fn from_float(self) -> u64 {
         self.to_bits()
     }
@@ -747,13 +913,59 @@ impl FromFloat<u64> for f64 {
 
 impl ToFloat for [u8; 10] {
     type FloatType = f64;
+    #[inline(always)]
     fn to_float(self) -> f64 {
         f64::from_bits(u64::from_le_bytes(self[..8].try_into().unwrap()))
     }
 }
 
 impl FromFloat<[u8; 10]> for f64 {
+    #[inline(always)]
     fn from_float(self) -> [u8; 10] {
+        let mut v = [0u8; 10];
+        v[..8].copy_from_slice(&self.to_bits().to_le_bytes());
+        v
+    }
+}
+
+#[allow(bad_style)]
+pub type f80 = [u8; 10];
+
+trait Float80Ext {
+    fn to_bits(&self) -> [u8; 10];
+    fn to_f64(&self) -> f64;
+}
+
+impl Float80Ext for f80 {
+    fn to_bits(&self) -> [u8; 10] {
+        *self
+    }
+
+    fn to_f64(&self) -> f64 {
+        // @fixme: not implement correctly
+        f64::from_bits(u64::from_le_bytes(self[..8].try_into().unwrap()))
+    }
+}
+
+pub trait ToFloat80 {
+    fn to_f80(&self) -> f80;
+}
+
+impl ToFloat80 for f16 {
+    fn to_f80(&self) -> f80 {
+        self.to_f64().to_f80()
+    }
+}
+
+impl ToFloat80 for f32 {
+    fn to_f80(&self) -> f80 {
+        (*self as f64).to_f80()
+    }
+}
+
+impl ToFloat80 for f64 {
+    fn to_f80(&self) -> f80 {
+        // @fixme: not implement correctly.
         let mut v = [0u8; 10];
         v[..8].copy_from_slice(&self.to_bits().to_le_bytes());
         v
@@ -791,29 +1003,6 @@ impl_float_op! { FloatMul,    (a, b, a * b) }
 impl_float_op! { FloatDiv,    (a, b, a / b) }
 impl_float_op! { FloatMod,    (a, b, a % b) }
 
-#[inline(always)]
-fn float_single_op<O, E>(exec: &mut E, input: Value, output: VarNode)
-where
-    O: FloatSingleOp<u32>,
-    O: FloatSingleOp<u64>,
-    O: FloatSingleOp<[u8; 10]>,
-    E: PcodeExecutor,
-{
-    macro_rules! eval {
-        ($ty:ty) => {{
-            let input: $ty = exec.read(input);
-            exec.write_var(output, O::eval(input));
-        }};
-    }
-
-    match input.size() {
-        4 => eval!(u32),
-        8 => eval!(u64),
-        10 => eval!([u8; 10]),
-        size => exec.invalid_op_size(size),
-    }
-}
-
 /// Represents an operation that takes a single input producing a float output of the same size
 trait FloatSingleOp<T>: Sized {
     fn eval(a: T) -> T;
@@ -846,56 +1035,12 @@ macro_rules! impl_float_single_op {
     };
 }
 
-impl_float_single_op! { FloatNeg,    (a, -a) }
+impl_float_single_op! { FloatNegate, (a, -a) }
 impl_float_single_op! { FloatAbs,    (a, a.abs()) }
 impl_float_single_op! { FloatSqrt,   (a, a.sqrt()) }
 impl_float_single_op! { FloatCeil,   (a, a.ceil()) }
 impl_float_single_op! { FloatFloor,  (a, a.floor()) }
 impl_float_single_op! { FloatRound,  (a, a.round()) }
-
-pub fn is_nan<E>(exec: &mut E, input: Value, output: VarNode)
-where
-    E: PcodeExecutor,
-{
-    macro_rules! eval {
-        ($ty:ty) => {
-            exec.read::<$ty>(input).to_float().is_nan()
-        };
-    }
-
-    let result = match input.size() {
-        4 => eval!(u32),
-        8 => eval!(u64),
-        10 => eval!([u8; 10]),
-        size => return exec.invalid_op_size(size),
-    };
-    exec.write_var(output, pcode::cast_bool(result));
-}
-
-#[inline(always)]
-fn float_cmp_op<O, E>(exec: &mut E, inputs: [Value; 2], output: VarNode)
-where
-    O: FloatCmpOp<u32>,
-    O: FloatCmpOp<u64>,
-    O: FloatCmpOp<[u8; 10]>,
-    E: PcodeExecutor,
-{
-    let [a, b] = inputs;
-    macro_rules! eval {
-        ($ty:ty) => {{
-            let a: $ty = exec.read(a);
-            let b: $ty = exec.read(b);
-            exec.write_var(output, O::eval(a, b) as u8);
-        }};
-    }
-
-    match a.size() {
-        4 => eval!(u32),
-        8 => eval!(u64),
-        10 => eval!([u8; 10]),
-        size => exec.invalid_op_size(size),
-    }
-}
 
 trait FloatCmpOp<T>: Sized {
     fn eval(a: T, b: T) -> bool;
@@ -928,80 +1073,7 @@ macro_rules! impl_float_cmp_op {
     };
 }
 
-impl_float_cmp_op! { FloatEq,    (a, b, a == b) }
-impl_float_cmp_op! { FloatNe,    (a, b, a != b) }
-impl_float_cmp_op! { FloatLt,    (a, b, a < b) }
-impl_float_cmp_op! { FloatLe,    (a, b, a <= b) }
-
-fn int_to_float<E>(exec: &mut E, input: Value, output: VarNode)
-where
-    E: PcodeExecutor,
-{
-    macro_rules! to_float {
-        ($in:ty) => {{
-            let value = exec.read::<$in>(input).to_signed();
-            match output.size {
-                4 => exec.write_var::<u32>(output, FromFloat::from_float(value as f32)),
-                8 => exec.write_var::<u64>(output, FromFloat::from_float(value as f64)),
-                10 => exec.write_var::<[u8; 10]>(output, FromFloat::from_float(value as f64)),
-                size => exec.exception(ExceptionCode::InvalidFloatSize, size as u64),
-            }
-        }};
-    }
-
-    match input.size() {
-        1 => to_float!(u8),
-        2 => to_float!(u16),
-        4 => to_float!(u32),
-        8 => to_float!(u64),
-        size => exec.invalid_op_size(size),
-    }
-}
-
-fn float_to_float<E>(exec: &mut E, input: Value, output: VarNode)
-where
-    E: PcodeExecutor,
-{
-    macro_rules! cast {
-        ($val:expr) => {{
-            let val = $val;
-            match output.size {
-                4 => exec.write_var::<u32>(output, FromFloat::from_float(val as f32)),
-                8 => exec.write_var::<u64>(output, FromFloat::from_float(val as f64)),
-                10 => exec.write_var::<[u8; 10]>(output, FromFloat::from_float(val as f64)),
-                size => return exec.exception(ExceptionCode::InvalidFloatSize, size as u64),
-            }
-        }};
-    }
-
-    match input.size() {
-        4 => cast!(exec.read::<u32>(input).to_float()),
-        8 => cast!(exec.read::<u64>(input).to_float()),
-        10 => cast!(exec.read::<[u8; 10]>(input).to_float()),
-        size => exec.exception(ExceptionCode::InvalidFloatSize, size as u64),
-    }
-}
-
-fn float_to_int<E>(exec: &mut E, input: Value, output: VarNode)
-where
-    E: PcodeExecutor,
-{
-    macro_rules! cast {
-        ($val:expr) => {{
-            let val = $val;
-            match output.size {
-                2 => exec.write_var::<u16>(output, val as u16),
-                4 => exec.write_var::<u32>(output, val as u32),
-                8 => exec.write_var::<u64>(output, val as u64),
-                size => return exec.exception(ExceptionCode::InvalidFloatSize, size as u64),
-            }
-        }};
-    }
-
-    match input.size() {
-        4 => cast!(exec.read::<u32>(input).to_float() as i32),
-        8 => cast!(exec.read::<u64>(input).to_float() as i64),
-        10 => cast!(exec.read::<[u8; 10]>(input).to_float() as i64),
-        size => exec.exception(ExceptionCode::InvalidFloatSize, size as u64),
-    }
-}
+impl_float_cmp_op! { FloatEqual,     (a, b, a == b) }
+impl_float_cmp_op! { FloatNotEqual,  (a, b, a != b) }
+impl_float_cmp_op! { FloatLess,      (a, b, a <  b) }
+impl_float_cmp_op! { FloatLessEqual, (a, b, a <= b) }

@@ -212,7 +212,7 @@ struct LifterCtx<'a, 'b> {
 impl<'a, 'b> LifterCtx<'a, 'b> {
     fn subtable_export(&self, idx: u32) -> Option<Operand> {
         let export_index = idx + self.subtable.constructor.subtables.0;
-        self.lifter.exports[export_index as usize].clone()
+        self.lifter.exports[export_index as usize]
     }
 
     fn subtable_export_mut(&mut self, idx: u32) -> &mut Option<Operand> {
@@ -345,13 +345,13 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
         }
 
         let value_offset = value.offset;
-        let value_size = value.size.map(|x| x).unwrap_or(self.lifter.default_size);
+        let value_size = value.size.unwrap_or(self.lifter.default_size);
 
         Ok(match value.local {
-            Local::InstStart => constant!(self.subtable.inst.inst_start as u64),
-            Local::InstNext => constant!(self.subtable.inst.inst_next as u64),
+            Local::InstStart => constant!(self.subtable.inst.inst_start),
+            Local::InstNext => constant!(self.subtable.inst.inst_next),
             Local::Register(id) => {
-                let base_offset = self.subtable.data.named_registers[id as usize].offset as u32;
+                let base_offset = self.subtable.data.named_registers[id as usize].offset;
                 VarNode::register(base_offset + value_offset as u32, value_size).into()
             }
             Local::Field(idx) => {
@@ -360,7 +360,7 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
                 match field.attached {
                     Some(attachment) => {
                         let var = self.evaluate_attachment(local, attachment)?;
-                        var.slice(value.offset, value_size).into()
+                        var.slice(value.offset, value_size)
                     }
                     None => constant!(local as u64),
                 }
@@ -428,7 +428,7 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
                 // Discard the input by writing to a temporary.
                 let size = value.size.unwrap_or(self.lifter.default_size);
                 let var = self.lifter.alloc_tmp(size)?;
-                return Ok(Output::Var(var));
+                Ok(Output::Var(var))
             }
             // Non-zero constants are treated as errors to catch bugs.
             Operand::Value(ResolvedValue::Const(..)) => Err(Error::WriteToConstant),
@@ -473,10 +473,16 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
                 return self.emit_copy(inputs[0].slice(offset as ValueSize, output.size), output);
             }
 
+            // Rewrite sign/zero extension to the same or smaller sized output to a copy operation.
             if matches!(op, pcode::Op::SignExtend | pcode::Op::ZeroExtend)
                 && output.size <= inputs[0].size()
             {
                 return self.emit_copy(inputs[0].slice(0, output.size), output);
+            }
+
+            // Rewrite float-to-float casts to same sized values to copy operations.
+            if matches!(op, pcode::Op::FloatToFloat) && output.size == inputs[0].size() {
+                return self.emit_copy(inputs[0], output);
             }
         }
 
@@ -550,7 +556,7 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
     /// is constant, or by using a temporary variable.
     fn emit_add_offset(&mut self, base: ResolvedValue, offset: u64) -> Result<pcode::Value> {
         if offset == 0 {
-            return Ok(self.get_runtime_value(base)?);
+            return self.get_runtime_value(base);
         }
         if let ResolvedValue::Const(base, size) = base {
             return Ok(pcode::Value::Const(base + offset, self.resolve_var_size(size)?));

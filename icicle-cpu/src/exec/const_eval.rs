@@ -39,13 +39,13 @@ impl ConstEval {
         let id = self.values.len().try_into().unwrap();
         self.values.push((pcode::VarNode::NONE, Value::empty()));
 
-        let mut out = self.get_value_mut(stmt.output);
+        let out = self.get_value_mut(stmt.output);
 
         if DEBUG {
             eprintln!("[{id}] {stmt:?}");
         }
 
-        eval(stmt.op, &a, &b, &mut out);
+        eval(stmt.op, &a, &b, out);
 
         if DEBUG && !out.is_empty() {
             eprintln!("a = {} {:?}", a, a);
@@ -130,7 +130,7 @@ impl ConstEval {
     }
 
     pub fn get_const(&mut self, var: pcode::Value) -> Option<u64> {
-        self.get_value(var.into()).get_const()
+        self.get_value(var).get_const()
     }
 
     pub fn set_const(&mut self, var: pcode::VarNode, value: u64) {
@@ -171,14 +171,14 @@ pub struct Value {
 
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
-        let bits: &[Bit] = &*self;
+        let bits: &[Bit] = self;
         bits.eq(&**other)
     }
 }
 
 impl std::hash::Hash for Value {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        let bits: &[Bit] = &*self;
+        let bits: &[Bit] = self;
         bits.hash(state);
     }
 }
@@ -199,13 +199,13 @@ impl std::ops::DerefMut for Value {
 
 impl std::fmt::Debug for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        debug_bits(&*self, f)
+        debug_bits(self, f)
     }
 }
 
 impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        display_bits(&*self, f)
+        display_bits(self, f)
     }
 }
 
@@ -276,7 +276,7 @@ pub trait BitVecExt {
         for (i, bit) in self.slice().iter().enumerate() {
             match bit {
                 Bit::Expr(expr)
-                    if (id == None || id == Some(expr.id)) && i == expr.offset as usize =>
+                    if (id.is_none() || id == Some(expr.id)) && i == expr.offset as usize =>
                 {
                     id = Some(expr.id);
                 }
@@ -330,7 +330,7 @@ pub trait BitVecExt {
             self.zero_extend(other);
         }
         else {
-            self.copy(&other[..self.slice().len() as usize]);
+            self.copy(&other[..self.slice().len()]);
         }
     }
 
@@ -785,11 +785,11 @@ fn eval(op: pcode::Op, a: &[Bit], b: &[Bit], output: &mut [Bit]) {
             }
             (Some(0), None) | (None, Some(0)) => output.fill(Bit::Zero),
             (Some(x), None) if x.count_ones() == 1 => {
-                output.copy(&b);
+                output.copy(b);
                 output.shift_left(&Value::from_const((63 - x.leading_zeros()) as u64));
             }
             (None, Some(x)) if x.count_ones() == 1 => {
-                output.copy(&a);
+                output.copy(a);
                 output.shift_left(&Value::from_const((63 - x.leading_zeros()) as u64));
             }
             _ => output.fill(Bit::Unknown),
@@ -822,7 +822,7 @@ fn eval(op: pcode::Op, a: &[Bit], b: &[Bit], output: &mut [Bit]) {
         }
         Op::IntSignedLessEqual => {
             let (result, overflow) = a.sub_overflow(b);
-            let equal = a.is_eq(&b);
+            let equal = a.is_eq(b);
             *output.bool_mut() = result.sign().xor(overflow).or(equal);
         }
         Op::IntLess => {
@@ -841,7 +841,7 @@ fn eval(op: pcode::Op, a: &[Bit], b: &[Bit], output: &mut [Bit]) {
             *output.bool_mut() = a.is_eq(b).not();
         }
         Op::IntCarry => {
-            let carry = Value::from_bits(a).add(&b);
+            let carry = Value::from_bits(a).add(b);
             *output.bool_mut() = carry;
         }
         Op::IntSignedCarry => {
@@ -891,11 +891,14 @@ fn eval(op: pcode::Op, a: &[Bit], b: &[Bit], output: &mut [Bit]) {
         | Op::FloatLess
         | Op::FloatLessEqual
         | Op::IntToFloat
+        | Op::UintToFloat
         | Op::FloatToFloat
         | Op::FloatToInt => output.fill(Bit::Unknown),
 
         // These expressions always result in an unknown output.
-        Op::TracerLoad(_) | Op::Load(_) | Op::PcodeOp(_) | Op::Hook(_) => output.fill(Bit::Unknown),
+        Op::TracerLoad(_) | Op::Load(_) | Op::PcodeOp(_) | Op::Hook(_) | Op::HookIf(_) => {
+            output.fill(Bit::Unknown)
+        }
 
         // These expressions do not modify the output.
         Op::TracerStore(_)
@@ -907,6 +910,9 @@ fn eval(op: pcode::Op, a: &[Bit], b: &[Bit], output: &mut [Bit]) {
         | Op::Exception
         | Op::InstructionMarker
         | Op::Invalid => {}
+
+        // @todo: the semantics for this operation has not been fully decided on.
+        Op::Select(_) => output.fill(Bit::Unknown),
     }
 }
 

@@ -59,7 +59,7 @@ pub(crate) fn resolve(
                     }
                 }
 
-                scope.mapping.insert(ident.clone(), Local::Field(field_id));
+                scope.mapping.insert(*ident, Local::Field(field_id));
             }
             ast::DisasmAction::GlobalSet { start_sym, context_sym } => {
                 let resolved = match DisasmConstantValue::resolve_ident(scope, *start_sym).ok() {
@@ -122,7 +122,7 @@ trait ResolveIdent: Sized {
 impl ResolveIdent for DisasmConstantValue {
     fn resolve_ident(scope: &Scope, ident: ast::Ident) -> Result<Self, String> {
         match scope.lookup(ident) {
-            Some(Local::Field(id)) => Ok(Self::LocalField(id as u32)),
+            Some(Local::Field(id)) => Ok(Self::LocalField(id)),
             Some(Local::InstStart) => Ok(Self::InstStart),
             Some(Local::InstNext) => Ok(Self::InstNext),
             Some(other) => Err(format!("{:?}<{}> in disasm expr", other, scope.debug(&ident))),

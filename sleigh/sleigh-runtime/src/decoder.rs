@@ -22,6 +22,12 @@ pub struct Decoder {
     /// Configures whether token fields should be decoded as big endian.
     big_endian: bool,
 
+    /// Controls whether backtracking is allowed during instruction decoding. Required for some
+    /// specifications, however results in a performance penalty in some cases.
+    ///
+    /// @todo: Currently there is no way of disabling this from the external API.
+    allow_backtracking: bool,
+
     /// The base address of the instruction stream.
     base_addr: u64,
 
@@ -45,6 +51,7 @@ impl Decoder {
             context: 0,
             bytes: Vec::new(),
             big_endian: false,
+            allow_backtracking: true,
             base_addr: 0,
             offset: 0,
             next_offset: 0,
@@ -99,51 +106,55 @@ impl Decoder {
         inst: &mut Instruction,
         table: TableId,
     ) -> Option<DecodedConstructor> {
-        // try all constructors
-        let mut last_constructor = None;
+        // The offset next constructor to match, used to resume the search at the correct position
+        // after backtracking.
+        let mut match_offset = 0;
+
+        // Keep track of the current state before we try to the decode the first matching
+        // constructor, so we correct the state if we need to backtrack.
         let initial_offset = self.offset;
         let initial_next_offset = self.next_offset;
         let initial_context = self.context;
         let initial_global_context = self.global_context;
         let initial_token_stack_len = self.token_stack.len();
-        loop {
-            // get a matching constructor, next one if backtracking
-            last_constructor = sleigh.match_constructor_with(self, table, last_constructor);
-            let Some(constructor_id) = last_constructor else {
-                // no more constructors
-                inst.last_subtable = table;
-                return None;
-            };
-            // check if is possible to decode it
-            if let Some(constructor) =
-                self.decode_subtable_constructor(sleigh, inst, table, constructor_id)
-            {
+
+        while let Some((constructor_id, next_match_offset)) =
+            sleigh.match_constructor_with(self, table, match_offset)
+        {
+            if let Some(constructor) = self.try_decode_constructor(sleigh, inst, constructor_id) {
                 return Some(constructor);
             }
-            //otherwise just backtrack and try with the next constructor
+
+            // Failed to decode current constructor, backtrack and try again.
+            if !self.allow_backtracking {
+                break;
+            }
+            match_offset = next_match_offset;
             self.offset = initial_offset;
             self.next_offset = initial_next_offset;
+            self.token_stack.truncate(initial_token_stack_len);
             self.context = initial_context;
             self.global_context = initial_global_context;
-            self.token_stack.truncate(initial_token_stack_len);
         }
+
+        // Failed to find any matching constructor. Record last subtable searched to aid debugging.
+        inst.last_subtable = table;
+        None
     }
 
-    fn decode_subtable_constructor(
+    fn try_decode_constructor(
         &mut self,
         sleigh: &SleighData,
         inst: &mut Instruction,
-        table: TableId,
         constructor_id: ConstructorId,
     ) -> Option<DecodedConstructor> {
         let mut ctx = inst.alloc_constructor(sleigh, constructor_id).ok()?;
         let mut next = self.next_offset;
 
         if DEBUG {
+            let line = &sleigh.debug_info.constructors[constructor_id as usize].line;
             eprintln!(
-                "[{:>2}] constructor={}, offset={}, next={next} actions={:?}",
-                table,
-                constructor_id,
+                "constructor={line} (id={constructor_id}), offset={}, next={next} actions={:?}",
                 self.offset,
                 ctx.as_ref().decode_actions()
             );

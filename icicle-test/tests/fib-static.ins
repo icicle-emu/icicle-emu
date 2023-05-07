@@ -48,7 +48,7 @@
 0x4001f4 [48 89 f0] "MOV RAX,RSI";
 0x4001f7 [48 c1 e8 3f] "SHR RAX,0x3f";
 0x4001fb [48 01 c6] "ADD RSI,RAX";
-0x4001fe [48 d1 fe] "SAR RSI,1";
+0x4001fe [48 d1 fe] "SAR RSI,0x1";
 0x400201 [74 15] "JZ 0x400218";
 0x400203 [b8 00 00 00 00] "MOV EAX,0x0";
 0x400208 [48 85 c0] "TEST RAX,RAX";
@@ -670,7 +670,7 @@
 0x400b9d [4c 8b 7c 24 28] "MOV R15,qword ptr [RSP + 0x28]";
 0x400ba2 [89 d0] "MOV EAX,EDX";
 0x400ba4 [f7 e1] "MUL ECX";
-0x400ba6 [d1 ea] "SHR EDX,1";
+0x400ba6 [d1 ea] "SHR EDX,0x1";
 0x400ba8 [44 8d 5a 01] "LEA R11D,[RDX + 0x1]";
 0x400bac [4e 8d 2c 9d 00 00 00 00] "LEA R13,[R11*0x4]";
 0x400bb4 [0f 1f 40 00] "NOP dword ptr [RAX]";
@@ -747,7 +747,7 @@
 0x400ca9 [89 d0] "MOV EAX,EDX";
 0x400cab [89 ca] "MOV EDX,ECX";
 0x400cad [c1 fa 1f] "SAR EDX,0x1f";
-0x400cb0 [d1 f8] "SAR EAX,1";
+0x400cb0 [d1 f8] "SAR EAX,0x1";
 0x400cb2 [29 d0] "SUB EAX,EDX";
 0x400cb4 [48 63 d0] "MOVSXD RDX,EAX";
 0x400cb7 [8d 04 c0] "LEA EAX,[RAX + RAX*0x8]";
@@ -786,7 +786,7 @@
 0x400d21 [f6 46 fc 01] "TEST byte ptr [RSI + -0x4],0x1";
 0x400d25 [0f 85 d8 07 00 00] "JNZ 0x401503";
 0x400d2b [d9 05 23 33 00 00] "FLD dword ptr [0x404054]";
-0x400d31 [d1 f9] "SAR ECX,1";
+0x400d31 [d1 f9] "SAR ECX,0x1";
 0x400d33 [41 39 c9] "CMP R9D,ECX";
 0x400d36 [0f 82 60 0b 00 00] "JC 0x40189c";
 0x400d3c [0f 84 8b 0d 00 00] "JZ 0x401acd";

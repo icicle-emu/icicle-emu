@@ -20,6 +20,12 @@ pub struct VmCtx {
     pub hooks: [HookData; MAX_HOOKS],
 }
 
+impl Default for VmCtx {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VmCtx {
     pub fn new() -> Self {
         const NULL_HOOK: HookData = HookData::null();
@@ -194,8 +200,13 @@ impl JIT {
         self.declared_functions.clear();
     }
 
-    /// Safety: This invalidates any references to the JITed functions.
-    // @fixme: Prevent any references to JITed functions from occuring outside of the JIT.
+    /// Fully clear and re-initialize that state of the JIT.
+    ///
+    /// # Safety
+    ///
+    /// This invalidates any references to the JITed functions.
+    ///
+    /// @fixme: Prevent any references to JITed functions from occuring outside of the JIT.
     pub unsafe fn reset(&mut self) {
         self.clear();
 
@@ -275,7 +286,7 @@ impl JIT {
             .code_ctx
             .compiled_code()
             .as_ref()
-            .and_then(|x| x.disasm.clone())
+            .and_then(|x| x.vcode.clone())
             .unwrap_or_else(|| "unknown".into());
 
         self.module.finalize_definitions()?;
@@ -287,8 +298,7 @@ impl JIT {
     fn get_jit_func(&mut self, func: FuncId) -> JitFunction {
         let fn_ptr = self.module.get_finalized_function(func);
         // Safety: the finalized function is expected to be generated correctly.
-        let jit_fn = unsafe { std::mem::transmute(fn_ptr) };
-        jit_fn
+        unsafe { std::mem::transmute(fn_ptr) }
     }
 
     /// Translate the pending blocks to Cranelift IR function, and define it in the module.
@@ -362,9 +372,6 @@ fn init_module(endianness: Endianness) -> (JITModule, RuntimeFunctions) {
     // needing a GOT. (Note: this currently has a minimal impact on performance).
     flag_builder.set("is_pic", "false").unwrap();
 
-    // Required since we use u128's as part of runtime functions (load/store).
-    flag_builder.set("enable_llvm_abi_extensions", "true").unwrap();
-
     // Always enable frame pointers to make debugging easier.
     flag_builder.set("preserve_frame_pointers", "true").unwrap();
 
@@ -376,11 +383,12 @@ fn init_module(endianness: Endianness) -> (JITModule, RuntimeFunctions) {
         flag_builder.set("enable_verifier", &value).unwrap();
     }
 
-    // We use a default optmization level of `none` since Cranelift's current optimizations appear
-    // to have little runtime impact, but result in slower compilation time.
-    let opt_level = std::env::var("OPT_LEVEL").unwrap_or_else(|_| "none".to_string());
+    let opt_level = std::env::var("OPT_LEVEL").unwrap_or_else(|_| "speed_and_size".to_string());
     flag_builder.set("opt_level", &opt_level).unwrap();
 
+    // Enable e-graph optimizations in Cranelift
+    //
+    // Note: default is true.
     if let Ok(value) = std::env::var("CRANELIFT_USE_EGRAPHS") {
         flag_builder.set("use_egraphs", &value).unwrap();
     }

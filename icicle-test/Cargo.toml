@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = "1.0.69"
+anyhow = "1.0.71"
 icicle-vm = { path = "../icicle-vm" }
 pcode = { path = "../sleigh/pcode" }
 sleigh-runtime = { path = "../sleigh/sleigh-runtime" }
-target-lexicon = "0.12.6"
+target-lexicon = "0.12.7"
 tracing = { version = "0.1.37", default-features = false }
-tracing-subscriber = { version = "0.3.16", default-features = false, features = ["fmt", "env-filter", "ansi", "tracing-log"] }
+tracing-subscriber = { version = "0.3.17", default-features = false, features = ["fmt", "env-filter", "ansi", "tracing-log"] }

@@ -67,7 +67,7 @@ pub struct Ident(pub StrIndex);
 impl ParserDisplay for Ident {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>, p: &crate::Parser) -> std::fmt::Result {
         let ident = p.interner.get(self.0);
-        f.write_str(&ident)
+        f.write_str(ident)
     }
 }
 
