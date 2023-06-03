@@ -133,6 +133,7 @@ pub enum TokenKind {
     RightParen,
     LeftBracket,
     RightBracket,
+    AtSign,
 
     // Multi character symbols
     FMinus,
@@ -254,28 +255,32 @@ impl<'a> Lexer<'a> {
             ']' => symbol!(TokenKind::RightBracket),
             ':' => symbol!(TokenKind::Colon),
 
-            // Preprocessor macros
+            // Preprocessor macros, or just a @ for a constructor display segment
             '@' => {
+                // is only a macro if there is only whitespaces before it
+                let line_start = self.line_start();
                 self.bump();
+                if line_start.contains(|c: char| !c.is_whitespace()) {
+                    self.create_token(TokenKind::AtSign)
+                } else {
+                    // Whitespace is allowed before the macro identifier (e.g. `@  if <cond>`)
+                    self.eat_whitespace();
 
-                // Whitespace is allowed before the macro identifier (e.g. `@  if <cond>`)
-                self.eat_whitespace();
-
-                let ident_span = self.eat_ident();
-                let kind = match &self.input[ident_span] {
-                    "include" => MacroKind::Include,
-                    "define" => MacroKind::Define,
-                    "undef" => MacroKind::Undef,
-                    "if" => MacroKind::If,
-                    "ifdef" => MacroKind::IfDef,
-                    "ifndef" => MacroKind::IfNotDef,
-                    "else" => MacroKind::Else,
-                    "elif" => MacroKind::Elif,
-                    "endif" => MacroKind::EndIf,
-                    _ => MacroKind::Unknown,
-                };
-
-                self.create_token(kind)
+                    let ident_span = self.eat_ident();
+                    let kind = match &self.input[ident_span] {
+                        "include" => MacroKind::Include,
+                        "define" => MacroKind::Define,
+                        "undef" => MacroKind::Undef,
+                        "if" => MacroKind::If,
+                        "ifdef" => MacroKind::IfDef,
+                        "ifndef" => MacroKind::IfNotDef,
+                        "else" => MacroKind::Else,
+                        "elif" => MacroKind::Elif,
+                        "endif" => MacroKind::EndIf,
+                        _ => MacroKind::Unknown,
+                    };
+                    self.create_token(kind)
+                }
             }
 
             // Special keywords (e.g. $xor) or macro expansions (e.g. $(IDENT))
@@ -491,6 +496,12 @@ impl<'a> Lexer<'a> {
         assert_eq!(self.bump(), Some('"'));
         self.bump_while(|c| c != '"' && c != '\n' && c != '\r');
         self.bump_if('"')
+    }
+
+    /// the start of the line until this point
+    fn line_start(&self) -> &'a str {
+        let line_start = self.lines.last().copied().unwrap_or(0);
+        &self.input[line_start as usize..self.token_start as usize]
     }
 }
 
