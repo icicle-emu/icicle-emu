@@ -180,7 +180,7 @@ pub struct AttachNames {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct AttachValues {
     pub fields: Vec<Ident>,
-    pub values: Vec<u64>,
+    pub values: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]

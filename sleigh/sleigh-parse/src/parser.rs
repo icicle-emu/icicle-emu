@@ -541,6 +541,24 @@ impl<T: Parse> Parse for Option<T> {
     }
 }
 
+impl Parse for i64 {
+    const NAME: &'static str = "Signed Integer";
+
+    fn try_parse(p: &mut Parser) -> Result<Option<Self>, Error> {
+        let token = p.peek();
+        let negative = p.bump_if(TokenKind::Minus)?.is_some();
+        let Some(value) = u64::try_parse(p)? else {
+            return Ok(None)
+        };
+        if negative && value == i64::MIN.abs_diff(0) as u64 {
+            return Ok(Some(i64::MIN));
+        }
+        let value = i64::try_from(value)
+            .map_err(|e| token.error(format!("invalid number: {}", e)))?;
+        Ok(Some(if negative { -value } else { value }))
+    }
+}
+
 impl Parse for u64 {
     const NAME: &'static str = "Integer";
 
