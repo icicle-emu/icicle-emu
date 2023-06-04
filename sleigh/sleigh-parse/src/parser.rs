@@ -1119,7 +1119,6 @@ fn parse_display_section(p: &mut Parser) -> Result<Vec<ast::DisplaySegment>, Err
             TokenKind::Ident => Some(p.parse::<ast::Ident>()?.into()),
             TokenKind::String => Some(p.parse_string()?.into()),
             TokenKind::Line => lit!(""),
-            TokenKind::AtSign => lit!("@"),
             TokenKind::Is => None,
             _ => return Err(p.error_unexpected(token, &[])),
         })
