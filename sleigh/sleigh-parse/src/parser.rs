@@ -470,6 +470,12 @@ impl Parser {
         let value = self.get_str(token);
         value.parse().map_err(|e| self.error(format!("invalid u8: {}", e)))
     }
+
+    /// Parses an integer used for defining the size of a field or space. Unlike `parse_size` this
+    /// value is allowed to be hex encoded.
+    pub(crate) fn parse_size_field(&mut self) -> Result<VarSize, Error> {
+        self.parse::<u64>()?.try_into().map_err(|_| self.error("`size` field is too large"))
+    }
 }
 
 pub struct ErrorFormatter<'a> {
@@ -668,10 +674,10 @@ impl Parse for ast::Space {
 
         let name = p.parse()?;
         let kind = parse_kw_value_v2(p, TokenKind::Type)?;
-        let size = parse_kw_value(p, TokenKind::Size, Parser::parse_size)?;
+        let size = parse_kw_value(p, TokenKind::Size, Parser::parse_size_field)?;
 
         let word_size = match p.check(TokenKind::WordSize) {
-            true => Some(parse_kw_value(p, TokenKind::WordSize, Parser::parse_size)?),
+            true => Some(parse_kw_value(p, TokenKind::WordSize, Parser::parse_size_field)?),
             false => None,
         };
         let default = p.bump_if(TokenKind::Default)?.is_some();
@@ -686,7 +692,7 @@ impl Parse for ast::SpaceNameDef {
     fn try_parse(p: &mut Parser) -> Result<Option<Self>, Error> {
         let space = p.parse()?;
         let offset = parse_kw_value(p, TokenKind::Offset, Parser::parse::<u64>)?;
-        let size = parse_kw_value(p, TokenKind::Size, Parser::parse_size)?;
+        let size = parse_kw_value(p, TokenKind::Size, Parser::parse_size_field)?;
         let names = parse_ident_list(p)?;
 
         Ok(Some(ast::SpaceNameDef { space, offset, size, names }))

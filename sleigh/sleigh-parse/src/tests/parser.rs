@@ -106,6 +106,26 @@ fn named_registers() {
 }
 
 #[test]
+fn hex_number_in_define() {
+    let result = parse::<ast::Sleigh>("define space register type=register_space size=0x4;");
+    check_item_inner!(result, items[0], ast::Item::DefineSpace, ast::Space {
+        name: result.ident("register"),
+        kind: ast::SpaceKind::RegisterSpace,
+        size: 4,
+        word_size: None,
+        default: false,
+    });
+
+    let result = parse::<ast::Sleigh>("define register offset=0x0 size=0x4 [ r0 r1 r2 r3 ];");
+    check_item_inner!(result, items[0], ast::Item::SpaceNameDef, ast::SpaceNameDef {
+        space: result.ident("register"),
+        offset: 0,
+        size: 4,
+        names: vec![result.ident("r0"), result.ident("r1"), result.ident("r2"), result.ident("r3")]
+    });
+}
+
+#[test]
 fn bit_range() {
     let result = parse::<ast::Sleigh>(
         "define bitrange zf=statusreg[10,1] cf=statusreg[11,1] sf=statusreg[12,1];",
@@ -298,10 +318,7 @@ fn symbols_in_display_segment() {
 #[test]
 fn atsign_in_display_section() {
     let result = parse::<ast::Sleigh>(r#"test: @"@" is a=0 {}"#);
-    assert_eq!(
-        result.ast.items[0].display(&result.parser).to_string(),
-        "test: @@ is a=0x0 { }"
-    );
+    assert_eq!(result.ast.items[0].display(&result.parser).to_string(), "test: @@ is a=0x0 { }");
 }
 
 #[test]
