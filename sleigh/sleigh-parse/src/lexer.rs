@@ -262,7 +262,8 @@ impl<'a> Lexer<'a> {
                 self.bump();
                 if line_start.contains(|c: char| !c.is_whitespace()) {
                     self.create_token(TokenKind::AtSign)
-                } else {
+                }
+                else {
                     // Whitespace is allowed before the macro identifier (e.g. `@  if <cond>`)
                     self.eat_whitespace();
 

@@ -1,0 +1,9 @@
+edition = "2018"
+version = "Two"
+comment_width = 100
+wrap_comments = true
+use_field_init_shorthand = true
+overflow_delimited_expr = true
+control_brace_style = "ClosingNextLine"
+max_width = 100
+use_small_heuristics = "Max"
