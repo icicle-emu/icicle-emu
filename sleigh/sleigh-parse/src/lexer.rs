@@ -257,14 +257,11 @@ impl<'a> Lexer<'a> {
 
             // Preprocessor macros, or just a @ for a constructor display segment
             '@' => {
-                // is only a macro if there is only whitespaces before it
+                // This is a macro if there is only whitespaces before it
                 let line_start = self.line_start();
                 self.bump();
-                if line_start.contains(|c: char| !c.is_whitespace()) {
-                    self.create_token(TokenKind::AtSign)
-                }
-                else {
-                    // Whitespace is allowed before the macro identifier (e.g. `@  if <cond>`)
+                if line_start.chars().all(char::is_whitespace) {
+                    // Additional whitespace is allowed before the macro name (e.g. `@  if <cond>`)
                     self.eat_whitespace();
 
                     let ident_span = self.eat_ident();
@@ -281,6 +278,9 @@ impl<'a> Lexer<'a> {
                         _ => MacroKind::Unknown,
                     };
                     self.create_token(kind)
+                }
+                else {
+                    self.create_token(TokenKind::AtSign)
                 }
             }
 

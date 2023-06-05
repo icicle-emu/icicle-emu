@@ -296,6 +296,24 @@ fn symbols_in_display_segment() {
 }
 
 #[test]
+fn atsign_in_display_section() {
+    let result = parse::<ast::Sleigh>(r#"test: @"@" is a=0 {}"#);
+    assert_eq!(
+        result.ast.items[0].display(&result.parser).to_string(),
+        "test: @@ is a=0x0 { }"
+    );
+}
+
+#[test]
+fn key_word_in_display_section() {
+    let result = parse::<ast::Sleigh>(r#"test:call call is a=0 {}"#);
+    assert_eq!(
+        result.ast.items[0].display(&result.parser).to_string(),
+        "test: call call is a=0x0 { }"
+    );
+}
+
+#[test]
 fn constraint_binding_power() {
     let result = parse::<ast::ConstraintExpr>("op=0x2 & mod=0x3 ; op2=0x3 & mod3=0x4");
     assert_eq!(result.to_string(), "(op=0x2 & mod=0x3) ; (op2=0x3 & mod3=0x4)");

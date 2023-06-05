@@ -271,8 +271,6 @@ impl Parser {
                 None => return Token { kind: TokenKind::Eof, span: self.current_span() },
             };
 
-            // eprintln!("handling token: {token:?}, peek_stack: {:?}", self.peeked);
-
             match token.kind {
                 TokenKind::Preprocessor(kind) => {
                     let peek_stack = std::mem::take(&mut self.peeked);
@@ -1078,32 +1076,15 @@ fn parse_display_section(p: &mut Parser) -> Result<Vec<ast::DisplaySegment>, Err
         let token = p.peek();
         Ok(match token.kind {
             TokenKind::Whitespace => lit!(" "),
-            TokenKind::Plus => lit!("+"),
-            TokenKind::Minus => lit!("-"),
-            TokenKind::Star => lit!("*"),
+            TokenKind::Line => lit!(""),
             TokenKind::Hat => lit!(""),
-            TokenKind::Colon => lit!(":"),
-            TokenKind::Comma => lit!(","),
-            TokenKind::Equal => lit!("="),
-            TokenKind::LeftParen => lit!("("),
-            TokenKind::RightParen => lit!(")"),
-            TokenKind::LeftBracket => lit!("["),
-            TokenKind::RightBracket => lit!("]"),
-            TokenKind::LeftBrace => lit!("{"),
-            TokenKind::RightBrace => lit!("}"),
-            TokenKind::ExclamationMark => lit!("!"),
-            TokenKind::Tilde => lit!("~"),
-            TokenKind::TripleDot => lit!("..."),
-            TokenKind::Number => {
+            TokenKind::Ident => Some(p.parse::<ast::Ident>()?.into()),
+            TokenKind::String => Some(p.parse_string()?.into()),
+            TokenKind::Is => None,
+            _ => {
                 let token = p.next();
                 Some(p.get_str(token).into())
             }
-            TokenKind::Ident => Some(p.parse::<ast::Ident>()?.into()),
-            TokenKind::String => Some(p.parse_string()?.into()),
-            TokenKind::Line => lit!(""),
-            TokenKind::AtSign => lit!("@"),
-            TokenKind::Is => None,
-            _ => return Err(p.error_unexpected(token, &[])),
         })
     })?;
 
