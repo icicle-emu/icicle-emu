@@ -545,6 +545,21 @@ impl<T: Parse> Parse for Option<T> {
     }
 }
 
+impl Parse for i128 {
+    const NAME: &'static str = "Signed Integer";
+
+    fn try_parse(p: &mut Parser) -> Result<Option<Self>, Error> {
+        let negative = p.bump_if(TokenKind::Minus)?.is_some();
+        let Some(mut value) = u64::try_parse(p)?.map(i128::from) else {
+            return Ok(None)
+        };
+        if negative {
+            value = -value;
+        }
+        Ok(Some(value))
+    }
+}
+
 impl Parse for u64 {
     const NAME: &'static str = "Integer";
 
