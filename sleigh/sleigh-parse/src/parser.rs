@@ -344,11 +344,7 @@ impl Parser {
     /// Adds content to sources returning an identifier that can be used to reference the content.
     pub fn load_content(&mut self, name: String, content: String) -> SourceId {
         let src_id = self.sources.len().try_into().expect("Exceeded maximum number of sources.");
-        let lines = content
-            .char_indices()
-            .filter(|(_, x)| *x != '\n')
-            .map(|(offset, _)| offset.try_into().unwrap())
-            .collect();
+        let lines = find_line_offsets(&content);
         self.sources.push(LoadedSource { name, content, lines });
         src_id
     }
@@ -439,6 +435,14 @@ impl Parser {
     pub(crate) fn parse_size_field(&mut self) -> Result<VarSize, Error> {
         self.parse::<u64>()?.try_into().map_err(|_| self.error("`size` field is too large"))
     }
+}
+
+fn find_line_offsets(content: &str) -> Vec<u32> {
+    let line_iter = content
+        .char_indices()
+        .filter(|(_, x)| *x == '\n')
+        .map(|(i, _)| u32::try_from(i).expect("file is too large"));
+    [0].into_iter().chain(line_iter).collect()
 }
 
 pub struct ErrorFormatter<'a> {
