@@ -6,7 +6,7 @@ use std::{
 use crate::{
     ast::{self, ExprTable, VarSize},
     input::Input,
-    lexer::{Lexer, SourceId, Token, TokenKind},
+    lexer::{self, Lexer, SourceId, Token, TokenKind},
     preprocessor, Error, ErrorExt, Span,
 };
 
@@ -14,16 +14,13 @@ use crate::{
 const MAX_EXPANSION_DEPTH: usize = 16;
 
 pub struct LoadedSource {
-    /// The name import name of the file or macro definition
+    /// The name import name of the file or macro definition.
     pub name: String,
 
-    /// The raw contents of the source
+    /// The raw contents of the source.
     pub content: String,
 
-    /// The tokens lexed from `content`
-    pub tokens: Vec<Token>,
-
-    /// The character offset of each line in the file
+    /// The character offset of every line in the file.
     pub lines: Vec<u32>,
 }
 
@@ -35,29 +32,6 @@ impl LoadedSource {
         let line = self.lines.binary_search(&char_offset).unwrap_or_else(|i| i.saturating_sub(1));
         let col = char_offset - self.lines.get(line).unwrap_or(&0);
         (line, col as usize)
-    }
-
-    /// Get the span associated with the token at `token_offset`
-    fn span_at(&self, token_offset: usize) -> Span {
-        if token_offset >= self.tokens.len() {
-            // If the offset is past the end of the source create a dummy location at the end
-            return self.tokens.last().map_or(Span::none(), |x| {
-                let end = x.span.end;
-                Span { src: x.span.src, start: end, end }
-            });
-        }
-        self.tokens[token_offset].span
-    }
-}
-
-struct Cursor {
-    src: SourceId,
-    offset: usize,
-}
-
-impl Cursor {
-    fn new(src: SourceId) -> Self {
-        Self { src, offset: 0 }
     }
 }
 
@@ -96,11 +70,14 @@ pub struct Parser {
     /// The input source
     input: Box<dyn Input>,
 
-    /// The current location in the token stream
-    cursor: Vec<Cursor>,
+    /// A lexer for each level of preprocessor expansion.
+    lexers: Vec<Lexer>,
 
     /// Tokens that have been peeked from the token stream, but have yet to be consumed
     peeked: VecDeque<Token>,
+
+    /// Controls whether we are currently parsing a display section (which changes the lexer mode).
+    lexer_mode: lexer::Mode,
 
     /// Configures which tokens should be skipped when calling `next_token`, this is generally used
     /// to ignore whitespace and comments
@@ -128,7 +105,8 @@ impl Parser {
             input: Box::new(input),
             sources: vec![],
             exprs: ExprTable::default(),
-            cursor: Vec::new(),
+            lexers: Vec::new(),
+            lexer_mode: lexer::Mode::Normal,
             peeked: VecDeque::new(),
             ignored_tokens: &[TokenKind::Comment, TokenKind::Whitespace, TokenKind::Line],
             state: preprocessor::State::default(),
@@ -200,9 +178,7 @@ impl Parser {
 
     /// Get a span representing the current position
     pub(crate) fn current_span(&self) -> Span {
-        self.cursor
-            .last()
-            .map_or(Span::none(), |cursor| self.sources[cursor.src as usize].span_at(cursor.offset))
+        self.lexers.last().map_or(Span::none(), |lex| lex.current_span())
     }
 
     /// Create a new error message at the current location
@@ -252,16 +228,6 @@ impl Parser {
         }
     }
 
-    /// Configure the parser to include whitespace tokens from the input stream
-    fn enable_whitespace(&mut self) {
-        self.ignored_tokens = &[TokenKind::Comment];
-    }
-
-    /// Configure the parser to skip whitespace tokens from the input stream
-    fn disable_whitespace(&mut self) {
-        self.ignored_tokens = &[TokenKind::Comment, TokenKind::Whitespace, TokenKind::Line];
-    }
-
     /// Without considering any tokens that have been peeked, retreive the next token after
     /// performing any preprocessing.
     fn next_raw(&mut self) -> Token {
@@ -274,14 +240,16 @@ impl Parser {
             match token.kind {
                 TokenKind::Preprocessor(kind) => {
                     let peek_stack = std::mem::take(&mut self.peeked);
-                    let prev = self.ignored_tokens;
+
+                    let prev_ignored = self.ignored_tokens;
                     self.ignored_tokens = &[TokenKind::Comment, TokenKind::Whitespace];
 
                     if let Err(e) = preprocessor::handle_macro(self, kind) {
                         self.set_error(e);
                         return self.error_token();
                     }
-                    self.ignored_tokens = prev;
+
+                    self.ignored_tokens = prev_ignored;
                     self.peeked = peek_stack;
                 }
                 _ if self.state.is_disabled() => {}
@@ -293,18 +261,16 @@ impl Parser {
     /// Gets the next raw token from the underlying lexer
     fn lexer_next(&mut self) -> Option<Token> {
         loop {
-            let cursor = self.cursor.last_mut()?;
-            let src = &self.sources[cursor.src as usize];
+            let lexer = self.lexers.last_mut()?;
+            let src = &self.sources[lexer.src as usize];
 
-            if src.tokens.len() <= cursor.offset {
+            let Some(token) = lexer.next_token(&src.content, self.lexer_mode) else {
                 // We are done with this source, remove it from the stack, and continue with the
                 // next entry
-                self.cursor.pop();
+                self.lexers.pop();
                 continue;
-            }
-
-            cursor.offset += 1;
-            return Some(src.tokens[cursor.offset - 1]);
+            };
+            return Some(token);
         }
     }
 
@@ -341,7 +307,7 @@ impl Parser {
         self.peek_nth(0)
     }
 
-    /// Checks whether the type of the `nth` token from the current cursor in the token stream
+    /// Checks whether the type of the `nth` token from the current lexer in the token stream
     /// matches `kind`
     pub(crate) fn check_nth(&mut self, n: usize, kind: TokenKind) -> bool {
         self.peek_nth(n).kind == kind
@@ -354,15 +320,14 @@ impl Parser {
 
     /// Expands the token stream associated with `src` at the current location
     pub(crate) fn expand_here(&mut self, src: SourceId) -> Result<(), Error> {
-        self.cursor.push(Cursor::new(src));
-        if self.cursor.len() >= MAX_EXPANSION_DEPTH {
+        self.lexers.push(Lexer::new(src));
+        if self.lexers.len() >= MAX_EXPANSION_DEPTH {
             let mut error = {
-                let cursor = &self.cursor[0];
-                let span = self.sources[cursor.src as usize].span_at(cursor.offset);
+                let span = self.lexers[0].current_span();
                 Error { message: String::from("(expanded)"), span, cause: None }
             };
-            for cursor in self.cursor.iter().skip(1) {
-                let span = self.sources[cursor.src as usize].span_at(cursor.offset);
+            for lexer in self.lexers.iter().skip(1) {
+                let span = lexer.current_span();
                 error = error.context(String::from("(expanded)"), span);
             }
             return Err(error.context(
@@ -376,17 +341,15 @@ impl Parser {
         Ok(())
     }
 
-    /// Tokenizes `content` and stores it in current source buffer. Returns an identifier that can
-    /// be used to reference the content.
+    /// Adds content to sources returning an identifier that can be used to reference the content.
     pub fn load_content(&mut self, name: String, content: String) -> SourceId {
         let src_id = self.sources.len().try_into().expect("Exceeded maximum number of sources.");
-
-        let mut lexer = Lexer::new(src_id, &content);
-
-        let tokens: Vec<_> = lexer.collect();
-        let lines = lexer.lines;
-
-        self.sources.push(LoadedSource { name, content, tokens, lines });
+        let lines = content
+            .char_indices()
+            .filter(|(_, x)| *x != '\n')
+            .map(|(offset, _)| offset.try_into().unwrap())
+            .collect();
+        self.sources.push(LoadedSource { name, content, lines });
         src_id
     }
 
@@ -916,7 +879,8 @@ impl Parse for ast::Constructor {
 
         // Between the table header and the `is` expression whitespace is meaningful so enable
         // whitespace in the parser
-        p.enable_whitespace();
+        p.ignored_tokens = &[TokenKind::Comment];
+        p.lexer_mode = lexer::Mode::Display;
 
         let mnemonic = match p.peek().kind {
             TokenKind::Ident | TokenKind::String => Some(p.parse_ident_or_string()?),
@@ -929,7 +893,10 @@ impl Parse for ast::Constructor {
 
         let display = parse_display_section(p)?;
         p.expect(TokenKind::Is)?;
-        p.disable_whitespace();
+
+        // Reset lexer mode.
+        p.ignored_tokens = &[TokenKind::Comment, TokenKind::Whitespace, TokenKind::Line];
+        p.lexer_mode = lexer::Mode::Normal;
 
         let constraint = p.parse()?;
         let disasm_actions = p.parse::<BrackedList<_>>().map_or(vec![], |x| x.0);
@@ -1072,6 +1039,7 @@ fn parse_constraint_operand(p: &mut Parser) -> Result<ast::PatternExpr, Error> {
 }
 
 fn parse_display_section(p: &mut Parser) -> Result<Vec<ast::DisplaySegment>, Error> {
+    let start = p.current_span();
     let mut items = parse_sequence(p, |p| {
         macro_rules! lit {
             ($value:expr) => {{
@@ -1084,13 +1052,23 @@ fn parse_display_section(p: &mut Parser) -> Result<Vec<ast::DisplaySegment>, Err
             TokenKind::Whitespace => lit!(" "),
             TokenKind::Line => lit!(""),
             TokenKind::Hat => lit!(""),
+            TokenKind::LeftParen => lit!("("),
+            TokenKind::RightParen => lit!(")"),
             TokenKind::Ident => Some(p.parse::<ast::Ident>()?.into()),
             TokenKind::String => Some(p.parse_string()?.into()),
             TokenKind::Is => None,
-            _ => {
+            TokenKind::Eof => {
+                return Err(Error {
+                    message: "Unexpected EOF when parsing display section".into(),
+                    span: Span::new(start, token.span),
+                    cause: None,
+                });
+            }
+            TokenKind::RawLiteral => {
                 let token = p.next();
                 Some(p.get_str(token).into())
             }
+            _ => return Err(p.error_unexpected(token, &[])),
         })
     })?;
 

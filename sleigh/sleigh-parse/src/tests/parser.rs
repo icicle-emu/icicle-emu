@@ -326,8 +326,33 @@ fn key_word_in_display_section() {
     let result = parse::<ast::Sleigh>(r#"test:call call is a=0 {}"#);
     assert_eq!(
         result.ast.items[0].display(&result.parser).to_string(),
-        "test: call call is a=0x0 { }"
+        "test:call call is a=0x0 { }"
     );
+}
+
+#[test]
+fn macro_in_display_segment() {
+    let result = parse::<ast::Sleigh>(
+        r#"
+    @define NOTVLE "vle=0"
+    test: $(NOTVLE) is a=0 {}
+"#,
+    );
+    assert_eq!(result.ast.items[0].display(&result.parser).to_string(), "test: vle=0 is a=0x0 { }");
+
+    let result = parse::<ast::Sleigh>(
+        r##"
+        @define HASH "#"
+        test: $(HASH) is a=0x0 { }
+"##,
+    );
+    assert_eq!(result.ast.items[0].display(&result.parser).to_string(), "test: # is a=0x0 { }");
+}
+
+#[test]
+fn hash_in_display_section() {
+    let result = parse::<ast::Sleigh>(r##"test: #"#" is a=0 {}"##);
+    assert_eq!(result.ast.items[0].display(&result.parser).to_string(), "test: ## is a=0x0 { }");
 }
 
 #[test]

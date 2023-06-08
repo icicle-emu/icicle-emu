@@ -50,7 +50,7 @@ impl State {
 }
 
 /// Handle a preprocessor macro
-pub fn handle_macro(p: &mut Parser, kind: MacroKind) -> Result<(), Error> {
+pub(crate) fn handle_macro(p: &mut Parser, kind: MacroKind) -> Result<(), Error> {
     // If the preprocessor is in a disabled section, only look at a small subset of symbols
     if p.state.is_disabled() {
         match kind {
