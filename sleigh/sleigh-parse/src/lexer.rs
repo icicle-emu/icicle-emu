@@ -69,12 +69,7 @@ pub(crate) enum TokenKind {
     Endian,
     BitRange,
     Space,
-    Size,
-    Type,
     Default,
-    WordSize,
-
-    Offset,
 
     PcodeOp,
     Attach,
@@ -327,12 +322,7 @@ impl Lexer {
                     "endian" => TokenKind::Endian,
                     "bitrange" => TokenKind::BitRange,
                     "space" => TokenKind::Space,
-                    "size" => TokenKind::Size,
-                    "type" => TokenKind::Type,
                     "default" => TokenKind::Default,
-                    "wordsize" => TokenKind::WordSize,
-
-                    "offset" => TokenKind::Offset,
 
                     "pcodeop" => TokenKind::PcodeOp,
                     "attach" => TokenKind::Attach,

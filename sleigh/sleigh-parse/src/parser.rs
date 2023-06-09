@@ -318,6 +318,18 @@ impl Parser {
         self.check_nth(0, kind)
     }
 
+    /// Checks whether the next token is an ident and equal to this name
+    pub(crate) fn check_ident(&mut self, name: &str) -> bool {
+        let next = self.peek_nth(0);
+        if next.kind != TokenKind::Ident {
+            return false;
+        }
+        if self.interner.get((next.span.start, next.span.end)) != name {
+            return false;
+        }
+        true
+    }
+
     /// Expands the token stream associated with `src` at the current location
     pub(crate) fn expand_here(&mut self, src: SourceId) -> Result<(), Error> {
         self.lexers.push(Lexer::new(src));
@@ -370,9 +382,23 @@ impl Parser {
         Ok(token)
     }
 
+    /// Consume the next token and check that its an ident and matches `name`
+    pub(crate) fn expect_ident(&mut self, name: &str) -> Result<(), Error> {
+        let token = self.peek();
+        let ident: ast::Ident = self.parse()?;
+        if self.get_ident_str(ident) != name {
+            return Err(self.error_unexpected(token, &[TokenKind::Ident]));
+        }
+        Ok(())
+    }
+
     /// Consume the next token if it matches `kind`
     pub(crate) fn bump_if(&mut self, kind: TokenKind) -> Result<Option<Token>, Error> {
-        if self.check(kind) { Ok(Some(self.next())) } else { Ok(None) }
+        if self.check(kind) {
+            Ok(Some(self.next()))
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn parse<T: Parse>(&mut self) -> Result<T, Error> {
@@ -584,7 +610,7 @@ pub fn parse_define(p: &mut Parser) -> Result<ast::Item, Error> {
     let define = match token.kind {
         TokenKind::Endian => ast::Item::DefineEndian(p.parse()?),
         TokenKind::Alignment => {
-            let alignment = parse_kw_value(p, TokenKind::Alignment, Parser::parse::<u64>)?;
+            let alignment = parse_kw_value(p, TokenKind::Alignment)?;
             ast::Item::DefineAlignment(alignment)
         }
         TokenKind::Space => ast::Item::DefineSpace(p.parse()?),
@@ -602,9 +628,10 @@ pub fn parse_define(p: &mut Parser) -> Result<ast::Item, Error> {
         TokenKind::Ident => ast::Item::SpaceNameDef(p.parse()?),
         _ => {
             use TokenKind::*;
-            return Err(p.error_unexpected(token, &[
-                Endian, Alignment, Space, BitRange, PcodeOp, Token, Context, Ident,
-            ]));
+            return Err(p.error_unexpected(
+                token,
+                &[Endian, Alignment, Space, BitRange, PcodeOp, Token, Context, Ident],
+            ));
         }
     };
     p.expect(TokenKind::SemiColon)?;
@@ -620,7 +647,7 @@ impl Parse for ast::EndianKind {
         }
 
         let start = p.current_span();
-        let ast::Ident(ident) = parse_kw_value_v2(p, TokenKind::Endian)?;
+        let ast::Ident(ident) = parse_kw_value(p, TokenKind::Endian)?;
         let str = p.interner.get(ident);
         Some(str.parse().map_err(|_| Error {
             message: format!("Unexpected endian kind: {}", str),
@@ -640,11 +667,11 @@ impl Parse for ast::Space {
         }
 
         let name = p.parse()?;
-        let kind = parse_kw_value_v2(p, TokenKind::Type)?;
-        let size = parse_kw_value(p, TokenKind::Size, Parser::parse_size_field)?;
+        let kind = parse_ident_value_v2(p, "type")?;
+        let size = parse_ident_value(p, "size", Parser::parse_size_field)?;
 
-        let word_size = match p.check(TokenKind::WordSize) {
-            true => Some(parse_kw_value(p, TokenKind::WordSize, Parser::parse_size_field)?),
+        let word_size = match p.check_ident("wordsize") {
+            true => Some(parse_ident_value(p, "wordsize", Parser::parse_size_field)?),
             false => None,
         };
         let default = p.bump_if(TokenKind::Default)?.is_some();
@@ -658,8 +685,8 @@ impl Parse for ast::SpaceNameDef {
 
     fn try_parse(p: &mut Parser) -> Result<Option<Self>, Error> {
         let space = p.parse()?;
-        let offset = parse_kw_value(p, TokenKind::Offset, Parser::parse::<u64>)?;
-        let size = parse_kw_value(p, TokenKind::Size, Parser::parse_size_field)?;
+        let offset = parse_ident_value(p, "offset", Parser::parse::<u64>)?;
+        let size = parse_ident_value(p, "size", Parser::parse_size_field)?;
         let names = parse_ident_list(p)?;
 
         Ok(Some(ast::SpaceNameDef { space, offset, size, names }))
@@ -1104,8 +1131,7 @@ impl Parse for ast::Statement {
                 if p.bump_if(TokenKind::Equal)?.is_some() {
                     let expr = p.parse()?;
                     ast::Statement::LocalAssignment { name, size, expr }
-                }
-                else {
+                } else {
                     ast::Statement::Local { name, size }
                 }
             }
@@ -1548,19 +1574,25 @@ fn parse_bit_range(p: &mut Parser) -> Result<ast::Range, Error> {
     Ok((a, b))
 }
 
-fn parse_kw_value<T>(
+fn parse_kw_value<T: Parse>(p: &mut Parser, kw: TokenKind) -> Result<T, Error> {
+    p.expect(kw)?;
+    p.expect(TokenKind::Equal)?;
+    p.parse()
+}
+
+fn parse_ident_value<T>(
     p: &mut Parser,
-    kw: TokenKind,
+    kw: &str,
     mut parse_value: impl FnMut(&mut Parser) -> Result<T, Error>,
 ) -> Result<T, Error> {
-    p.expect(kw)?;
+    p.expect_ident(kw)?;
     p.expect(TokenKind::Equal)?;
     let value = parse_value(p)?;
     Ok(value)
 }
 
-fn parse_kw_value_v2<T: Parse>(p: &mut Parser, kw: TokenKind) -> Result<T, Error> {
-    p.expect(kw)?;
+fn parse_ident_value_v2<T: Parse>(p: &mut Parser, kw: &str) -> Result<T, Error> {
+    p.expect_ident(kw)?;
     p.expect(TokenKind::Equal)?;
     p.parse()
 }
@@ -1633,7 +1665,11 @@ fn parse_item_or_list<T>(
     mut item: impl FnMut(&mut Parser) -> Result<T, Error>,
 ) -> Result<Vec<T>, Error> {
     use TokenKind::LeftBracket;
-    if p.check(LeftBracket) { parse_bracketed_list(p, item) } else { Ok(vec![item(p)?]) }
+    if p.check(LeftBracket) {
+        parse_bracketed_list(p, item)
+    } else {
+        Ok(vec![item(p)?])
+    }
 }
 
 enum Either<A, B> {
