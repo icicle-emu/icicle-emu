@@ -72,8 +72,7 @@ fn sort_overlaps(symbols: &SymbolTable, ctx: &Context, cases: &mut [MatchCase], 
     for (i, scc) in scc_topological_rev.iter().rev().enumerate() {
         if scc.len() == 1 {
             cases[scc[0].index()].rank = i;
-        }
-        else {
+        } else {
             // We have ordering cycle...
             if ctx.verbose {
                 eprintln!("Unable to determine ordering for {} cases:", scc.len());
@@ -99,10 +98,16 @@ fn compare_number_of_constrained_bits(a: &MatchCase, b: &MatchCase) -> Option<Or
     let (a_token, a_context) = pattern_mask(a);
     let (b_token, b_context) = pattern_mask(b);
     match (compare_bits_set(a_token, b_token), compare_bits_set(a_context, b_context)) {
-        (Some(Ordering::Equal), Some(Ordering::Equal)) => Some(Ordering::Equal),
-        (Some(x @ (Ordering::Greater | Ordering::Less)), _) => Some(x),
-        (_, Some(x @ (Ordering::Greater | Ordering::Less))) => Some(x),
-        _ => None,
+        // context or tokens contains bits not set by the other
+        (None, _) | (_, None) => None,
+        // context/tokens contains bits not set by the other and vise-versa.
+        (Some(Ordering::Greater), Some(Ordering::Less))
+        | (Some(Ordering::Less), Some(Ordering::Greater)) => None,
+        // if context/token are equal, just return the other (token/context) result
+        (Some(Ordering::Equal), x) | (x, Some(Ordering::Equal)) => x,
+        // both have the same result
+        (Some(x @ Ordering::Greater), Some(Ordering::Greater))
+        | (Some(x @ Ordering::Less), Some(Ordering::Less)) => Some(x),
     }
 }
 
@@ -198,8 +203,7 @@ impl<'a> BitVisitor<'a> {
             self.state.push(Bit::Unconstrained);
             self.split_next(remaining_bits, unconstrained);
             self.state.pop();
-        }
-        else {
+        } else {
             if !zero.is_empty() {
                 let mut zeroes =
                     zero.iter().copied().chain(unconstrained.iter().copied()).collect::<Vec<_>>();
