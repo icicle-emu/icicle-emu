@@ -394,11 +394,7 @@ impl Parser {
 
     /// Consume the next token if it matches `kind`
     pub(crate) fn bump_if(&mut self, kind: TokenKind) -> Result<Option<Token>, Error> {
-        if self.check(kind) {
-            Ok(Some(self.next()))
-        } else {
-            Ok(None)
-        }
+        if self.check(kind) { Ok(Some(self.next())) } else { Ok(None) }
     }
 
     pub fn parse<T: Parse>(&mut self) -> Result<T, Error> {
@@ -628,10 +624,9 @@ pub fn parse_define(p: &mut Parser) -> Result<ast::Item, Error> {
         TokenKind::Ident => ast::Item::SpaceNameDef(p.parse()?),
         _ => {
             use TokenKind::*;
-            return Err(p.error_unexpected(
-                token,
-                &[Endian, Alignment, Space, BitRange, PcodeOp, Token, Context, Ident],
-            ));
+            return Err(p.error_unexpected(token, &[
+                Endian, Alignment, Space, BitRange, PcodeOp, Token, Context, Ident,
+            ]));
         }
     };
     p.expect(TokenKind::SemiColon)?;
@@ -1131,7 +1126,8 @@ impl Parse for ast::Statement {
                 if p.bump_if(TokenKind::Equal)?.is_some() {
                     let expr = p.parse()?;
                     ast::Statement::LocalAssignment { name, size, expr }
-                } else {
+                }
+                else {
                     ast::Statement::Local { name, size }
                 }
             }
@@ -1665,11 +1661,7 @@ fn parse_item_or_list<T>(
     mut item: impl FnMut(&mut Parser) -> Result<T, Error>,
 ) -> Result<Vec<T>, Error> {
     use TokenKind::LeftBracket;
-    if p.check(LeftBracket) {
-        parse_bracketed_list(p, item)
-    } else {
-        Ok(vec![item(p)?])
-    }
+    if p.check(LeftBracket) { parse_bracketed_list(p, item) } else { Ok(vec![item(p)?]) }
 }
 
 enum Either<A, B> {

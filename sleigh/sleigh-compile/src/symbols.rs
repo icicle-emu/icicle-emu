@@ -441,6 +441,14 @@ impl SymbolTable {
             None => format!("unknown({}):{}", span.src, span.start),
         }
     }
+
+    pub fn format_constructor_line(&self, constructor: ConstructorId) -> String {
+        let span = self.constructors[constructor as usize].span;
+        match self.debug_info.get(&span.src) {
+            Some(source) => source.format_span(&span),
+            None => format!("unknown({}):{}", span.src, span.start),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
