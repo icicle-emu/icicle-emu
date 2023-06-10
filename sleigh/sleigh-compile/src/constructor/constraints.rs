@@ -17,8 +17,9 @@ use crate::{
 pub(crate) fn resolve(
     scope: &mut Scope,
     expr: &ast::ConstraintExpr,
+    big_endian: bool,
 ) -> Result<(Vec<Vec<Constraint>>, Vec<DecodeAction>), String> {
-    ConstraintVisitor::new(scope, expr).resolve_root()
+    ConstraintVisitor::new(scope, expr, big_endian).resolve_root()
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -32,6 +33,8 @@ enum Direction {
 struct ConstraintVisitor<'a, 'b> {
     scope: &'a mut Scope<'b>,
     root: &'a ast::ConstraintExpr,
+
+    big_endian: bool,
 
     /// Each entry represents a finalized set of constraints that if satisfied means the
     /// constructor matches.
@@ -58,10 +61,11 @@ struct ConstraintVisitor<'a, 'b> {
 }
 
 impl<'a, 'b> ConstraintVisitor<'a, 'b> {
-    fn new(scope: &'a mut Scope<'b>, root: &'a ast::ConstraintExpr) -> Self {
+    fn new(scope: &'a mut Scope<'b>, root: &'a ast::ConstraintExpr, big_endian: bool) -> Self {
         Self {
             scope,
             root,
+            big_endian,
             fork_directions: HashMap::new(),
             lists: vec![],
             current_constraints: vec![],
@@ -81,7 +85,7 @@ impl<'a, 'b> ConstraintVisitor<'a, 'b> {
     }
 
     fn resolve_root_with(&mut self, directions: HashMap<usize, Direction>) -> Result<(), String> {
-        let mut fork = ConstraintVisitor::new(self.scope, self.root);
+        let mut fork = ConstraintVisitor::new(self.scope, self.root, self.big_endian);
         fork.fork_directions = directions;
 
         // @fixme: check that each fork performs the same actions
@@ -165,9 +169,8 @@ impl<'a, 'b> ConstraintVisitor<'a, 'b> {
                         self.update_token_size(symbol.id);
 
                         let entry = &self.scope.globals.token_fields[symbol.id as usize];
-                        let token = Token::new(
-                            self.scope.globals.tokens[entry.token as usize].num_bits / 8,
-                        );
+                        let token = &self.scope.globals.tokens[entry.token as usize];
+                        let token = Token::new(token.num_bits / 8, token.big_endian.unwrap_or(self.big_endian));
 
                         let index = self.scope.add_field(ident, entry.field)?;
                         self.scope.tokens.insert(index, token.offset(self.offset as u8 / 8));
@@ -203,12 +206,15 @@ impl<'a, 'b> ConstraintVisitor<'a, 'b> {
                         self.update_token_size(symbol.id);
 
                         let entry = &self.scope.globals.token_fields[symbol.id as usize];
-                        let token_bytes =
-                            self.scope.globals.tokens[entry.token as usize].num_bits / 8;
-
+                        let token = &self.scope.globals.tokens[entry.token as usize];
                         let operand = self.token_operand(value)?;
+                        let token = Token::new(
+                            token.num_bits / 8,
+                            token.big_endian.unwrap_or(self.big_endian),
+                        )
+                        .offset(self.offset as u8 / 8);
                         self.current_constraints.push(Constraint::Token {
-                            token: Token::new(token_bytes).offset(self.offset as u8 / 8),
+                            token,
                             field: entry.field,
                             cmp: *op,
                             operand,

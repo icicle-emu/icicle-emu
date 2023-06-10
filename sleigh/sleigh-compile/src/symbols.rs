@@ -1,6 +1,6 @@
 use std::{collections::HashMap, usize};
 
-use sleigh_parse::{ast, ast::ParserDisplay};
+use sleigh_parse::{ast, ast::{ParserDisplay, EndianKind}};
 use sleigh_runtime::{semantics::ValueSize, Field};
 
 use crate::{constructor::Constructor, Context};
@@ -277,11 +277,12 @@ impl SymbolTable {
     /// Returns an error if the identifier of the token or any of its fields has already been
     /// defined.
     pub fn define_token(&mut self, token: ast::TokenDef) -> Result<(), String> {
+        let big_endian = token.endian.map(|endian| endian == EndianKind::Big);
+        let num_bits =
+            token.bits.try_into().map_err(|_| format!("token too large: {}", token.bits))?;
         let token_sym = insert_and_map!(self, tokens, token.name, SymbolKind::Token, Token {
-            num_bits: token
-                .bits
-                .try_into()
-                .map_err(|_| format!("token too large: {}", token.bits))?,
+            num_bits,
+            big_endian,
         })?;
 
         for field in token.fields {
@@ -488,6 +489,9 @@ pub(crate) struct BitRange {
 
 #[derive(Clone, Debug)]
 pub(crate) struct Token {
+    /// The endian, if this token overwride the global endian
+    pub big_endian: Option<bool>,
+
     /// The number of bits in this token
     pub num_bits: u8,
 }

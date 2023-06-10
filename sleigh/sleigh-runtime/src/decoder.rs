@@ -218,9 +218,9 @@ impl Decoder {
     ///
     /// Note: The instruction stream is padded with zeros.
     #[inline]
-    pub fn get_raw_token(&self, token: Token) -> u64 {
-        let start = token.offset as usize + self.offset;
-        let end = (start + token.size as usize).min(self.bytes.len());
+    pub fn get_raw_token(&self, token_offset: usize, token_size: usize) -> u64 {
+        let start = token_offset + self.offset;
+        let end = (start + token_size).min(self.bytes.len());
 
         match self.bytes.get(start..end) {
             Some(bytes) => {
@@ -241,7 +241,7 @@ impl Decoder {
                 match self.bytes.get(start..start + std::mem::size_of::<$ty>()) {
                     Some(bytes) => {
                         let array = bytes.try_into().unwrap();
-                        match self.big_endian {
+                        match token.big_endian {
                             true => <$ty>::from_be_bytes(array) as u64,
                             false => <$ty>::from_le_bytes(array) as u64,
                         }
@@ -257,11 +257,11 @@ impl Decoder {
             4 => read_token!(u32),
             8 => read_token!(u64),
             x if x < 8 => {
-                let mut token = self.get_raw_token(token).to_le_bytes();
-                if self.big_endian {
-                    token[..x].reverse();
+                let mut raw_token = self.get_raw_token(token.offset.into(), token.size.into()).to_le_bytes();
+                if token.big_endian {
+                    raw_token[..x].reverse();
                 }
-                u64::from_le_bytes(token)
+                u64::from_le_bytes(raw_token)
             }
             _ => panic!("invalid token size: {}", token.size),
         }
