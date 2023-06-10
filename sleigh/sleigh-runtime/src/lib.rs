@@ -77,6 +77,9 @@ pub type AttachmentId = u32;
 
 #[derive(Debug, Copy, Clone)]
 pub struct Token {
+    /// Token could overwrite the global endian
+    pub big_endian: bool,
+
     /// The offset of the token (in bytes) from the start of the byte stream.
     pub offset: u8,
 
@@ -86,8 +89,8 @@ pub struct Token {
 
 impl Token {
     /// Create a new token with a given size (in bytes) and a zero offset.
-    pub fn new(size: u8) -> Self {
-        Self { offset: 0, size }
+    pub fn new(size: u8, big_endian: bool) -> Self {
+        Self { offset: 0, size, big_endian }
     }
 
     /// Offset the token by `amount` bytes

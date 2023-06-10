@@ -18,7 +18,7 @@ use crate::{
 pub(crate) fn collect_constraints(
     table: &Table,
     symbols: &SymbolTable,
-    ctx: &Context,
+    _ctx: &Context,
 ) -> Result<(Vec<MatchCase>, usize), String> {
     let mut max_token_bytes = 0;
     let mut cases = vec![];
@@ -28,7 +28,7 @@ pub(crate) fn collect_constraints(
         let mut has_valid_constraint = false;
         let mut constraint_err = None;
         for entry in &constructor.constraints {
-            let (case, required_bytes) = match build_case_matcher(id, entry, ctx.data.big_endian) {
+            let (case, required_bytes) = match build_case_matcher(id, entry) {
                 Ok(entry) => entry,
                 Err(err) => {
                     // Skip this constraint if it is impossible to satisfy. This sometimes occurs
@@ -66,13 +66,12 @@ pub(crate) fn collect_constraints(
 fn build_case_matcher(
     constructor: ConstructorId,
     constraint_list: &[Constraint],
-    is_be: bool,
 ) -> Result<(MatchCase, u8), String> {
     let mut tokens = BitMatcher::default();
     let mut context = BitMatcher::default();
     let mut complex = vec![];
     for constraint in constraint_list {
-        let context_token = sleigh_runtime::Token::new(8);
+        let context_token = sleigh_runtime::Token::new(8, false);
         match constraint {
             Constraint::Context { field, cmp, operand } => match (cmp, &operand) {
                 (ast::ConstraintCmp::Equal, &ConstraintOperand::Constant(value)) => {
@@ -82,7 +81,7 @@ fn build_case_matcher(
             },
             Constraint::Token { token, field, cmp, operand } => match (cmp, operand) {
                 (ast::ConstraintCmp::Equal, &ConstraintOperand::Constant(value)) => {
-                    tokens.add_constraint(*token, *field, value as u64, is_be)?;
+                    tokens.add_constraint(*token, *field, value as u64, token.big_endian)?;
                 }
                 _ => complex.push(*constraint),
             },

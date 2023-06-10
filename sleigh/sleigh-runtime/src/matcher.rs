@@ -32,7 +32,7 @@ impl SequentialMatcher {
         offset: usize,
     ) -> Option<(ConstructorId, usize)> {
         let context = state.context;
-        let token = state.get_raw_token(Token::new(self.token_size as u8));
+        let token = state.get_raw_token(0, self.token_size);
         let (position, case) = self
             .cases
             .iter()
