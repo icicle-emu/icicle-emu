@@ -155,7 +155,15 @@ impl ResolveIdent for ContextModValue {
             Some(other) => {
                 Err(format!("{:?}<{}> in context modification", other, scope.debug(&ident)))
             }
-            None => Err(format!("undefined symbol: {}", scope.debug(&ident))),
+            None => {
+                // Some SLEIGH specifications use context fields in context modifications
+                // expressions without first declaring them in the constraint expression.
+                let sym =
+                    scope.globals.lookup_kind(ident, SymbolKind::ContextField).map_err(|err| {
+                        format!("Unexpected symbol kind in disasm context write expr: {}", err)
+                    })?;
+                Ok(Self::ContextField(scope.globals.context_fields[sym as usize].field))
+            }
         }
     }
 }
