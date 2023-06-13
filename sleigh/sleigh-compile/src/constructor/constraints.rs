@@ -7,7 +7,7 @@ use sleigh_runtime::{
 };
 
 use crate::{
-    constructor::Scope,
+    constructor::{resolve_pattern_expr, ResolveIdent, Scope},
     symbols::{SymbolKind, TokenFieldId},
 };
 
@@ -25,6 +25,12 @@ pub(crate) fn resolve(
 enum Direction {
     Left,
     Right,
+}
+
+#[derive(Copy, Clone)]
+enum OperandSource {
+    Token,
+    Context,
 }
 
 /// A visitor for resolving a constraint expression into one or more simplified constraint lists and
@@ -90,36 +96,34 @@ impl<'a, 'b> ConstraintVisitor<'a, 'b> {
         Ok(())
     }
 
-    fn token_operand(&self, operand: &ast::PatternExpr) -> Result<ConstraintOperand, String> {
-        Ok(match operand {
+    fn operand_expr(
+        &self,
+        expr: &ast::PatternExpr,
+        src: OperandSource,
+    ) -> Result<ConstraintOperand, String> {
+        match expr {
             ast::PatternExpr::Ident(ident) => {
-                let id = self.scope.globals.lookup_kind(*ident, SymbolKind::TokenField)?;
-                ConstraintOperand::Field(self.scope.globals.token_fields[id as usize].field)
+                let field = match src {
+                    OperandSource::Token => TokenResolver::resolve_ident(self.scope, *ident)?,
+                    OperandSource::Context => ContextResolver::resolve_ident(self.scope, *ident)?,
+                };
+                Ok(ConstraintOperand::Field(field))
             }
-            ast::PatternExpr::Integer(x) => ConstraintOperand::Constant(*x as i64),
-            _ => {
-                return Err(format!(
-                    "unimplemented constraint operand: {}",
-                    self.scope.debug(operand)
-                ));
-            }
-        })
-    }
+            ast::PatternExpr::Integer(x) => Ok(ConstraintOperand::Constant(*x as i64)),
 
-    fn context_operand(&self, operand: &ast::PatternExpr) -> Result<ConstraintOperand, String> {
-        Ok(match operand {
-            ast::PatternExpr::Ident(ident) => {
-                let id = self.scope.globals.lookup_kind(*ident, SymbolKind::ContextField)?;
-                ConstraintOperand::Field(self.scope.globals.context_fields[id as usize].field)
-            }
-            ast::PatternExpr::Integer(x) => ConstraintOperand::Constant(*x as i64),
             _ => {
-                return Err(format!(
-                    "unimplemented constraint operand: {}",
-                    self.scope.debug(operand)
-                ));
+                let mut out = vec![];
+                match src {
+                    OperandSource::Token => {
+                        resolve_pattern_expr::<TokenResolver>(&self.scope, expr, &mut out)?
+                    }
+                    OperandSource::Context => {
+                        resolve_pattern_expr::<ContextResolver>(&self.scope, expr, &mut out)?
+                    }
+                };
+                Ok(ConstraintOperand::Expr(out))
             }
-        })
+        }
     }
 
     fn update_token_size(&mut self, field_id: TokenFieldId) {
@@ -198,7 +202,7 @@ impl<'a, 'b> ConstraintVisitor<'a, 'b> {
                     SymbolKind::TokenField => {
                         self.update_token_size(symbol.id);
                         let (token, field) = self.resolve_token_field(symbol);
-                        let operand = self.token_operand(value)?;
+                        let operand = self.operand_expr(value, OperandSource::Token)?;
                         self.current_constraints.push(Constraint::Token {
                             token: token.offset(self.offset as u8 / 8),
                             field,
@@ -208,7 +212,7 @@ impl<'a, 'b> ConstraintVisitor<'a, 'b> {
                     }
                     SymbolKind::ContextField => {
                         let field = self.scope.globals.context_fields[symbol.id as usize].field;
-                        let operand = self.context_operand(value)?;
+                        let operand = self.operand_expr(value, OperandSource::Context)?;
                         self.current_constraints.push(Constraint::Context {
                             field,
                             cmp: *op,
@@ -284,5 +288,27 @@ impl<'a, 'b> ConstraintVisitor<'a, 'b> {
             token.big_endian.unwrap_or(self.scope.globals.endianness == ast::EndianKind::Big),
         );
         (token, field.field)
+    }
+}
+
+struct TokenResolver;
+
+impl ResolveIdent for TokenResolver {
+    type Output = Field;
+
+    fn resolve_ident(scope: &Scope, ident: ast::Ident) -> Result<Self::Output, String> {
+        let id = scope.globals.lookup_kind(ident, SymbolKind::TokenField)?;
+        Ok(scope.globals.token_fields[id as usize].field)
+    }
+}
+
+struct ContextResolver;
+
+impl ResolveIdent for ContextResolver {
+    type Output = Field;
+
+    fn resolve_ident(scope: &Scope, ident: ast::Ident) -> Result<Self::Output, String> {
+        let id = scope.globals.lookup_kind(ident, SymbolKind::ContextField)?;
+        Ok(scope.globals.context_fields[id as usize].field)
     }
 }

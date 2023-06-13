@@ -4,7 +4,7 @@ use sleigh_parse::ast;
 use sleigh_runtime::{
     matcher::Constraint,
     semantics::{Local, SemanticAction, ValueSize},
-    DecodeAction, Field, Token,
+    DecodeAction, Field, PatternExprOp, Token,
 };
 
 use crate::{
@@ -259,4 +259,38 @@ impl<'a> Scope<'a> {
     ) -> ast::ParserDisplayWrapper<'b, 'a, T> {
         item.display(&self.globals.parser)
     }
+}
+
+pub(crate) trait ResolveIdent: Sized {
+    type Output;
+    fn resolve_ident(scope: &Scope, ident: ast::Ident) -> Result<Self::Output, String>;
+}
+
+pub(crate) fn resolve_pattern_expr<R>(
+    scope: &Scope,
+    expr: &ast::PatternExpr,
+    out: &mut Vec<PatternExprOp<R::Output>>,
+) -> Result<(), String>
+where
+    R: ResolveIdent,
+{
+    let op = match expr {
+        ast::PatternExpr::Ident(ident) => PatternExprOp::Value(R::resolve_ident(scope, *ident)?),
+        ast::PatternExpr::Integer(value) => PatternExprOp::Constant(*value),
+        ast::PatternExpr::Op(a, op, b) => {
+            resolve_pattern_expr::<R>(scope, a, out)?;
+            resolve_pattern_expr::<R>(scope, b, out)?;
+            PatternExprOp::Op(*op)
+        }
+        ast::PatternExpr::Not(inner) => {
+            resolve_pattern_expr::<R>(scope, inner, out)?;
+            PatternExprOp::Not
+        }
+        ast::PatternExpr::Negate(inner) => {
+            resolve_pattern_expr::<R>(scope, inner, out)?;
+            PatternExprOp::Negate
+        }
+    };
+    out.push(op);
+    Ok(())
 }

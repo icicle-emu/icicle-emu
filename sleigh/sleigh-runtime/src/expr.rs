@@ -1,37 +1,38 @@
-pub type DisasmExprRange = (u32, u32);
+pub type PatternExprRange = (u32, u32);
 
-/// The operations allowed in the disassembly section.
-pub type DisasmOp = sleigh_parse::ast::PatternOp;
+pub use sleigh_parse::ast::PatternOp;
 
-/// Encodes an operation part disassembly expression for either a context modification or a
-/// disassembly constant.
-#[derive(Clone)]
-pub enum DisasmExprOp<T> {
+/// Encodes an operation that is part of a pattern expression.
+#[derive(Debug, Clone)]
+pub enum PatternExprOp<T> {
     Value(T),
     Constant(u64),
     Not,
     Negate,
-    Op(DisasmOp),
+    Op(PatternOp),
 }
 
-/// Disassembly expressions are mostly the same between context modifications and disassembly-time
-/// constants. However since context modifications need to be evaluated _before_ the instruction has
-/// been fully decoded `inst_next` is not valid, and the offsets for token fields needs to be
-/// adjusted.
+/// Pattern expressions can appear in 3 places, complex constraints, disassembly constant
+/// computation, and context modifications.
 ///
-/// To share code we use a common trait to represent the two types of expressions.
-pub(crate) trait EvalDisasmValue {
+/// Pattern expressions are mostly the same between each of the expression types, how values
+/// associated with identifiers are evaluated differently. For example, context modifications need
+/// to be evaluated _before_ the instruction has been fully decoded so `inst_next` is not valid, and
+/// the offsets for token fields needs to be adjusted.
+///
+/// To share code we use a common trait to represent the different types of expressions.
+pub(crate) trait EvalPatternValue {
     type Value;
     fn eval(&self, value: &Self::Value) -> i64;
 }
 
-pub(crate) fn eval_disasm_expr<E>(
+pub(crate) fn eval_pattern_expr<E>(
     stack: &mut Vec<i64>,
     eval: E,
-    expr: &[DisasmExprOp<E::Value>],
+    expr: &[PatternExprOp<E::Value>],
 ) -> Option<i64>
 where
-    E: EvalDisasmValue,
+    E: EvalPatternValue,
 {
     // Reserve space for worst case stack usage to avoid reallocation check on the hot path.
     stack.clear();
@@ -39,26 +40,26 @@ where
 
     for op in expr {
         let value = match op {
-            DisasmExprOp::Value(x) => eval.eval(x),
-            DisasmExprOp::Constant(x) => *x as i64,
-            DisasmExprOp::Not => !stack.pop()?,
-            DisasmExprOp::Negate => -stack.pop()?,
-            DisasmExprOp::Op(op) => {
+            PatternExprOp::Value(x) => eval.eval(x),
+            PatternExprOp::Constant(x) => *x as i64,
+            PatternExprOp::Not => !stack.pop()?,
+            PatternExprOp::Negate => -stack.pop()?,
+            PatternExprOp::Op(op) => {
                 let rhs = stack.pop()?;
                 let lhs = stack.pop()?;
                 match op {
-                    DisasmOp::Add => lhs + rhs,
-                    DisasmOp::Sub => lhs - rhs,
-                    DisasmOp::And => lhs & rhs,
-                    DisasmOp::Or => lhs | rhs,
-                    DisasmOp::Xor => lhs ^ rhs,
-                    DisasmOp::IntLeft => lhs.checked_shl(rhs as u32).unwrap_or(0),
-                    DisasmOp::IntRight => {
+                    PatternOp::Add => lhs + rhs,
+                    PatternOp::Sub => lhs - rhs,
+                    PatternOp::And => lhs & rhs,
+                    PatternOp::Or => lhs | rhs,
+                    PatternOp::Xor => lhs ^ rhs,
+                    PatternOp::IntLeft => lhs.checked_shl(rhs as u32).unwrap_or(0),
+                    PatternOp::IntRight => {
                         let shift = (rhs as u32).min(std::mem::size_of::<i64>() as u32 * 8 - 1);
                         lhs >> shift
                     }
-                    DisasmOp::Mult => lhs.wrapping_mul(rhs),
-                    DisasmOp::Div => lhs / rhs,
+                    PatternOp::Mult => lhs.wrapping_mul(rhs),
+                    PatternOp::Div => lhs / rhs,
                 }
             }
         };

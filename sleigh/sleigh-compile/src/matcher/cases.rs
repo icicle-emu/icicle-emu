@@ -73,13 +73,13 @@ fn build_case_matcher(
                 (ast::ConstraintCmp::Equal, &ConstraintOperand::Constant(value)) => {
                     context.add_constraint(context_token, *field, *value as u64, false)?;
                 }
-                _ => complex.push(*constraint),
+                _ => complex.push(constraint.clone()),
             },
             Constraint::Token { token, field, cmp, operand } => match (cmp, operand) {
                 (ast::ConstraintCmp::Equal, &ConstraintOperand::Constant(value)) => {
                     tokens.add_constraint(*token, *field, value as u64, token.big_endian)?;
                 }
-                _ => complex.push(*constraint),
+                _ => complex.push(constraint.clone()),
             },
         }
     }
@@ -113,6 +113,10 @@ impl BitMatcher {
         value: u64,
         is_be: bool,
     ) -> Result<(), String> {
+        if field.offset as u32 >= u64::BITS {
+            return Err(format!("Field offset to large: {}", field.offset));
+        }
+
         let token_offset = token.offset as usize * 8;
         let token_bits = (token.size * 8) as usize;
         self.grow(token_offset + token_bits);

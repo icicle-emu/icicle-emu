@@ -1,4 +1,8 @@
-use crate::{decoder::Decoder, ConstructorId, Field, Token};
+use crate::{
+    decoder::Decoder,
+    expr::{eval_pattern_expr, EvalPatternValue, PatternExprOp},
+    ConstructorId, Field, Token,
+};
 
 pub type ConstraintOp = sleigh_parse::ast::ConstraintOp;
 pub type ConstraintCmp = sleigh_parse::ast::ConstraintCmp;
@@ -87,13 +91,18 @@ impl Pattern {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+/// Represents the RHS of a constraint expression.
+///
+/// Note: Since full expressions are almost never used by real-world SLEIGH specifications we have
+/// special cases for constants, and field expressions to improve performance.
+#[derive(Debug, Clone)]
 pub enum ConstraintOperand {
     Constant(i64),
     Field(Field),
+    Expr(Vec<PatternExprOp<Field>>),
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub enum Constraint {
     Token { token: Token, field: Field, cmp: ConstraintCmp, operand: ConstraintOperand },
     Context { field: Field, cmp: ConstraintCmp, operand: ConstraintOperand },
@@ -101,29 +110,45 @@ pub enum Constraint {
 
 impl Constraint {
     pub fn matches(&self, state: &Decoder) -> bool {
-        match *self {
+        match self {
             Self::Token { token, field, cmp, operand } => {
-                let lhs = field.extract(state.get_token(token));
-                let rhs = match operand {
-                    ConstraintOperand::Constant(x) => x,
-                    ConstraintOperand::Field(field) => field.extract(state.get_token(token)),
-                };
-                cmp_constraints(lhs, cmp, rhs)
+                eval_constraint(*field, state.get_token(*token), operand, *cmp)
             }
             Self::Context { field, cmp, operand } => {
-                let lhs = field.extract(state.context);
-                let rhs = match operand {
-                    ConstraintOperand::Constant(x) => x,
-                    ConstraintOperand::Field(field) => field.extract(state.context),
-                };
-                cmp_constraints(lhs, cmp, rhs)
+                eval_constraint(*field, state.context, operand, *cmp)
             }
         }
     }
 }
 
-fn cmp_constraints(lhs: i64, op: ConstraintCmp, rhs: i64) -> bool {
-    match op {
+struct ConstraintEvalCtx {
+    src_val: u64,
+}
+
+impl EvalPatternValue for ConstraintEvalCtx {
+    type Value = Field;
+
+    fn eval(&self, value: &Self::Value) -> i64 {
+        value.extract(self.src_val)
+    }
+}
+fn eval_constraint(
+    field: Field,
+    src_val: u64,
+    operand: &ConstraintOperand,
+    cmp: ConstraintCmp,
+) -> bool {
+    let lhs = field.extract(src_val);
+    let rhs = match operand {
+        ConstraintOperand::Constant(x) => *x,
+        ConstraintOperand::Field(field) => field.extract(src_val),
+        ConstraintOperand::Expr(expr) => {
+            // @todo: consider reusing allocations here.
+            let mut stack = vec![];
+            eval_pattern_expr(&mut stack, ConstraintEvalCtx { src_val }, expr).unwrap_or(0)
+        }
+    };
+    match cmp {
         ConstraintCmp::Equal => lhs == rhs,
         ConstraintCmp::NotEqual => lhs != rhs,
         ConstraintCmp::Less => lhs < rhs,

@@ -10,11 +10,11 @@ use std::{collections::HashMap, fmt::Display};
 
 pub use crate::{
     decoder::{ContextModValue, Decoder, DisasmConstantValue, Instruction},
-    expr::DisasmExprOp,
+    expr::PatternExprOp,
     lifter::Lifter,
 };
 use crate::{
-    expr::DisasmExprRange,
+    expr::PatternExprRange,
     matcher::Matcher,
     semantics::{Export, SemanticAction, ValueSize},
 };
@@ -227,7 +227,7 @@ pub enum EvalKind {
 #[derive(Debug, Clone)]
 pub enum DecodeAction {
     /// Modifies the context register.
-    ModifyContext(Field, DisasmExprRange),
+    ModifyContext(Field, PatternExprRange),
 
     /// Globally saves a context value.
     SaveContext(Field),
@@ -341,9 +341,9 @@ pub struct SleighData {
     pub constructors: Vec<Constructor>,
     pub fields: Vec<Field>,
     pub decode_actions: Vec<DecodeAction>,
-    pub context_disasm_expr: Vec<DisasmExprOp<ContextModValue>>,
-    pub post_decode_actions: Vec<(LocalIndex, DisasmExprRange)>,
-    pub disasm_exprs: Vec<DisasmExprOp<DisasmConstantValue>>,
+    pub context_disasm_expr: Vec<PatternExprOp<ContextModValue>>,
+    pub post_decode_actions: Vec<(LocalIndex, PatternExprRange)>,
+    pub disasm_exprs: Vec<PatternExprOp<DisasmConstantValue>>,
     pub display_segments: Vec<DisplaySegment>,
     pub semantics: Vec<SemanticAction>,
 
@@ -508,14 +508,14 @@ impl SleighData {
         self.matchers[matcher_id as usize].match_constructor(state, offset)
     }
 
-    fn get_context_mod_expr(&self, expr: DisasmExprRange) -> &[DisasmExprOp<ContextModValue>] {
+    fn get_context_mod_expr(&self, expr: PatternExprRange) -> &[PatternExprOp<ContextModValue>] {
         &self.context_disasm_expr[expr.0 as usize..expr.1 as usize]
     }
 
     pub(crate) fn get_disasm_expr(
         &self,
-        expr: DisasmExprRange,
-    ) -> &[DisasmExprOp<DisasmConstantValue>] {
+        expr: PatternExprRange,
+    ) -> &[PatternExprOp<DisasmConstantValue>] {
         &self.disasm_exprs[expr.0 as usize..expr.1 as usize]
     }
 }

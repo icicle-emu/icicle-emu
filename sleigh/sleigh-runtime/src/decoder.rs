@@ -4,7 +4,7 @@ use crate::{
 };
 
 use crate::{
-    expr::{eval_disasm_expr, DisasmExprRange, EvalDisasmValue},
+    expr::{eval_pattern_expr, PatternExprRange, EvalPatternValue},
     ConstructorId, Field, TableId, Token,
 };
 
@@ -204,11 +204,11 @@ impl Decoder {
         Some(ctx.constructor)
     }
 
-    fn eval_context_expr(&mut self, expr: DisasmExprRange, sleigh: &SleighData) -> i64 {
+    fn eval_context_expr(&mut self, expr: PatternExprRange, sleigh: &SleighData) -> i64 {
         let mut stack = std::mem::take(&mut self.eval_stack);
         let expr = sleigh.get_context_mod_expr(expr);
         let result =
-            eval_disasm_expr(&mut stack, &*self, expr).expect("invalid disassembly expression");
+            eval_pattern_expr(&mut stack, &*self, expr).expect("invalid disassembly expression");
         self.eval_stack = stack;
         result
     }
@@ -411,7 +411,7 @@ impl<'a, 'b> SubtableCtx<'a, 'b> {
         &self.data.decode_actions[start as usize..end as usize]
     }
 
-    pub fn post_decode_actions(&self) -> &'b [(LocalIndex, DisasmExprRange)] {
+    pub fn post_decode_actions(&self) -> &'b [(LocalIndex, PatternExprRange)] {
         let (start, end) = self.data.constructors[self.constructor.id as usize].post_decode_actions;
         &self.data.post_decode_actions[start as usize..end as usize]
     }
@@ -480,7 +480,7 @@ impl<'a, 'b> SubtableCtxMut<'a, 'b> {
         for (local, expr) in self.as_ref().post_decode_actions() {
             let mut stack = std::mem::take(&mut state.eval_stack);
 
-            let value = eval_disasm_expr(
+            let value = eval_pattern_expr(
                 &mut stack,
                 DisasmLocalEval { state, ctx: self.as_ref() },
                 self.data.get_disasm_expr(*expr),
@@ -510,7 +510,7 @@ pub enum ContextModValue {
     InstStart,
 }
 
-impl EvalDisasmValue for &'_ Decoder {
+impl EvalPatternValue for &'_ Decoder {
     type Value = ContextModValue;
 
     fn eval(&self, value: &Self::Value) -> i64 {
@@ -535,7 +535,7 @@ struct DisasmLocalEval<'a, 'b, 'c> {
     ctx: SubtableCtx<'a, 'b>,
 }
 
-impl EvalDisasmValue for DisasmLocalEval<'_, '_, '_> {
+impl EvalPatternValue for DisasmLocalEval<'_, '_, '_> {
     type Value = DisasmConstantValue;
 
     fn eval(&self, value: &Self::Value) -> i64 {

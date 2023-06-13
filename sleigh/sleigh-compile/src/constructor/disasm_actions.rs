@@ -1,18 +1,20 @@
 use sleigh_parse::ast;
-use sleigh_runtime::{semantics::Local, ContextModValue, DisasmConstantValue, DisasmExprOp, Field};
+use sleigh_runtime::{
+    semantics::Local, ContextModValue, DisasmConstantValue, Field, PatternExprOp,
+};
 
 use crate::{
-    constructor::{FieldIndex, Scope},
+    constructor::{resolve_pattern_expr, FieldIndex, ResolveIdent, Scope},
     symbols::{ContextFieldId, Symbol, SymbolKind},
 };
 
 #[derive(Clone, Default)]
 pub(crate) struct DisasmActions {
     /// Fields assigned to in the disassembly expression
-    pub fields: Vec<(FieldIndex, Vec<DisasmExprOp<DisasmConstantValue>>)>,
+    pub fields: Vec<(FieldIndex, Vec<PatternExprOp<DisasmConstantValue>>)>,
 
     /// The context fields modified in this section
-    pub context_mod: Vec<(ContextFieldId, Vec<DisasmExprOp<ContextModValue>>)>,
+    pub context_mod: Vec<(ContextFieldId, Vec<PatternExprOp<ContextModValue>>)>,
 
     /// The context fields globally set by this section
     pub global_set: Vec<u32>,
@@ -36,7 +38,7 @@ pub(crate) fn resolve(
                         scope.add_field(*ident, field)?;
 
                         let mut out = vec![];
-                        resolve_disasm_expr(scope, expr, &mut out)?;
+                        resolve_pattern_expr::<ContextModValue>(scope, expr, &mut out)?;
                         section.context_mod.push((id, out));
                     }
 
@@ -46,7 +48,7 @@ pub(crate) fn resolve(
                         let field_id = scope.add_field(*ident, Field::i64())?;
 
                         let mut out = vec![];
-                        resolve_disasm_expr(scope, expr, &mut out)?;
+                        resolve_pattern_expr::<DisasmConstantValue>(scope, expr, &mut out)?;
                         section.fields.push((field_id, out));
                     }
 
@@ -86,40 +88,9 @@ pub(crate) fn resolve(
     Ok(section)
 }
 
-fn resolve_disasm_expr<T>(
-    scope: &Scope,
-    expr: &ast::PatternExpr,
-    out: &mut Vec<DisasmExprOp<T>>,
-) -> Result<(), String>
-where
-    T: ResolveIdent,
-{
-    let op = match expr {
-        ast::PatternExpr::Ident(ident) => DisasmExprOp::Value(T::resolve_ident(scope, *ident)?),
-        ast::PatternExpr::Integer(value) => DisasmExprOp::Constant(*value),
-        ast::PatternExpr::Op(a, op, b) => {
-            resolve_disasm_expr::<T>(scope, a, out)?;
-            resolve_disasm_expr::<T>(scope, b, out)?;
-            DisasmExprOp::Op(*op)
-        }
-        ast::PatternExpr::Not(inner) => {
-            resolve_disasm_expr::<T>(scope, inner, out)?;
-            DisasmExprOp::Not
-        }
-        ast::PatternExpr::Negate(inner) => {
-            resolve_disasm_expr::<T>(scope, inner, out)?;
-            DisasmExprOp::Negate
-        }
-    };
-    out.push(op);
-    Ok(())
-}
-
-trait ResolveIdent: Sized {
-    fn resolve_ident(scope: &Scope, ident: ast::Ident) -> Result<Self, String>;
-}
-
 impl ResolveIdent for DisasmConstantValue {
+    type Output = DisasmConstantValue;
+
     fn resolve_ident(scope: &Scope, ident: ast::Ident) -> Result<Self, String> {
         match scope.lookup(ident) {
             Some(Local::Field(id)) => Ok(Self::LocalField(id)),
@@ -140,6 +111,8 @@ impl ResolveIdent for DisasmConstantValue {
 }
 
 impl ResolveIdent for ContextModValue {
+    type Output = ContextModValue;
+
     fn resolve_ident(scope: &Scope, ident: ast::Ident) -> Result<Self, String> {
         match scope.lookup(ident) {
             Some(Local::Field(id)) => {

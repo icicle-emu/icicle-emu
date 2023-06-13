@@ -324,10 +324,7 @@ impl Parser {
         if next.kind != TokenKind::Ident {
             return false;
         }
-        if self.interner.get((next.span.start, next.span.end)) != name {
-            return false;
-        }
-        true
+        self.interner.get((next.span.start, next.span.end)) == name
     }
 
     /// Expands the token stream associated with `src` at the current location
