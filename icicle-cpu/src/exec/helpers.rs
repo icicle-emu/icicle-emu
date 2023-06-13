@@ -191,6 +191,7 @@ pub mod x86 {
         ("in", in_io),
         ("out", out_io),
         ("LOCK", lock),
+        ("UNLOCK", unlock),
         // Legacy float operations
         ("fsin", fsin),
         ("fcos", fcos),
@@ -385,6 +386,7 @@ pub mod x86 {
     }
     fn out_io(_: &mut Cpu, _: VarNode, _: [Value; 2]) {}
     fn lock(_: &mut Cpu, _: VarNode, _: [Value; 2]) {}
+    fn unlock(_: &mut Cpu, _: VarNode, _: [Value; 2]) {}
 
     /// Compute the approximate of the sine of the source operand and store it in the destination
     fn fsin(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
