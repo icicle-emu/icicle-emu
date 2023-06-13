@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use sleigh_parse::ast;
 use sleigh_runtime::{
     matcher::{Constraint, ConstraintOperand},
-    DecodeAction, EvalKind, Token,
+    DecodeAction, EvalKind, Field, Token,
 };
 
 use crate::{
@@ -17,9 +17,8 @@ use crate::{
 pub(crate) fn resolve(
     scope: &mut Scope,
     expr: &ast::ConstraintExpr,
-    big_endian: bool,
 ) -> Result<(Vec<Vec<Constraint>>, Vec<DecodeAction>), String> {
-    ConstraintVisitor::new(scope, expr, big_endian).resolve_root()
+    ConstraintVisitor::new(scope, expr).resolve_root()
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -33,8 +32,6 @@ enum Direction {
 struct ConstraintVisitor<'a, 'b> {
     scope: &'a mut Scope<'b>,
     root: &'a ast::ConstraintExpr,
-
-    big_endian: bool,
 
     /// Each entry represents a finalized set of constraints that if satisfied means the
     /// constructor matches.
@@ -61,11 +58,10 @@ struct ConstraintVisitor<'a, 'b> {
 }
 
 impl<'a, 'b> ConstraintVisitor<'a, 'b> {
-    fn new(scope: &'a mut Scope<'b>, root: &'a ast::ConstraintExpr, big_endian: bool) -> Self {
+    fn new(scope: &'a mut Scope<'b>, root: &'a ast::ConstraintExpr) -> Self {
         Self {
             scope,
             root,
-            big_endian,
             fork_directions: HashMap::new(),
             lists: vec![],
             current_constraints: vec![],
@@ -85,7 +81,7 @@ impl<'a, 'b> ConstraintVisitor<'a, 'b> {
     }
 
     fn resolve_root_with(&mut self, directions: HashMap<usize, Direction>) -> Result<(), String> {
-        let mut fork = ConstraintVisitor::new(self.scope, self.root, self.big_endian);
+        let mut fork = ConstraintVisitor::new(self.scope, self.root);
         fork.fork_directions = directions;
 
         // @fixme: check that each fork performs the same actions
@@ -168,15 +164,12 @@ impl<'a, 'b> ConstraintVisitor<'a, 'b> {
                     SymbolKind::TokenField => {
                         self.update_token_size(symbol.id);
 
-                        let entry = &self.scope.globals.token_fields[symbol.id as usize];
-                        let token = &self.scope.globals.tokens[entry.token as usize];
-                        let token = Token::new(token.num_bits / 8, token.big_endian.unwrap_or(self.big_endian));
-
-                        let index = self.scope.add_field(ident, entry.field)?;
+                        let (token, field) = self.resolve_token_field(symbol);
+                        let index = self.scope.add_field(ident, field)?;
                         self.scope.tokens.insert(index, token.offset(self.offset as u8 / 8));
                         self.add_action(DecodeAction::Eval(
                             index,
-                            EvalKind::TokenField(token, entry.field),
+                            EvalKind::TokenField(token, field),
                         ));
                     }
 
@@ -204,18 +197,11 @@ impl<'a, 'b> ConstraintVisitor<'a, 'b> {
                 match symbol.kind {
                     SymbolKind::TokenField => {
                         self.update_token_size(symbol.id);
-
-                        let entry = &self.scope.globals.token_fields[symbol.id as usize];
-                        let token = &self.scope.globals.tokens[entry.token as usize];
+                        let (token, field) = self.resolve_token_field(symbol);
                         let operand = self.token_operand(value)?;
-                        let token = Token::new(
-                            token.num_bits / 8,
-                            token.big_endian.unwrap_or(self.big_endian),
-                        )
-                        .offset(self.offset as u8 / 8);
                         self.current_constraints.push(Constraint::Token {
-                            token,
-                            field: entry.field,
+                            token: token.offset(self.offset as u8 / 8),
+                            field,
                             cmp: *op,
                             operand,
                         })
@@ -288,5 +274,15 @@ impl<'a, 'b> ConstraintVisitor<'a, 'b> {
         }
 
         Ok(())
+    }
+
+    fn resolve_token_field(&mut self, sym: crate::symbols::Symbol) -> (Token, Field) {
+        let field = &self.scope.globals.token_fields[sym.id as usize];
+        let token = &self.scope.globals.tokens[field.token as usize];
+        let token = Token::new(
+            token.num_bits / 8,
+            token.big_endian.unwrap_or(self.scope.globals.endianness == ast::EndianKind::Big),
+        );
+        (token, field.field)
     }
 }

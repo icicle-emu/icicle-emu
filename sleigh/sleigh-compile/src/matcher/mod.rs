@@ -14,7 +14,7 @@ pub(crate) fn build_sequential_matcher(
     table: &Table,
     ctx: &Context,
 ) -> Result<SequentialMatcher, String> {
-    let (mut cases, token_size) = cases::collect_constraints(table, symbols, ctx)?;
+    let (mut cases, token_size) = cases::collect_constraints(table, symbols)?;
     sort_overlaps(symbols, ctx, &mut cases, token_size as u8);
     Ok(SequentialMatcher { cases, token_size })
 }

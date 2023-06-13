@@ -257,7 +257,8 @@ impl Decoder {
             4 => read_token!(u32),
             8 => read_token!(u64),
             x if x < 8 => {
-                let mut raw_token = self.get_raw_token(token.offset.into(), token.size.into()).to_le_bytes();
+                let mut raw_token =
+                    self.get_raw_token(token.offset.into(), token.size.into()).to_le_bytes();
                 if token.big_endian {
                     raw_token[..x].reverse();
                 }

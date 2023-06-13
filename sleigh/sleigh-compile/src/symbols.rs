@@ -1,6 +1,9 @@
 use std::{collections::HashMap, usize};
 
-use sleigh_parse::{ast, ast::{ParserDisplay, EndianKind}};
+use sleigh_parse::{
+    ast,
+    ast::{EndianKind, ParserDisplay},
+};
 use sleigh_runtime::{semantics::ValueSize, Field};
 
 use crate::{constructor::Constructor, Context};
@@ -39,6 +42,8 @@ pub type _MacroId = u32;
 pub type _UserOpId = u32;
 
 pub(crate) struct SymbolTable {
+    pub endianness: ast::EndianKind,
+
     pub spaces: Vec<RamSpace>,
     pub registers: Vec<Register>,
     pub bit_ranges: Vec<BitRange>,
@@ -80,6 +85,7 @@ impl SymbolTable {
         let placeholder_ident = parser.get_ident("_");
 
         let mut symbols = Self {
+            endianness: EndianKind::Little,
             spaces: Default::default(),
             registers: Default::default(),
             bit_ranges: Default::default(),

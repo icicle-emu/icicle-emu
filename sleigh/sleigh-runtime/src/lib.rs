@@ -88,7 +88,7 @@ pub struct Token {
 }
 
 impl Token {
-    /// Create a new token with a given size (in bytes) and a zero offset.
+    /// Create a new token with a given size (in bytes) and endianness, with the offset set to zero.
     pub fn new(size: u8, big_endian: bool) -> Self {
         Self { offset: 0, size, big_endian }
     }

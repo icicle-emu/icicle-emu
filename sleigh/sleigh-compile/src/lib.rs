@@ -214,6 +214,7 @@ fn resolve_item(ctx: &mut Context, syms: &mut SymbolTable, item: ast::Item) -> R
         ast::Item::DefineEndian(kind) => {
             check_not_defined!(ctx.has_endian, "duplicate endian definition");
             ctx.data.big_endian = kind == ast::EndianKind::Big;
+            syms.endianness = kind;
         }
         ast::Item::DefineAlignment(bytes) => {
             check_not_defined!(ctx.has_alignment, "duplicate alignment definition");

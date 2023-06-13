@@ -79,8 +79,7 @@ pub(crate) fn build(
     let table = symbols.lookup_kind(table_ident, SymbolKind::Table)?;
     let mut scope = Scope::new(symbols);
 
-    let (constraints, decode_actions) =
-        constraints::resolve(&mut scope, &constructor.constraint, ctx.data.big_endian)?;
+    let (constraints, decode_actions) = constraints::resolve(&mut scope, &constructor.constraint)?;
 
     let disasm_actions = disasm_actions::resolve(&mut scope, &constructor.disasm_actions)?;
     let mut semantics = semantics::resolve(&mut scope, &constructor.semantics)?;

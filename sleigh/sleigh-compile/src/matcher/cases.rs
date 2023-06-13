@@ -4,10 +4,7 @@ use sleigh_runtime::{
     ConstructorId,
 };
 
-use crate::{
-    symbols::{SymbolTable, Table},
-    Context,
-};
+use crate::symbols::{SymbolTable, Table};
 
 /// Iterates over all the constructors in `table` to build a list of cases that can be used for
 /// identifying whether a constructor matches the current decoder state.
@@ -18,7 +15,6 @@ use crate::{
 pub(crate) fn collect_constraints(
     table: &Table,
     symbols: &SymbolTable,
-    _ctx: &Context,
 ) -> Result<(Vec<MatchCase>, usize), String> {
     let mut max_token_bytes = 0;
     let mut cases = vec![];
