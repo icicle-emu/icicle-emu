@@ -11,6 +11,43 @@ use crate::{
     symbols::{Symbol, SymbolKind, TableId, RAM_SPACE, REGISTER_SPACE},
 };
 
+/// Represents a value that can either appear as a destination (lvalue) or as an operand (rvalue).
+#[derive(Debug, Clone)]
+enum ExprValue {
+    /// A local value.
+    Local(Value),
+    /// A value that is not bound to any location and cannot be used as a destination (lvalue).
+    Unbound(Value),
+    /// Represents a constant value.
+    Const(u64, Option<ValueSize>),
+    /// The result of executing `op`.
+    NullaryOp(pcode::Op),
+    /// The result of applying `op` to the value.
+    UnaryOp(pcode::Op, Value),
+    /// The result of applying `op` to the two values.
+    BinOp(pcode::Op, (Value, Value)),
+    /// A location in memory.
+    Mem(Value, ValueSize),
+    /// A dynamicaly computed register.
+    RegisterRef(Value, ValueSize),
+    /// Represents the address of a place (either a memory location, or a register).
+    AddressOf(Value, Value, Option<ValueSize>),
+    /// A reference to a subset of bits in the underlying value.
+    BitRange(Value, ast::Range),
+}
+
+impl From<Value> for ExprValue {
+    fn from(value: Value) -> Self {
+        Self::Local(value)
+    }
+}
+
+impl From<Local> for ExprValue {
+    fn from(value: Local) -> Self {
+        Self::Local(value.into())
+    }
+}
+
 pub(crate) fn resolve(
     scope: &mut Scope,
     statements: &[ast::Statement],
@@ -119,13 +156,13 @@ pub struct Semantics {
 
 enum Destination {
     Local(Value),
-    Pointer(Value, ValueSize),
-    SliceBits(Value, ast::Range),
+    Mem(Value, ValueSize),
+    BitRange(Value, ast::Range),
 }
 
 struct Builder<'a, 'b> {
     scope: &'a mut Scope<'b>,
-    macro_params: HashMap<ast::Ident, Value>,
+    macro_params: HashMap<ast::Ident, ExprValue>,
     build_actions: HashSet<TableId>,
     semantics: Semantics,
     current_statement: &'a ast::Statement,
@@ -377,7 +414,15 @@ impl<'a, 'b> Builder<'a, 'b> {
     }
 
     fn error(&mut self, msg: impl Into<String>) {
-        self.errors.push((self.current_statement, msg.into()));
+        let mut msg = msg.into();
+
+        let backtrace = std::backtrace::Backtrace::capture();
+        if backtrace.status() == std::backtrace::BacktraceStatus::Captured {
+            msg += "\n";
+            msg += &backtrace.to_string();
+        }
+
+        self.errors.push((self.current_statement, msg));
     }
 
     fn size_of(&self, value: Value) -> Option<ValueSize> {
@@ -481,7 +526,9 @@ impl<'a, 'b> Builder<'a, 'b> {
     fn resolve_all(&mut self, statements: &'a [ast::Statement]) -> Result<(), String> {
         for statement in statements {
             self.current_statement = statement;
-            self.resolve_statement(statement)?;
+            if let Err(e) = self.resolve_statement(statement) {
+                return Err(format!("error resolving: {}: {e}", self.scope.debug(statement)));
+            }
         }
         Ok(())
     }
@@ -496,29 +543,10 @@ impl<'a, 'b> Builder<'a, 'b> {
                 self.unimplemented();
             }
             ast::Statement::Export { value } => {
-                let export = match value {
-                    ast::PcodeExpr::Deref { space, size, pointer } => {
-                        if space
-                            .as_ref()
-                            .map_or(false, |&space| space == self.scope.globals.const_ident)
-                        {
-                            Export::Value(self.resolve_expr(pointer)?.maybe_set_size(*size))
-                        }
-                        else {
-                            let (space_id, addr_size, _word_size) = self.resolve_space(space)?;
-                            let (mut pointer, size) = self.resolve_ptr(space, *size, pointer)?;
-                            if pointer.size.is_none() {
-                                pointer.size = Some(addr_size);
-                            }
-
-                            match space_id {
-                                REGISTER_SPACE => Export::Register(pointer, size),
-                                RAM_SPACE => Export::Pointer(pointer, size),
-                                _ => panic!("unknown space_id: {}", space_id),
-                            }
-                        }
-                    }
-                    expr => Export::Value(self.resolve_expr(expr)?),
+                let export = match self.resolve_expr(value)? {
+                    ExprValue::Mem(value, size) => Export::Pointer(value, size),
+                    ExprValue::RegisterRef(value, size) => Export::Register(value, size),
+                    value => Export::Value(self.read_value(value, None)?),
                 };
                 self.semantics.export = Some(export);
             }
@@ -527,7 +555,8 @@ impl<'a, 'b> Builder<'a, 'b> {
             }
             ast::Statement::LocalAssignment { name, size, expr } => {
                 let dst = self.scope.named_tmp(*name, *size)?.into();
-                self.resolve_expr_with_out(expr, Some(dst))?;
+                let expr = self.resolve_expr(expr)?;
+                self.read_value(expr, Some(dst))?;
             }
             ast::Statement::Build { name } => {
                 let subtable_id = self.scope.globals.lookup_kind(*name, SymbolKind::Table)?;
@@ -538,24 +567,30 @@ impl<'a, 'b> Builder<'a, 'b> {
                 self.build(index);
             }
             ast::Statement::Copy { from, to } => {
+                let value = self.resolve_expr(from)?;
                 match self.resolve_dst(to)? {
                     Destination::Local(dst) => {
-                        self.resolve_expr_with_out(from, Some(dst))?;
+                        self.read_value(value, Some(dst))?;
                     }
-                    Destination::Pointer(ptr, size) => {
-                        let value = self.resolve_expr(from)?;
-                        self.store(size, ptr, value);
+                    Destination::Mem(ptr, size) => {
+                        let tmp = self.read_value(value, None)?;
+                        self.store(size, ptr, tmp);
                     }
-                    Destination::SliceBits(dst, (bit_offset, num_bits)) => {
-                        let value = self.resolve_expr(from)?;
+                    Destination::BitRange(dst, (bit_offset, num_bits)) => {
+                        if let Some(dst) = try_slice_bits(dst, (bit_offset, num_bits)) {
+                            self.read_value(value, Some(dst))?;
+                            return Ok(());
+                        }
+
+                        let value = self.read_value(value, None)?;
                         let mask_bits = pcode::mask(num_bits as u64);
 
-                        // Get untouched bits from the existing value stored in the `dst`
+                        // Get untouched bits from the existing value stored in the `dst`.
                         let mask = Value::constant(!(mask_bits << bit_offset));
                         let prev = self.scope.add_tmp(self.size_of(dst)).into();
                         self.op(pcode::Op::IntAnd, &[dst, mask], Some(prev));
 
-                        // Shift and mask the appropriate bits from `value` into a temporary
+                        // Shift and mask the appropriate bits from `value` into a temporary.
                         let mask = Value::constant(mask_bits);
                         let shift = Value::constant(bit_offset as u64);
 
@@ -570,9 +605,20 @@ impl<'a, 'b> Builder<'a, 'b> {
                 };
             }
             ast::Statement::Store { space, size, pointer, value } => {
-                let (ptr, size) = self.resolve_ptr(space, *size, pointer)?;
-                let value = self.resolve_expr(value)?;
-                self.store(size, ptr, value);
+                let value = self.resolve_expr_value(value)?;
+                match self.resolve_deref(space, *size, pointer)? {
+                    ExprValue::Mem(ptr, size) => self.store(size, ptr, value),
+                    ExprValue::RegisterRef(pointer, size) => self
+                        .semantics
+                        .actions
+                        .push(SemanticAction::CopyToDynamicRegister { pointer, value, size }),
+                    val => {
+                        return Err(format!(
+                            "attempted to write to an invalid pointer: {}: {val:?}",
+                            self.scope.debug(pointer)
+                        ));
+                    }
+                }
             }
             ast::Statement::Call(ast::PcodeCall { name, args }) => {
                 if *name == self.scope.globals.delay_slot_ident {
@@ -585,7 +631,11 @@ impl<'a, 'b> Builder<'a, 'b> {
 
                 match self.scope.globals.lookup(*name)? {
                     Symbol { kind: SymbolKind::UserOp, id } => {
-                        let inputs = self.resolve_args(args)?;
+                        let inputs = self
+                            .resolve_args(args)?
+                            .into_iter()
+                            .map(|x| self.read_value(x, None))
+                            .collect::<Result<Vec<_>, _>>()?;
                         let op = pcode::Op::PcodeOp(id.try_into().unwrap());
                         self.op_no_output(op, &inputs)
                     }
@@ -630,7 +680,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             }
             ast::Statement::CondBranch { cond, dst, hint } => {
                 let hint = translate_hint(hint);
-                let cond = self.resolve_expr(cond)?;
+                let cond = self.resolve_expr_value(cond)?;
                 self.resolve_branch(cond, dst, hint)?;
             }
             ast::Statement::Label { label } => {
@@ -653,13 +703,28 @@ impl<'a, 'b> Builder<'a, 'b> {
             ast::BranchDst::Direct(dst) | ast::BranchDst::Indirect(dst) => {
                 let dst = match *dst {
                     ast::JumpLabel::Ident(ident) => self.resolve_ident(ident)?,
-                    ast::JumpLabel::Integer(value, size) => Value::constant(value).truncate(size),
+                    ast::JumpLabel::Integer(value, size) => ExprValue::Const(value, Some(size)),
                 };
-                let dst = match is_direct {
-                    true => address_of(dst, Value::constant(0), self.size_of(dst))?,
-                    false => dst,
+
+                // If this is a direct branch then we are jumping to the address of the destination
+                // not the value at the destination pointer.
+                let address = if is_direct {
+                    match dst {
+                        ExprValue::Local(mut value) => match value.local {
+                            Local::Subtable(_) => {
+                                value.address_offset = Some(Local::Constant(0));
+                                value
+                            }
+                            _ => value,
+                        },
+                        _ => return Err("unsupported expression type in direct branch".into()),
+                    }
+                }
+                else {
+                    self.read_value(dst, None)?
                 };
-                self.op_no_output(pcode::Op::Branch(hint), &[cond, dst]);
+
+                self.op_no_output(pcode::Op::Branch(hint), &[cond, address]);
             }
             ast::BranchDst::Label(label) => {
                 let label = self.resolve_jump_label(label);
@@ -687,158 +752,219 @@ impl<'a, 'b> Builder<'a, 'b> {
         Ok(label.id)
     }
 
-    fn resolve_expr(&mut self, expr: &ast::PcodeExpr) -> Result<Value, String> {
-        self.resolve_expr_with_out(expr, None)
+    fn resolve_expr_value(&mut self, expr: &ast::PcodeExpr) -> Result<Value, String> {
+        let value = self.resolve_expr(expr)?;
+        self.read_value(value, None)
     }
 
-    fn resolve_expr_with_out(
-        &mut self,
-        expr: &ast::PcodeExpr,
-        out: Option<Value>,
-    ) -> Result<Value, String> {
-        match expr {
-            ast::PcodeExpr::Ident { value } => {
-                let value = self.resolve_ident(*value)?;
-                Ok(out.map_or(value, |out| self.copy(value, out)))
-            }
-            ast::PcodeExpr::Integer { value } => {
-                let value = Value::constant(*value);
-                Ok(out.map_or(value, |out| self.copy(value, out)))
-            }
+    fn resolve_expr(&mut self, expr: &ast::PcodeExpr) -> Result<ExprValue, String> {
+        Ok(match expr {
+            ast::PcodeExpr::Ident { value } => self.resolve_ident(*value)?,
+            ast::PcodeExpr::Integer { value } => ExprValue::Const(*value, None),
             ast::PcodeExpr::AddressOf { size, value, offset } => {
-                let value = self.resolve_ident(*value)?;
-                let offset = self.resolve_expr(offset)?;
-                let value = address_of(value, offset, *size)?;
-                Ok(out.map_or(value, |out| self.copy(value, out)))
+                let base = self.resolve_ident(*value)?;
+                let offset = self.resolve_expr_value(offset)?;
+                address_of(base, offset, *size)?
             }
             ast::PcodeExpr::Truncate { value, size } => {
-                let value = self.resolve_expr(value)?.truncate(*size);
-                Ok(out.map_or(value, |out| self.copy(value, out)))
+                let inner = self.resolve_expr(value)?;
+                let n_bits = *size * 8;
+                self.slice_bits(inner, (0, n_bits))?
             }
             ast::PcodeExpr::SliceBits { value, range } => {
-                let value = self.resolve_expr(value)?;
-                let value = self.slice(value, *range)?;
-                Ok(out.map_or(value, |out| self.copy(value, out)))
+                let inner = self.resolve_expr(value)?;
+                self.slice_bits(inner, *range)?
             }
             ast::PcodeExpr::Op { a, op, b } => {
                 let (a, op, b) = translate_pcode_op(a, op, b);
 
-                let lhs = self.resolve_expr(a)?;
-                let rhs = self.resolve_expr(b)?;
-
-                Ok(self.op(op, &[lhs, rhs], out))
+                let lhs = self.resolve_expr_value(a)?;
+                let rhs = self.resolve_expr_value(b)?;
+                ExprValue::BinOp(op, (lhs, rhs))
             }
             ast::PcodeExpr::Deref { space, size, pointer } => {
-                if space.as_ref().map_or(false, |space| *space == self.scope.globals.const_ident) {
-                    let value = self.resolve_expr(pointer)?.maybe_set_size(*size);
-                    Ok(out.map_or(value, |out| self.copy(value, out)))
-                }
-                else {
-                    let (pointer, size) = self.resolve_ptr(space, *size, pointer)?;
-                    Ok(self.load(size, pointer, out))
-                }
+                self.resolve_deref(space, *size, pointer)?
             }
-            ast::PcodeExpr::ConstantPoolRef { .. } => Err("constpoolref unimplemented".into()),
+            ast::PcodeExpr::ConstantPoolRef { .. } => {
+                return Err("constpoolref unimplemented".into());
+            }
             ast::PcodeExpr::Call(ast::PcodeCall { name, args }) => {
-                if let Some((op, n_inputs)) =
+                if let Some((op, params)) =
                     translate_inbuilt_func(self.scope.globals.parser.get_ident_str(*name))
                 {
-                    if args.len() != n_inputs {
+                    if args.len() != params {
                         return Err(format!(
-                            "Error {:?} with {} arguments (expected: {})",
-                            op,
-                            args.len(),
-                            n_inputs
+                            "Expected {params} args to {op:?} (got {})",
+                            args.len()
                         ));
                     }
-                    return self.resolve_inbuilt(op, args, out);
+                    return self.resolve_inbuilt(op, args);
                 }
 
                 match self.scope.globals.lookup(*name) {
                     Ok(Symbol { kind: SymbolKind::UserOp, id }) => {
-                        // @fixme: copy excess arguments to `pcode::Arg` slots (instead of in
-                        // `get_runtime_inputs`)
-                        let inputs = self.resolve_args(args)?;
                         let op = pcode::Op::PcodeOp(id.try_into().unwrap());
-                        Ok(self.op(op, &inputs, out))
+                        match &self.resolve_args(args)?[..] {
+                            [] => ExprValue::NullaryOp(op),
+                            [a] => {
+                                let a = self.read_value(a.clone(), None)?;
+                                ExprValue::UnaryOp(op, a)
+                            }
+                            [a, b] => {
+                                let a = self.read_value(a.clone(), None)?;
+                                let b = self.read_value(b.clone(), None)?;
+                                ExprValue::BinOp(op, (a, b))
+                            }
+                            [a, b, ref rest @ ..] => {
+                                for (i, arg) in rest.iter().enumerate() {
+                                    let value = self.read_value(arg.clone(), None)?;
+                                    self.op_no_output(pcode::Op::Arg(i as u16), &[value])
+                                }
+                                let a = self.read_value(a.clone(), None)?;
+                                let b = self.read_value(b.clone(), None)?;
+                                ExprValue::BinOp(op, (a, b))
+                            }
+                        }
                     }
                     Ok(Symbol { kind: SymbolKind::Macro, .. }) => {
-                        Err("macros are not allowed as expressions".into())
+                        return Err("macros are not allowed as expressions".into());
                     }
                     _ => {
                         // No matching global so treat this operation as a `SUBPIECE` on a local
                         // operation
-                        let input = self.resolve_ident(*name)?;
+                        let input = self.resolve_ident_value(*name)?;
                         let offset: u8 = match args[..] {
                             [ast::PcodeExpr::Integer { value }] => value
                                 .try_into()
                                 .map_err(|_| format!("SUBPIECE offset too large: {value}"))?,
                             _ => return Err("expected SUBPIECE(<const>)".into()),
                         };
-                        Ok(self.op(pcode::Op::Subpiece(offset), &[input], out))
+
+                        // @todo?: Can a subpiece expression appear as an lvalue?
+                        ExprValue::UnaryOp(pcode::Op::Subpiece(offset), input)
                     }
                 }
             }
-        }
+        })
+    }
+
+    fn slice_bits(&mut self, value: ExprValue, range: ast::Range) -> Result<ExprValue, String> {
+        let (bit_offset, num_bits) = range;
+        Ok(match value {
+            ExprValue::Local(value) => ExprValue::BitRange(value, range),
+            ExprValue::Const(x, size) => {
+                if bit_offset + num_bits > 8 * size.unwrap_or(8) {
+                    // @todo? this check can be wrong if there are multiple slice operations, since
+                    // the size gets increased to the nearest byte boundary.
+                    return Err(format!(
+                        "bit slice of [{bit_offset},{num_bits}] constant would result in an out-of-bounds access"
+                    ));
+                }
+                let new_val = (x >> bit_offset) & pcode::mask(num_bits as u64);
+                ExprValue::Const(new_val, Some(needed_bytes(num_bits)))
+            }
+            ExprValue::BitRange(value, (prev_offset, prev_num_bits)) => {
+                let new_offset = prev_offset + bit_offset;
+                if new_offset + num_bits > prev_offset + prev_num_bits {
+                    return Err(format!(
+                        "bit slice [{bit_offset},{num_bits}] of value[{prev_offset},{prev_num_bits}] would result in an out-of-bounds access"
+                    ));
+                }
+                ExprValue::BitRange(value, (new_offset, num_bits))
+            }
+            _ => {
+                // Unable to take direct slice of the value before evaluation, so generate code for
+                // reading the value and take a slice of the result.
+                let tmp = self.read_value(value, None)?;
+                // We mark the result as unbound to prevent assignment to the temporary value.
+                ExprValue::Unbound(self.read_slice(tmp, range, None)?)
+            }
+        })
     }
 
     fn resolve_inbuilt(
         &mut self,
         op: pcode::Op,
         args: &[ast::PcodeExpr],
-        out: Option<Value>,
-    ) -> Result<Value, String> {
+    ) -> Result<ExprValue, String> {
         match args {
             [input] => {
-                let input = self.resolve_expr(input)?;
-                Ok(self.op(op, &[input], out))
+                let input = self.resolve_expr_value(input)?;
+                Ok(ExprValue::UnaryOp(op, input))
             }
             [a, b] => {
-                let a = self.resolve_expr(a)?;
-                let b = self.resolve_expr(b)?;
-                Ok(self.op(op, &[a, b], out))
+                let a = self.resolve_expr_value(a)?;
+                let b = self.resolve_expr_value(b)?;
+                Ok(ExprValue::BinOp(op, (a, b)))
             }
             _ => unreachable!(),
         }
     }
 
     fn resolve_dst(&mut self, expr: &ast::PcodeExpr) -> Result<Destination, String> {
+        // SLEIGH allows temporaries to be used as a destination even without declaring them so
+        // we handle this as a special case here.
         match expr {
-            ast::PcodeExpr::Ident { value } => {
-                let value = match self.resolve_ident(*value) {
-                    Ok(local) => local,
-                    Err(_) => self.scope.named_tmp(*value, None)?.into(),
-                };
-                Ok(Destination::Local(value))
+            ast::PcodeExpr::Ident { value } if self.resolve_ident(*value).is_err() => {
+                return Ok(Destination::Local(self.scope.named_tmp(*value, None)?.into()));
             }
-            ast::PcodeExpr::Truncate { value, size } => match value.as_ref() {
-                &ast::PcodeExpr::Ident { value } => {
-                    let value = match self.resolve_ident(value) {
-                        Ok(local) => local.truncate(*size),
-                        Err(_) => self.scope.named_tmp(value, Some(*size))?.into(),
-                    };
-                    Ok(Destination::Local(value))
-                }
-                _ => Err(format!("cannot assign to expression: {:?}", expr)),
-            },
-            ast::PcodeExpr::SliceBits { value, range: (bit_offset, num_bits) } => {
-                let dst = self.resolve_expr(value)?;
-                match dst.try_slice(*bit_offset, *num_bits) {
-                    Some(dst) => Ok(Destination::Local(dst)),
-                    None => Ok(Destination::SliceBits(dst, (*bit_offset, *num_bits))),
+            ast::PcodeExpr::Truncate { value, size } => {
+                if let ast::PcodeExpr::Ident { value } = value.as_ref() {
+                    if self.resolve_ident(*value).is_err() {
+                        return Ok(Destination::Local(
+                            self.scope.named_tmp(*value, Some(*size))?.into(),
+                        ));
+                    }
                 }
             }
-            ast::PcodeExpr::Deref { space, size, pointer } => {
-                let (pointer, size) = self.resolve_ptr(space, *size, pointer)?;
-                Ok(Destination::Pointer(pointer, size))
-            }
-            _ => Err(format!("cannot assign to expression: {:?}", expr)),
+            _ => {}
+        };
+
+        match self.resolve_expr(expr)? {
+            ExprValue::Local(value) => Ok(Destination::Local(value)),
+            ExprValue::Mem(pointer, size) => Ok(Destination::Mem(pointer, size)),
+            ExprValue::BitRange(value, range) => Ok(Destination::BitRange(value, range)),
+            _ => Err(format!("cannot assign to expression: {expr:?}")),
         }
     }
 
-    fn slice(&mut self, value: Value, (bit_offset, num_bits): ast::Range) -> Result<Value, String> {
-        if let Some(value) = value.try_slice(bit_offset, num_bits) {
-            return Ok(value);
+    fn read_value(&mut self, value: ExprValue, out: Option<Value>) -> Result<Value, String> {
+        Ok(match value {
+            ExprValue::Local(value) | ExprValue::Unbound(value) => {
+                out.map_or(value, |out| self.copy(value, out))
+            }
+            ExprValue::Const(x, size) => {
+                let value = Value::constant(x).maybe_set_size(size);
+                out.map_or(value, |out| self.copy(value, out))
+            }
+            ExprValue::NullaryOp(op) => self.op(op, &[], out),
+            ExprValue::UnaryOp(op, x) => self.op(op, &[x], out),
+            ExprValue::BinOp(op, (a, b)) => self.op(op, &[a, b], out),
+            ExprValue::Mem(pointer, size) => self.load(size, pointer, out),
+            ExprValue::AddressOf(value, offset, size) => {
+                self.compute_address_of(value, offset, size, out)?
+            }
+            ExprValue::BitRange(value, range) => self.read_slice(value, range, out)?,
+            ExprValue::RegisterRef(pointer, size) => {
+                let output = out.unwrap_or_else(|| self.scope.add_tmp(Some(size)).into());
+                self.semantics.actions.push(SemanticAction::CopyFromDynamicRegister {
+                    pointer,
+                    output,
+                    size,
+                });
+                output
+            }
+        })
+    }
+
+    fn read_slice(
+        &mut self,
+        value: Value,
+        (bit_offset, num_bits): ast::Range,
+        out: Option<Value>,
+    ) -> Result<Value, String> {
+        if let Some(value) = try_slice_bits(value, (bit_offset, num_bits)) {
+            return Ok(out.map_or(value, |out| self.copy(value, out)));
         }
 
         let mask = Value::constant(pcode::mask(num_bits as u64));
@@ -847,33 +973,40 @@ impl<'a, 'b> Builder<'a, 'b> {
         let tmp = self.scope.add_tmp(self.size_of(value)).into();
         self.op(pcode::Op::IntRight, &[value, shift], Some(tmp));
         self.op(pcode::Op::IntAnd, &[tmp, mask], Some(tmp));
-        Ok(tmp.truncate(needed_bytes(num_bits)))
+
+        let value = tmp.truncate(needed_bytes(num_bits));
+        Ok(out.map_or(value, |out| self.copy(value, out)))
     }
 
-    fn resolve_ident(&mut self, ident: ast::Ident) -> Result<Value, String> {
+    fn resolve_ident_value(&mut self, ident: ast::Ident) -> Result<Value, String> {
+        let expr_value = self.resolve_ident(ident)?;
+        self.read_value(expr_value, None)
+    }
+
+    fn resolve_ident(&mut self, ident: ast::Ident) -> Result<ExprValue, String> {
         // First try to resolve `ident` as a macro parameter or symbol in the local scope
         if let Some(var) = self.macro_params.get(&ident) {
-            return Ok(*var);
+            return Ok(var.clone());
         }
         if let Some(local) = self.scope.lookup(ident) {
-            return Ok(local.into());
+            return Ok(ExprValue::Local(local.into()));
         }
 
         // A subset of globals are also allowed inside the constructor
         let global = self.scope.globals.lookup(ident)?;
-        let local = match global.kind {
-            SymbolKind::Register => Local::Register(global.id),
-            SymbolKind::BitRange => return Err("@fixme: handle bitrange symbols".into()),
-            _ => {
-                return Err(format!(
-                    "{:?}<{}> is not allowed in this scope",
-                    global.kind,
-                    self.scope.debug(&ident)
-                ));
+        match global.kind {
+            SymbolKind::Register => Ok(Local::Register(global.id).into()),
+            SymbolKind::BitRange => {
+                let symbol = &self.scope.globals.bit_ranges[global.id as usize];
+                let source = Value::from(Local::Register(symbol.register));
+                Ok(ExprValue::BitRange(source, symbol.range).into())
             }
-        };
-
-        Ok(local.into())
+            _ => Err(format!(
+                "{:?}<{}> is not allowed in this scope",
+                global.kind,
+                self.scope.debug(&ident)
+            )),
+        }
     }
 
     fn resolve_space(
@@ -890,33 +1023,79 @@ impl<'a, 'b> Builder<'a, 'b> {
         Ok((id, addr_size, word_size))
     }
 
-    fn resolve_ptr(
+    fn resolve_deref(
         &mut self,
         space: &Option<ast::Ident>,
         size: Option<ast::VarSize>,
         pointer: &ast::PcodeExpr,
-    ) -> Result<(Value, ValueSize), String> {
-        let (_space, _addr_size, _word_size) = self.resolve_space(space)?;
-        Ok((self.resolve_expr(pointer)?, size.unwrap_or(0)))
+    ) -> Result<ExprValue, String> {
+        let pointer = self.resolve_expr(pointer)?;
+
+        if space.as_ref().map_or(false, |&space| space == self.scope.globals.const_ident) {
+            return match pointer {
+                ExprValue::Local(value) => Ok(ExprValue::Local(value.maybe_set_size(size))),
+                ExprValue::Const(x, prev_size) => Ok(ExprValue::Const(x, size.or(prev_size))),
+                x => Err(format!(
+                    "`[const]` space should only be used on a local variable or constant (got: {x:?})"
+                )),
+            };
+        }
+
+        let (space_id, _addr_size, _word_size) = self.resolve_space(space)?;
+        let pointer = self.read_value(pointer, None)?;
+
+        Ok(match space_id {
+            REGISTER_SPACE => ExprValue::RegisterRef(pointer, size.unwrap_or(0)),
+            RAM_SPACE => ExprValue::Mem(pointer, size.unwrap_or(0)),
+            _ => panic!("unknown space_id: {}", space_id),
+        })
     }
 
-    fn resolve_args(&mut self, args: &[ast::PcodeExpr]) -> Result<Vec<Value>, String> {
+    fn resolve_args(&mut self, args: &[ast::PcodeExpr]) -> Result<Vec<ExprValue>, String> {
         args.iter().map(|x| self.resolve_expr(x)).collect::<Result<Vec<_>, _>>()
+    }
+
+    fn compute_address_of(
+        &mut self,
+        mut base: Value,
+        offset: Value,
+        _size: Option<ast::VarSize>,
+        out: Option<Value>,
+    ) -> Result<Value, String> {
+        if offset.offset != 0 || offset.address_offset.is_some() {
+            return Err(format!(
+                "{:?} unsupported offset expression used address_of operation",
+                offset.local
+            ));
+        }
+        base.address_offset = Some(offset.local);
+        if let Some(output) = out {
+            base.size = self.size_of(output);
+        }
+        Ok(out.map_or(base, |out| self.copy(base, out)))
     }
 }
 
-fn address_of(value: Value, offset: Value, size: Option<ValueSize>) -> Result<Value, String> {
-    let offset: u16 = match offset.local {
-        Local::Constant(x) => x.try_into().map_err(|_| format!("offset to large: {x}"))?,
-        _ => return Err(format!("{:?} is unsupported in address of operation", value.local)),
+fn address_of(
+    base: ExprValue,
+    offset: Value,
+    size: Option<ValueSize>,
+) -> Result<ExprValue, String> {
+    let ExprValue::Local(base) = base else {
+        // @todo: check whether any other expressions are allowed.
+        return Err(format!("{base:?} invalid expression used in address_of operation"));
     };
+    Ok(ExprValue::AddressOf(base, offset, size))
+}
 
-    Ok(match value.local {
-        Local::Subtable(index) => {
-            Value { local: Local::SubtableAddr(index), offset: offset + value.offset, size }
-        }
-        _ => Value { local: value.local, offset: offset + value.offset, size: size.or(value.size) },
-    })
+/// Try to slice a value by a bit-range by adjusting the underlying byte offset and size. Returns
+/// `None` if the range is not byte-aligned.
+fn try_slice_bits(value: Value, (bit_offset, num_bits): (ValueSize, ValueSize)) -> Option<Value> {
+    if bit_offset % 8 != 0 || num_bits % 8 != 0 {
+        return None;
+    }
+    let (offset, size) = (bit_offset / 8, num_bits / 8);
+    Some(value.slice_bytes(offset, size))
 }
 
 /// Translate an input symbol to a P-code opcode, returning the name of the Opcode and the expected
@@ -934,7 +1113,9 @@ fn translate_inbuilt_func(name: &str) -> Option<(pcode::Op, usize)> {
         "scarry" => (Op::IntSignedCarry, 2),
         "sborrow" => (Op::IntSignedBorrow, 2),
 
-        "zext" => (Op::ZeroExtend, 1),
+        // Though not listed in the SLEIGH reference, the "zxt" variant appears in the ARMv7
+        // specification.
+        "zext" | "zxt" => (Op::ZeroExtend, 1),
         "sext" => (Op::SignExtend, 1),
 
         "f-" => (Op::FloatNegate, 1),

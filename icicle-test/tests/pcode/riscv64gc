@@ -49,8 +49,7 @@ c.mv a0,a5
 c.ldsp s0,0x18(sp)
 <L0> (entry=0x1c):
 	$U1:8 = 0x18:8 + sp
-	$U2:8 = ram[$U1:8]
-	s0 = $U2:8
+	s0 = ram[$U1:8]
 
 c.addi16sp sp,0x20
 <L0> (entry=0x1e):

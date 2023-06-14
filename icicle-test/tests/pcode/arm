@@ -118,11 +118,10 @@ pop {r4,r5,pc}
 	mult_addr = mult_addr + 0x4:4
 	sp = mult_addr
 	$U1:4 = tmp_pc & 0x1:4
-	$U2:1 = $U1:4 != 0x0:4
-	ISAModeSwitch = $U2:1
-	TB = $U2:1
-	$U3:4 = tmp_pc & 0xfffffffe:4
-	return $U3:4
+	ISAModeSwitch = $U1:4 != 0x0:4
+	TB = ISAModeSwitch
+	$U2:4 = tmp_pc & 0xfffffffe:4
+	return $U2:4
 
 ldmia r3,{r1,r2,r3}
 <L0> (entry=0x11000):
@@ -138,11 +137,10 @@ ldr.w pc,[sp],#0x8
 	sp = sp + 0x8:4
 	tmp_pc = ram[$U1:4]
 	$U2:4 = tmp_pc & 0x1:4
-	$U3:1 = $U2:4 != 0x0:4
-	ISAModeSwitch = $U3:1
-	TB = $U3:1
-	$U4:4 = tmp_pc & 0xfffffffe:4
-	jump $U4:4
+	ISAModeSwitch = $U2:4 != 0x0:4
+	TB = ISAModeSwitch
+	$U3:4 = tmp_pc & 0xfffffffe:4
+	jump $U3:4
 
 mov r5,r0
 <L0> (entry=0x0):
@@ -278,12 +276,12 @@ mrs r0,msp
 
 mrs r0,control
 <L0> (entry=0x0):
-	$U2:1 = isThreadModePrivileged()
-	$U1:1 = $U2:1 != 0x1:1
-	$U4:1 = isUsingMainStack()
-	$U3:1 = $U4:1 != 0x1:1
-	$U5:1 = $U3:1 << 0x1:4
-	$U6:1 = $U5:1 | $U1:1
+	$U1:1 = isThreadModePrivileged()
+	$U2:1 = $U1:1 != 0x1:1
+	$U3:1 = isUsingMainStack()
+	$U4:1 = $U3:1 != 0x1:1
+	$U5:1 = $U4:1 << 0x1:4
+	$U6:1 = $U5:1 | $U2:1
 	r0 = zext($U6:1)
 
 msr control,r0
@@ -292,16 +290,16 @@ msr control,r0
 	$U2:1 = !$U1:1
 	if $U2:1 jump 0x4:8
 <L1>:
-	$U4:4 = r0 & 0x1:4
-	$U3:1 = $U4:4 == 0x0:4
-	setThreadModePrivileged($U3:1)
+	$U3:4 = r0 & 0x1:4
+	$U4:1 = $U3:4 == 0x0:4
+	setThreadModePrivileged($U4:1)
 	$U1:1 = isThreadMode()
 	$U5:1 = !$U1:1
 	if $U5:1 jump 0x4:8
 <L2>:
-	$U7:4 = r0 & 0x2:4
-	$U6:1 = $U7:4 == 0x0:4
-	setStackMode($U6:1)
+	$U6:4 = r0 & 0x2:4
+	$U7:1 = $U6:4 == 0x0:4
+	setStackMode($U7:1)
 
 ldr.w r1,[0x7fff6dc]
 <L0> (entry=0x8000000):
@@ -396,11 +394,10 @@ pop.w {r3,r4,r5,r6,r7,r8,r9,pc}
 	mult_addr = mult_addr + 0x4:4
 	sp = mult_addr
 	$U1:4 = tmp_pc & 0x1:4
-	$U2:1 = $U1:4 != 0x0:4
-	ISAModeSwitch = $U2:1
-	TB = $U2:1
-	$U3:4 = tmp_pc & 0xfffffffe:4
-	return $U3:4
+	ISAModeSwitch = $U1:4 != 0x0:4
+	TB = ISAModeSwitch
+	$U2:4 = tmp_pc & 0xfffffffe:4
+	return $U2:4
 
 udiv r2,r2,r3
 <L0> (entry=0x0):
@@ -549,18 +546,17 @@ bx.gt lr
 	r0 = r0 | $tmp0:4
 <L4>:
 	instruction(0x8000ecc)
-	$U6:1 = !ZR
-	$U7:1 = NG == OV
-	$U5:1 = $U6:1 && $U7:1
-	$U4:1 = !$U5:1
-	if $U4:1 jump 0x8000ece:8
+	$U5:1 = !ZR
+	$U6:1 = NG == OV
+	$U4:1 = $U5:1 && $U6:1
+	$U3:1 = !$U4:1
+	if $U3:1 jump 0x8000ece:8
 <L5>:
 	$U1:4 = lr & 0x1:4
-	$U2:1 = $U1:4 != 0x0:4
-	ISAModeSwitch = $U2:1
-	TB = $U2:1
-	$U3:4 = lr & 0xfffffffe:4
-	return $U3:4
+	ISAModeSwitch = $U1:4 != 0x0:4
+	TB = ISAModeSwitch
+	$U2:4 = lr & 0xfffffffe:4
+	return $U2:4
 
 subs r3,r2,r3
 ldr r2,[r7,#0x50]
@@ -600,20 +596,19 @@ ldr.w pc,[sp],#0x8
 	sp = sp + 0x8:4
 	tmp_pc = ram[$U1:4]
 	$U2:4 = tmp_pc & 0x1:4
-	$U3:1 = $U2:4 != 0x0:4
-	ISAModeSwitch = $U3:1
-	TB = $U3:1
-	$U4:4 = tmp_pc & 0xfffffffe:4
-	jump $U4:4
+	ISAModeSwitch = $U2:4 != 0x0:4
+	TB = ISAModeSwitch
+	$U3:4 = tmp_pc & 0xfffffffe:4
+	jump $U3:4
 
 vext.8 d9,d8,d5,#0xb
 <L0> (entry=0x1100):
-	$U2:16 = zext(d5)
-	$U3:16 = $U2:16 << 0x40:4
-	$U4:16 = zext(d8)
-	$U1:16 = $U3:16 | $U4:16
-	$U1:16 = $U1:16 >> 0x58:1
-	d9 = $U1:8
+	$U1:16 = zext(d5)
+	$U2:16 = $U1:16 << 0x40:4
+	$U3:16 = zext(d8)
+	$U4:16 = $U2:16 | $U3:16
+	$U4:16 = $U4:16 >> 0x58:1
+	d9 = $U4:8
 
 ldrex r3,[r3,#0x0]
 <L0> (entry=0x11000):

@@ -70,8 +70,8 @@ MOV EAX,dword ptr [0x0]
 
 PEXTRW R13D, XMM1, 0x1
 <L0> (entry=0x0):
-	$U5:8 = XMM1_Qa >> 0x10:1
-	$U4:8 = $U5:8
+	$U7:8 = XMM1_Qa >> 0x10:1
+	$U4:8 = $U7:8
 	R13D = zext($U4:2)
 	R13 = zext(R13D)
 
@@ -226,11 +226,11 @@ CPUID
 
 MUL RBX
 <L0> (entry=0x1a):
-	$U2:16 = zext(RAX)
-	$U3:16 = zext(RBX)
-	$U1:16 = $U2:16 * $U3:16
-	RDX = $U1[8]:8
-	RAX = $U1:8
+	$U1:16 = zext(RAX)
+	$U2:16 = zext(RBX)
+	$U3:16 = $U1:16 * $U2:16
+	RDX = $U3[8]:8
+	RAX = $U3:8
 	CF = RDX != 0x0:8
 	OF = CF
 
@@ -389,13 +389,13 @@ ADD RAX,qword ptr FS:[0x0]
 
 IMUL RDX
 <L0> (entry=0x62):
-	$U2:16 = sext(RAX)
-	$U3:16 = sext(RDX)
-	$U1:16 = $U2:16 * $U3:16
+	$U1:16 = sext(RAX)
+	$U2:16 = sext(RDX)
+	$U3:16 = $U1:16 * $U2:16
 	RAX = RAX * RDX
-	RDX = $U1[8]:8
+	RDX = $U3[8]:8
 	$U4:16 = sext(RAX)
-	CF = $U4:16 != $U1:16
+	CF = $U4:16 != $U3:16
 	OF = CF
 
 PCMPEQB MM2, MM6
@@ -1002,24 +1002,24 @@ ROL RAX,CL
 
 MUL R14
 <L0> (entry=0x0):
-	$U2:16 = zext(RAX)
-	$U3:16 = zext(R14)
-	$U1:16 = $U2:16 * $U3:16
-	RDX = $U1[8]:8
-	RAX = $U1:8
+	$U1:16 = zext(RAX)
+	$U2:16 = zext(R14)
+	$U3:16 = $U1:16 * $U2:16
+	RDX = $U3[8]:8
+	RAX = $U3:8
 	CF = RDX != 0x0:8
 	OF = CF
 
 DIV RCX
 <L0> (entry=0x0):
 	$U1:16 = zext(RCX)
-	$U3:16 = zext(RDX)
-	$U4:16 = $U3:16 << 0x40:8
-	$U5:16 = zext(RAX)
-	$U2:16 = $U4:16 | $U5:16
-	$U6:16 = $U2:16 / $U1:16
+	$U2:16 = zext(RDX)
+	$U3:16 = $U2:16 << 0x40:8
+	$U4:16 = zext(RAX)
+	$U5:16 = $U3:16 | $U4:16
+	$U6:16 = $U5:16 / $U1:16
 	RAX = $U6:8
-	$U7:16 = $U2:16 % $U1:16
+	$U7:16 = $U5:16 % $U1:16
 	RDX = $U7:8
 
 ADD AX,BX
@@ -1060,10 +1060,10 @@ CMP AX,BX
 
 MUL AX
 <L0> (entry=0x0):
-	$U2:4 = zext(AX)
-	$U1:4 = $U2:4 * $U2:4
-	DX = $U1[2]:2
-	AX = $U1:2
+	$U1:4 = zext(AX)
+	$U3:4 = $U1:4 * $U1:4
+	DX = $U3[2]:2
+	AX = $U3:2
 	CF = DX != 0x0:2
 	OF = CF
 

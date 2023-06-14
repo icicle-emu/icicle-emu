@@ -3,6 +3,8 @@ pub type ValueSize = u16;
 #[derive(Debug, Clone)]
 pub enum SemanticAction {
     Op { op: pcode::Op, inputs: Vec<Value>, output: Option<Value> },
+    CopyFromDynamicRegister { pointer: Value, output: Value, size: ValueSize },
+    CopyToDynamicRegister { pointer: Value, value: Value, size: ValueSize },
     DelaySlot,
     Build(u32),
 }
@@ -15,13 +17,16 @@ pub struct Value {
     /// The byte offset of the value from the start of the local.
     pub offset: ValueSize,
 
+    /// If not None, this value represents an address with the offset stored the saved local.
+    pub address_offset: Option<Local>,
+
     /// The size of the value in bytes.
     pub size: Option<ValueSize>,
 }
 
 impl Value {
     pub fn constant(value: u64) -> Self {
-        Self { local: Local::Constant(value), offset: 0, size: None }
+        Self { local: Local::Constant(value), offset: 0, address_offset: None, size: None }
     }
 
     pub fn truncate(self, size: ValueSize) -> Self {
@@ -32,18 +37,6 @@ impl Value {
         Self { size: size.or(self.size), ..self }
     }
 
-    /// Attempt to slice the current value.
-    ///
-    /// If the slice offset and length correspond to byte offsets then we can just adjust the
-    /// underlying varnode instead of generating instructions for extracting the range manually.
-    pub fn try_slice(mut self, bit_offset: ValueSize, num_bits: ValueSize) -> Option<Self> {
-        if bit_offset % 8 != 0 || num_bits % 8 != 0 {
-            return None;
-        }
-        self.offset += bit_offset / 8;
-        Some(self.truncate(num_bits / 8))
-    }
-
     pub fn slice_bytes(mut self, offset: ValueSize, size: ValueSize) -> Self {
         self.offset += offset;
         self.truncate(size)
@@ -52,7 +45,7 @@ impl Value {
 
 impl From<Local> for Value {
     fn from(local: Local) -> Self {
-        Self { local, offset: 0, size: None }
+        Self { local, offset: 0, size: None, address_offset: None }
     }
 }
 
@@ -97,9 +90,6 @@ pub enum Local {
     ///
     /// Note: this represents the offset into `constructor.subtables` not the TableId.
     Subtable(u32),
-
-    /// A reference to the address of an exported subtable.
-    SubtableAddr(u32),
 
     /// Represents a temporary inside of the semantics section
     PcodeTmp(u32),

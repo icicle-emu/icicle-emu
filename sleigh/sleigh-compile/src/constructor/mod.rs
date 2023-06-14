@@ -229,7 +229,6 @@ impl<'a> Scope<'a> {
             Local::Subtable(index) => {
                 self.globals.tables[self.subtables[index as usize] as usize].export
             }
-            Local::SubtableAddr(_) => None,
             Local::Field(idx) => {
                 let field = &self.fields[idx as usize];
                 match field.attached.map(|attach| &self.globals.attachments[attach as usize]) {

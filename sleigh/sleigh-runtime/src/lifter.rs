@@ -27,8 +27,8 @@ pub enum Error {
     /// The constructor had an invalid export statement.
     InvalidExport(ConstructorId),
 
-    /// We encounted an a currently unsupported sleigh feature.
-    Unimplemented(&'static str),
+    /// We encounted an internal error.
+    Internal(&'static str),
 }
 
 impl std::error::Error for Error {}
@@ -44,7 +44,7 @@ impl std::fmt::Display for Error {
             Error::TooManyTemporaries => f.write_str("Too many temporaries"),
             Error::UnsupportedVarNodeSize(size) => write!(f, "Unsupported varnode size: {}", size),
             Error::InvalidExport(id) => write!(f, "Invalid export: Constructor({})", id),
-            Error::Unimplemented(str) => write!(f, "Unimplemented: {}", str),
+            Error::Internal(str) => write!(f, "Internal error: {str}"),
         }
     }
 }
@@ -264,6 +264,21 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
                         Output::None => self.emit(*op, &resolved_inputs, None)?,
                     }
                 }
+                SemanticAction::CopyFromDynamicRegister { pointer, output, size } => {
+                    let var = self.resolve_dynamic_varnode(pointer, *size)?;
+                    match self.resolve_output(&Some(*output))? {
+                        Output::Var(dst) => self.emit_copy(var.into(), dst)?,
+                        Output::Pointer(addr, offset, size) => {
+                            self.emit_store(addr, offset, var.slice(0, size).into())?;
+                        }
+                        _ => return Err(Error::Internal("CopyFromDynamicRegister with no output")),
+                    }
+                }
+                SemanticAction::CopyToDynamicRegister { pointer, value, size } => {
+                    let var = self.resolve_dynamic_varnode(pointer, *size)?;
+                    let value = self.resolve_value(*value)?;
+                    self.emit_copy(value, var.into())?;
+                }
                 SemanticAction::DelaySlot => {
                     // @todo: do we want an instruction marker here?
                     //
@@ -291,6 +306,13 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
         };
         self.lifter.tmp_offset = prev_tmp_offset;
         Ok(export)
+    }
+
+    fn resolve_dynamic_varnode(&mut self, pointer: &Value, size: u16) -> Result<VarNode> {
+        match self.resolve_value(*pointer)? {
+            ResolvedValue::Const(offset, _) => Ok(VarNode::register(offset as u32, size)),
+            _ => return Err(Error::Internal("register offset was not a constant")),
+        }
     }
 
     /// Returns the runtime register associated with the provided variable.
@@ -347,6 +369,34 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
         let value_offset = value.offset;
         let value_size = value.size.unwrap_or(self.lifter.default_size);
 
+        if let Some(offset) = value.address_offset {
+            let offset = match offset {
+                Local::Constant(offset) => offset,
+                _ => return Err(Error::Internal("non constant address offset")),
+            };
+
+            return Ok(match value.local {
+                Local::Subtable(idx) => {
+                    match self.subtable_export(idx).ok_or(Error::InvalidVarNode)? {
+                        Operand::Value(value) => {
+                            value.slice(value_offset + offset as u16, value_size).into()
+                        }
+                        Operand::Pointer(var, base, size) => {
+                            let offset =
+                                (base + offset).try_into().map_err(|_| Error::InvalidVarNode)?;
+                            var.slice(offset, size).into()
+                        }
+                    }
+                }
+                Local::InstStart => constant!(self.subtable.inst.inst_start + offset),
+                Local::InstNext => constant!(self.subtable.inst.inst_next + offset),
+                _ => {
+                    eprintln!("{:?}", value.local);
+                    return Err(Error::Internal("dynamic address of non subtable"));
+                }
+            });
+        }
+
         Ok(match value.local {
             Local::InstStart => constant!(self.subtable.inst.inst_start),
             Local::InstNext => constant!(self.subtable.inst.inst_next),
@@ -368,15 +418,6 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
             Local::Subtable(idx) => {
                 let var = self.subtable_export(idx).ok_or(Error::InvalidVarNode)?;
                 var.slice(value.offset, value_size)
-            }
-            Local::SubtableAddr(idx) => {
-                match self.subtable_export(idx).ok_or(Error::InvalidVarNode)? {
-                    Operand::Value(value) => value.slice(value_offset, value_size).into(),
-                    Operand::Pointer(var, offset, size) => {
-                        let offset = offset.try_into().map_err(|_| Error::InvalidVarNode)?;
-                        var.slice(offset, size).into()
-                    }
-                }
             }
             Local::PcodeTmp(id) => {
                 let var = self.lifter.named_tmp(id);
@@ -449,7 +490,7 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
                 return match op {
                     pcode::Op::Copy => self.emit_copy(inputs[0], output),
                     pcode::Op::Subpiece(_) => {
-                        Err(Error::Unimplemented("Subpiece operation on large varnode"))
+                        Err(Error::Internal("Subpiece operation on large varnode"))
                     }
                     pcode::Op::ZeroExtend => {
                         self.emit_copy(inputs[0], output.slice(0, inputs[0].size()))?;

@@ -78,10 +78,10 @@ DEC.W R15
 
 SUBC.W #1, R14
 <L0> (entry=0x0):
-	$U2:4 = SR & 0x1:4
-	$U3:2 = zext($U2:1)
-	$U1:2 = 0x1:2 - $U3:2
-	$U4:2 = $U1:2 + 0x1:2
+	$U1:4 = SR & 0x1:4
+	$U2:2 = zext($U1:1)
+	$U3:2 = 0x1:2 - $U2:2
+	$U4:2 = $U3:2 + 0x1:2
 	$U5:1 = $U4:2 <= R14_16
 	$U6:4 = SR & 0xfffffffe:4
 	$U7:4 = zext($U5:1)
@@ -92,7 +92,7 @@ SUBC.W #1, R14
 	$U11:4 = $U11:4 << 0x8:4
 	SR = $U10:4 | $U11:4
 	$U12:2 = R14_16 - 0x1:2
-	R14_16 = $U12:2 - $U1:2
+	R14_16 = $U12:2 - $U3:2
 	$U19:2 = R14_16
 	R14 = 0x0:4
 	R14_16 = $U19:2
@@ -109,19 +109,19 @@ SUBC.W #1, R14
 
 SBC.W R14
 <L0> (entry=0x0):
-	$U2:4 = SR & 0x1:4
-	$U3:2 = zext($U2:1)
-	$U1:2 = 0x1:2 - $U3:2
-	$U4:1 = $U1:2 <= R14_16
+	$U1:4 = SR & 0x1:4
+	$U2:2 = zext($U1:1)
+	$U3:2 = 0x1:2 - $U2:2
+	$U4:1 = $U3:2 <= R14_16
 	$U5:4 = SR & 0xfffffffe:4
 	$U6:4 = zext($U4:1)
 	SR = $U5:4 | $U6:4
-	$U7:1 = R14_16 sborrow $U1:2
+	$U7:1 = R14_16 sborrow $U3:2
 	$U8:4 = SR & 0xfffffeff:4
 	$U9:4 = zext($U7:1)
 	$U9:4 = $U9:4 << 0x8:4
 	SR = $U8:4 | $U9:4
-	R14_16 = R14_16 - $U1:2
+	R14_16 = R14_16 - $U3:2
 	$U16:2 = R14_16
 	R14 = 0x0:4
 	R14_16 = $U16:2
@@ -139,14 +139,14 @@ SBC.W R14
 RETI
 <L0> (entry=0x0):
 	$U8:4 = SR
-	$U2:2 = ram[SP]
-	$U1:4 = zext($U2:2)
-	$U3:4 = $U1:4 & 0xfff:4
+	$U1:2 = ram[SP]
+	$U2:4 = zext($U1:2)
+	$U3:4 = $U2:4 & 0xfff:4
 	SR = zext($U3:2)
 	SP = SP + 0x2:4
 	$U4:2 = ram[SP]
 	$U5:4 = zext($U4:2)
-	$U6:4 = $U1:4 & 0xf000:4
+	$U6:4 = $U2:4 & 0xf000:4
 	$U7:4 = $U6:4 << 0x4:4
 	TMP_PC = $U5:4 | $U7:4
 	SP = SP + 0x2:4
@@ -342,10 +342,10 @@ ADDA #0x4, R9
 	$U3:4 = R9 + 0x4:4
 	$U4:4 = $U3:4 & 0xfffff:4
 	R9 = $U4:4
-	$U8:4 = $U1:4
-	$U8:4 = $U8:4 & 0xfffff:4
-	$U5:4 = 0x4:4 + $U8:4
-	$U9:1 = 0xfffff:4 < $U5:4
+	$U7:4 = $U1:4
+	$U7:4 = $U7:4 & 0xfffff:4
+	$U6:4 = 0x4:4 + $U7:4
+	$U9:1 = 0xfffff:4 < $U6:4
 	$U10:4 = SR & 0xfffffffe:4
 	$U11:4 = zext($U9:1)
 	SR = $U10:4 | $U11:4
@@ -363,11 +363,11 @@ ADDA R14, R15
 	$U2:4 = R14 + R15
 	$U3:4 = $U2:4 & 0xfffff:4
 	R15 = $U3:4
-	$U5:4 = R14 & 0xfffff:4
-	$U7:4 = $U1:4
-	$U7:4 = $U7:4 & 0xfffff:4
-	$U4:4 = $U5:4 + $U7:4
-	$U8:1 = 0xfffff:4 < $U4:4
+	$U4:4 = R14 & 0xfffff:4
+	$U6:4 = $U1:4
+	$U6:4 = $U6:4 & 0xfffff:4
+	$U5:4 = $U4:4 + $U6:4
+	$U8:1 = 0xfffff:4 < $U5:4
 	$U9:4 = SR & 0xfffffffe:4
 	$U10:4 = zext($U8:1)
 	SR = $U9:4 | $U10:4
@@ -390,24 +390,24 @@ ADDA R14, R15
 CMPA R5, R3
 <L0> (entry=0x0):
 	$U1:4 = R3 - R5
-	$U3:4 = $U1:4 & 0xfffff:4
-	$U5:4 = R5 & 0xfffff:4
-	$U7:4 = R3 & 0xfffff:4
-	$U8:1 = $U5:4 <= $U7:4
+	$U2:4 = $U1:4 & 0xfffff:4
+	$U4:4 = R5 & 0xfffff:4
+	$U6:4 = R3 & 0xfffff:4
+	$U8:1 = $U4:4 <= $U6:4
 	$U9:4 = SR & 0xfffffffe:4
 	$U10:4 = zext($U8:1)
 	SR = $U9:4 | $U10:4
 	$U16:1 = 0x0:4 s<= R5
 	$U17:1 = R3 s< 0x0:4
 	$U18:1 = $U16:1 && $U17:1
-	$U19:1 = 0x0:4 s<= $U3:4
+	$U19:1 = 0x0:4 s<= $U2:4
 	$U20:1 = $U18:1 && $U19:1
 	$U22:4 = SR & 0xfffffeff:4
 	$U23:4 = zext($U20:1)
 	$U23:4 = $U23:4 << 0x8:4
 	SR = $U22:4 | $U23:4
 	$U25:4 = SR & 0xfffffffb:4
-	$U27:1 = $U3:4 == 0x0:4
+	$U27:1 = $U2:4 == 0x0:4
 	$U28:4 = $U25:4 & 0xfffffffd:4
 	$U29:4 = zext($U27:1)
 	$U29:4 = $U29:4 << 0x1:4
@@ -423,20 +423,20 @@ ADDA #4, SP
 	$U2:4 = 0x4:4 + SP
 	$U3:4 = $U2:4 & 0xfffff:4
 	SP = $U3:4
-	$U7:4 = $U1:4
-	$U7:4 = $U7:4 & 0xfffff:4
-	$U4:4 = 0x4:4 + $U7:4
-	$U8:1 = 0xfffff:4 < $U4:4
-	$U9:4 = SR & 0xfffffffe:4
-	$U10:4 = zext($U8:1)
-	SR = $U9:4 | $U10:4
-	$U22:4 = SR & 0xfffffeff:4
-	$U25:4 = $U22:4 & 0xfffffffb:4
-	$U27:1 = $U3:4 == 0x0:4
-	$U28:4 = $U25:4 & 0xfffffffd:4
-	$U29:4 = zext($U27:1)
-	$U29:4 = $U29:4 << 0x1:4
-	SR = $U28:4 | $U29:4
+	$U5:4 = $U1:4
+	$U5:4 = $U5:4 & 0xfffff:4
+	$U4:4 = 0x4:4 + $U5:4
+	$U7:1 = 0xfffff:4 < $U4:4
+	$U8:4 = SR & 0xfffffffe:4
+	$U9:4 = zext($U7:1)
+	SR = $U8:4 | $U9:4
+	$U21:4 = SR & 0xfffffeff:4
+	$U24:4 = $U21:4 & 0xfffffffb:4
+	$U26:1 = $U3:4 == 0x0:4
+	$U27:4 = $U24:4 & 0xfffffffd:4
+	$U28:4 = zext($U26:1)
+	$U28:4 = $U28:4 << 0x1:4
+	SR = $U27:4 | $U28:4
 
 SUBA #4, SP
 <L0> (entry=0x0):
@@ -444,25 +444,25 @@ SUBA #4, SP
 	$U2:4 = SP - 0x4:4
 	$U3:4 = $U2:4 & 0xfffff:4
 	SP = $U3:4
-	$U7:4 = $U1:4
-	$U7:4 = $U7:4 & 0xfffff:4
-	$U8:1 = 0x4:4 <= $U7:4
-	$U9:4 = SR & 0xfffffffe:4
-	$U10:4 = zext($U8:1)
-	SR = $U9:4 | $U10:4
-	$U17:1 = $U1:4 s< 0x0:4
-	$U19:1 = 0x0:4 s<= $U3:4
-	$U20:1 = $U17:1 && $U19:1
-	$U22:4 = SR & 0xfffffeff:4
-	$U23:4 = zext($U20:1)
-	$U23:4 = $U23:4 << 0x8:4
-	SR = $U22:4 | $U23:4
-	$U25:4 = SR & 0xfffffffb:4
-	$U27:1 = $U3:4 == 0x0:4
-	$U28:4 = $U25:4 & 0xfffffffd:4
-	$U29:4 = zext($U27:1)
-	$U29:4 = $U29:4 << 0x1:4
-	SR = $U28:4 | $U29:4
+	$U5:4 = $U1:4
+	$U5:4 = $U5:4 & 0xfffff:4
+	$U7:1 = 0x4:4 <= $U5:4
+	$U8:4 = SR & 0xfffffffe:4
+	$U9:4 = zext($U7:1)
+	SR = $U8:4 | $U9:4
+	$U16:1 = $U1:4 s< 0x0:4
+	$U18:1 = 0x0:4 s<= $U3:4
+	$U19:1 = $U16:1 && $U18:1
+	$U21:4 = SR & 0xfffffeff:4
+	$U22:4 = zext($U19:1)
+	$U22:4 = $U22:4 << 0x8:4
+	SR = $U21:4 | $U22:4
+	$U24:4 = SR & 0xfffffffb:4
+	$U26:1 = $U3:4 == 0x0:4
+	$U27:4 = $U24:4 & 0xfffffffd:4
+	$U28:4 = zext($U26:1)
+	$U28:4 = $U28:4 << 0x1:4
+	SR = $U27:4 | $U28:4
 
 CLRA SP
 <L0> (entry=0x0):
@@ -474,20 +474,20 @@ INCDA SP
 	$U2:4 = 0x2:4 + SP
 	$U3:4 = $U2:4 & 0xfffff:4
 	SP = $U3:4
-	$U7:4 = $U1:4
-	$U7:4 = $U7:4 & 0xfffff:4
-	$U4:4 = 0x2:4 + $U7:4
-	$U8:1 = 0xfffff:4 < $U4:4
-	$U9:4 = SR & 0xfffffffe:4
-	$U10:4 = zext($U8:1)
-	SR = $U9:4 | $U10:4
-	$U22:4 = SR & 0xfffffeff:4
-	$U25:4 = $U22:4 & 0xfffffffb:4
-	$U27:1 = $U3:4 == 0x0:4
-	$U28:4 = $U25:4 & 0xfffffffd:4
-	$U29:4 = zext($U27:1)
-	$U29:4 = $U29:4 << 0x1:4
-	SR = $U28:4 | $U29:4
+	$U5:4 = $U1:4
+	$U5:4 = $U5:4 & 0xfffff:4
+	$U4:4 = 0x2:4 + $U5:4
+	$U7:1 = 0xfffff:4 < $U4:4
+	$U8:4 = SR & 0xfffffffe:4
+	$U9:4 = zext($U7:1)
+	SR = $U8:4 | $U9:4
+	$U21:4 = SR & 0xfffffeff:4
+	$U24:4 = $U21:4 & 0xfffffffb:4
+	$U26:1 = $U3:4 == 0x0:4
+	$U27:4 = $U24:4 & 0xfffffffd:4
+	$U28:4 = zext($U26:1)
+	$U28:4 = $U28:4 << 0x1:4
+	SR = $U27:4 | $U28:4
 
 DECDA SP
 <L0> (entry=0x0):
@@ -495,25 +495,25 @@ DECDA SP
 	$U2:4 = SP - 0x2:4
 	$U3:4 = $U2:4 & 0xfffff:4
 	SP = $U3:4
-	$U7:4 = $U1:4
-	$U7:4 = $U7:4 & 0xfffff:4
-	$U8:1 = 0x2:4 <= $U7:4
-	$U9:4 = SR & 0xfffffffe:4
-	$U10:4 = zext($U8:1)
-	SR = $U9:4 | $U10:4
-	$U17:1 = $U1:4 s< 0x0:4
-	$U19:1 = 0x0:4 s<= $U3:4
-	$U20:1 = $U17:1 && $U19:1
-	$U22:4 = SR & 0xfffffeff:4
-	$U23:4 = zext($U20:1)
-	$U23:4 = $U23:4 << 0x8:4
-	SR = $U22:4 | $U23:4
-	$U25:4 = SR & 0xfffffffb:4
-	$U27:1 = $U3:4 == 0x0:4
-	$U28:4 = $U25:4 & 0xfffffffd:4
-	$U29:4 = zext($U27:1)
-	$U29:4 = $U29:4 << 0x1:4
-	SR = $U28:4 | $U29:4
+	$U5:4 = $U1:4
+	$U5:4 = $U5:4 & 0xfffff:4
+	$U7:1 = 0x2:4 <= $U5:4
+	$U8:4 = SR & 0xfffffffe:4
+	$U9:4 = zext($U7:1)
+	SR = $U8:4 | $U9:4
+	$U16:1 = $U1:4 s< 0x0:4
+	$U18:1 = 0x0:4 s<= $U3:4
+	$U19:1 = $U16:1 && $U18:1
+	$U21:4 = SR & 0xfffffeff:4
+	$U22:4 = zext($U19:1)
+	$U22:4 = $U22:4 << 0x8:4
+	SR = $U21:4 | $U22:4
+	$U24:4 = SR & 0xfffffffb:4
+	$U26:1 = $U3:4 == 0x0:4
+	$U27:4 = $U24:4 & 0xfffffffd:4
+	$U28:4 = zext($U26:1)
+	$U28:4 = $U28:4 << 0x1:4
+	SR = $U27:4 | $U28:4
 
 TSTA SP
 <L0> (entry=0x0):
@@ -738,10 +738,10 @@ RPT #0xf { RRUX.W R13
 
 RRUM.W 0x1, R13
 <L0> (entry=0x0):
-	$U2:2 = R13_16 & 0x1:2
+	$U3:2 = R13_16 & 0x1:2
 	$U4:2 = R13_16 >> 0x1:1
 	R13 = zext($U4:2)
-	$U5:1 = $U2:2 != 0x0:2
+	$U5:1 = $U3:2 != 0x0:2
 	$U6:4 = SR & 0xfffffffe:4
 	$U7:4 = zext($U5:1)
 	SR = $U6:4 | $U7:4

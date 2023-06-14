@@ -136,11 +136,11 @@ CALL 0x2f
 
 IMUL EAX,EAX,0x1010101
 <L0> (entry=0x2f):
-	$U2:8 = sext(EAX)
-	$U1:8 = $U2:8 * 0x1010101:8
-	EAX = $U1:4
+	$U1:8 = sext(EAX)
+	$U3:8 = $U1:8 * 0x1010101:8
+	EAX = $U3:4
 	$U5:8 = sext(EAX)
-	CF = $U5:8 != $U1:8
+	CF = $U5:8 != $U3:8
 	OF = CF
 
 STOSD ES:EDI
@@ -150,7 +150,7 @@ STOSD ES:EDI
 	$U3:4 = zext(DF)
 	$U4:4 = 0x8:4 * $U3:4
 	EDI = $U2:4 - $U4:4
-	ram[$U1:8] = EAX
+	ram[$U1:4] = EAX
 
 STOSD.REP ES:EDI
 <L0> (entry=0x36):
@@ -162,7 +162,7 @@ STOSD.REP ES:EDI
 	$U4:4 = zext(DF)
 	$U5:4 = 0x8:4 * $U4:4
 	EDI = $U3:4 - $U5:4
-	ram[$U2:8] = EAX
+	ram[$U2:4] = EAX
 	ECX = ECX - 0x1:4
 	jump 0x36:8
 
@@ -203,15 +203,15 @@ MOVSD.REP ES:EDI,ESI
 	$U6:4 = ESI
 	$U7:4 = ESI + 0x4:4
 	ESI = $U7:4 - $U5:4
-	$U10:4 = ram[$U6:8]
-	ram[$U2:8] = $U10:4
+	$U10:4 = ram[$U6:4]
+	ram[$U2:4] = $U10:4
 	ECX = ECX - 0x1:4
 	jump 0x41:8
 
 CALL dword ptr GS:[0x10]
 <L0> (entry=0x43):
-	$U3:8 = GS_OFFSET + 0x10:8
-	$U1:4 = ram[$U3:8]
+	$U4:8 = GS_OFFSET + 0x10:8
+	$U1:4 = ram[$U4:8]
 	RSP = RSP - 0x4:8
 	ram[RSP] = 0x4a:4
 	call $U1:4

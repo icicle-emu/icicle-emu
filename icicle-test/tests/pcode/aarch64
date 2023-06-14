@@ -49,9 +49,9 @@ subs x8, x25, x0
 
 tbz w0, #0x1f, 0x34
 <L0> (entry=0x0):
-	$U4:4 = w0 >> 0x1f:8
-	$U3:1 = $U4:4 == 0x0:4
-	if $U3:1 jump 0x34:8
+	$U3:4 = w0 >> 0x1f:8
+	$U5:1 = $U3:4 == 0x0:4
+	if $U5:1 jump 0x34:8
 
 and x5, x5, #0x1f
 <L0> (entry=0x0):
@@ -233,8 +233,8 @@ fmov h0, x0
 
 stzg sp, [sp, #-0x10]
 <L0> (entry=0x8000000):
-	$U6:8 = sp + 0xfffffffffffffff0:8
-	$tmp0:8 = $U6:8
+	$U7:8 = sp + 0xfffffffffffffff0:8
+	$tmp0:8 = $U7:8
 	$tmp1:8 = 0x0:8
 	$tmp2:8 = 0x10:8
 <L1>:
