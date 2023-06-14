@@ -533,7 +533,7 @@ pub(crate) struct ContextField {
 pub(crate) enum Attachment {
     Register(Vec<Option<RegisterId>>, Option<ast::VarSize>),
     Name(Vec<String>),
-    Value(Vec<u64>),
+    Value(Vec<i64>),
 }
 
 #[derive(Debug, Clone)]
