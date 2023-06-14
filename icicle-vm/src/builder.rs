@@ -36,9 +36,9 @@ impl std::fmt::Display for BuildError {
 impl std::error::Error for BuildError {}
 
 pub fn build(config: &Config) -> Result<Vm, BuildError> {
-    let spec_config =
+    let mut spec_config =
         get_spec_config(config.triple.architecture).ok_or(BuildError::UnsupportedArchitecture)?;
-    let sleigh = build_sleigh(&spec_config)?;
+    let sleigh = build_sleigh(&mut spec_config)?;
 
     let arch = build_arch(&config.triple, sleigh, &spec_config)?;
     let mut cpu = Cpu::new_boxed(arch);
@@ -100,24 +100,6 @@ fn build_arch(
         stack_offset: config.calling_cov.stack_offset,
     };
 
-    let mut ctx = config.context.clone();
-    if let Some(pspec_path) = config.processor_spec_path {
-        let path = get_path_to_ghidra_file(pspec_path);
-        let pspec: PSpec = serde_xml_rs::from_reader(
-            std::fs::read(&path).map_err(|_| BuildError::SpecNotFound(path))?.as_slice(),
-        )
-        .map_err(|e| BuildError::FailedToParsePspec(e.to_string()))?;
-
-        let mut initial_ctx = 0_u64;
-        for entry in &pspec.context_data.context_set.set {
-            let field = sleigh
-                .get_context_field(&entry.name)
-                .ok_or_else(|| BuildError::UnknownContextField(entry.name.clone()))?;
-            field.field.set(&mut initial_ctx, entry.val as i64);
-        }
-        ctx.push(initial_ctx);
-    }
-
     Ok(Arch {
         triple: triple.clone(),
         reg_pc,
@@ -126,7 +108,7 @@ fn build_arch(
         reg_isa_mode: sleigh.get_reg("ISAModeSwitch").map(|x| x.var),
         reg_init,
         on_boot: config.on_boot,
-        isa_mode_context: ctx,
+        isa_mode_context: config.context.clone(),
         calling_cov,
         sleigh,
     })
@@ -445,16 +427,37 @@ fn get_spec_config(arch: target_lexicon::Architecture) -> Option<SpecConfig> {
 pub fn build_sleigh_for(
     arch: target_lexicon::Architecture,
 ) -> Result<(sleigh_runtime::SleighData, u64), BuildError> {
-    let config = get_spec_config(arch).ok_or(BuildError::UnsupportedArchitecture)?;
-    Ok((build_sleigh(&config)?, config.context[0]))
+    let mut config = get_spec_config(arch).ok_or(BuildError::UnsupportedArchitecture)?;
+    let sleigh = build_sleigh(&mut config)?;
+    Ok((sleigh, config.context[0]))
 }
 
-fn build_sleigh(config: &SpecConfig) -> Result<sleigh_runtime::SleighData, BuildError> {
+fn build_sleigh(config: &mut SpecConfig) -> Result<sleigh_runtime::SleighData, BuildError> {
     let path = get_path_to_ghidra_file(config.path);
     if !path.exists() {
         return Err(BuildError::SpecNotFound(path));
     }
-    sleigh_compile::from_path(&path).map_err(BuildError::SpecCompileError)
+    let sleigh = sleigh_compile::from_path(&path).map_err(BuildError::SpecCompileError)?;
+
+    let ctx = &mut config.context;
+    if let Some(pspec_path) = config.processor_spec_path {
+        let path = get_path_to_ghidra_file(pspec_path);
+        let pspec: PSpec = serde_xml_rs::from_reader(
+            std::fs::read(&path).map_err(|_| BuildError::SpecNotFound(path))?.as_slice(),
+        )
+        .map_err(|e| BuildError::FailedToParsePspec(e.to_string()))?;
+
+        let mut initial_ctx = 0_u64;
+        for entry in &pspec.context_data.context_set.set {
+            let field = sleigh
+                .get_context_field(&entry.name)
+                .ok_or_else(|| BuildError::UnknownContextField(entry.name.clone()))?;
+            field.field.set(&mut initial_ctx, entry.val as i64);
+        }
+        ctx.push(initial_ctx);
+    }
+
+    Ok(sleigh)
 }
 
 fn get_path_to_ghidra_file(file: &str) -> std::path::PathBuf {
