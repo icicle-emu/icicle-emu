@@ -69,17 +69,23 @@ fn build_case_matcher(
     for constraint in constraint_list {
         let context_token = sleigh_runtime::Token::new(8, false);
         match constraint {
-            Constraint::Context { field, cmp, operand } => match (cmp, &operand) {
+            Constraint::Context { field, cmp, operand } => match (cmp, operand) {
                 (ast::ConstraintCmp::Equal, &ConstraintOperand::Constant(value)) => {
-                    context.add_constraint(context_token, *field, *value as u64, false)?;
+                    context.add_constraint(context_token, *field, Some(value as u64), false)?;
                 }
-                _ => complex.push(constraint.clone()),
+                _ => {
+                    context.add_constraint(context_token, *field, None, false)?;
+                    complex.push(constraint.clone())
+                }
             },
             Constraint::Token { token, field, cmp, operand } => match (cmp, operand) {
                 (ast::ConstraintCmp::Equal, &ConstraintOperand::Constant(value)) => {
-                    tokens.add_constraint(*token, *field, value as u64, token.big_endian)?;
+                    tokens.add_constraint(*token, *field, Some(value as u64), token.big_endian)?;
                 }
-                _ => complex.push(constraint.clone()),
+                _ => {
+                    tokens.add_constraint(*token, *field, None, token.big_endian)?;
+                    complex.push(constraint.clone())
+                }
             },
         }
     }
@@ -99,6 +105,7 @@ fn build_case_matcher(
     Ok((case, token_bytes))
 }
 
+/// mask 0 and bit 1 => restricted but value not known
 #[derive(Clone, Default)]
 pub(crate) struct BitMatcher {
     bits: BitVec,
@@ -110,7 +117,7 @@ impl BitMatcher {
         &mut self,
         token: sleigh_runtime::Token,
         field: sleigh_runtime::Field,
-        value: u64,
+        value: Option<u64>,
         is_be: bool,
     ) -> Result<(), String> {
         if field.offset as u32 >= u64::BITS {
@@ -121,27 +128,34 @@ impl BitMatcher {
         let token_bits = (token.size * 8) as usize;
         self.grow(token_offset + token_bits);
 
+        let mut mask = field.mask();
+        if is_be {
+            mask = byteswap_value(mask, token_bits as u64);
+        }
+        let new_mask = BitVec::from_u64(mask, token_bits).shift_start(token_offset);
+
+        let Some(value) = value else {
+            // complex constrained, just add 1 to the value.
+            let value_part = new_mask.and(&self.mask.not());
+            self.bits = self.bits.or(&value_part);
+            return Ok(());
+        };
         // When matching constraints, we always read token bits as LE-encoded bytes as this greatly
         // simplifies what happens when we have overlapping token types. This means we need to swap
         // the bytes in the value and mask before we build the final pattern.
         //
         // @fixme: Ghidra is more restrictive when checking overlapping tokens.
-        let mut mask = pcode::mask(field.num_bits as u64) << field.offset;
         let mut shifted = value << field.offset;
-
         if is_be {
-            mask = byteswap_value(mask, token_bits as u64);
             shifted = byteswap_value(shifted, token_bits as u64);
         }
-
-        let new_mask = BitVec::from_u64(mask, token_bits).shift_start(token_offset);
         let bits = BitVec::from_u64(shifted, token_bits).shift_start(token_offset);
 
         // Check whether the new constraint is incompatible with an existing constraint
         let in_both = new_mask.and(&self.mask);
         if bits.and(&in_both) != self.bits.and(&in_both) {
             let mut isolated = BitMatcher::default();
-            isolated.add_constraint(token, field, value, is_be).unwrap();
+            isolated.add_constraint(token, field, Some(value), is_be).unwrap();
             return Err(format!(
                 "merging ({:?}):\n\tcurrent: {:?}\n\t    new: {:?}",
                 field, self, isolated
