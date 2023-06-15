@@ -1,8 +1,8 @@
 mod cases;
 
-use std::cmp::Ordering;
-
-use sleigh_runtime::matcher::{Constraint, MatchCase, SequentialMatcher};
+use sleigh_runtime::matcher::{
+    Constraint, ConstraintCmp, ConstraintOperand, MatchCase, SequentialMatcher,
+};
 
 use crate::{
     symbols::{SymbolTable, Table},
@@ -15,7 +15,9 @@ pub(crate) fn build_sequential_matcher(
     ctx: &Context,
 ) -> Result<SequentialMatcher, String> {
     let (mut cases, token_size) = cases::collect_constraints(table, symbols)?;
+    //debug_cases("before.md", symbols, table, &cases);
     sort_overlaps(symbols, ctx, &mut cases, token_size as u8);
+    //debug_cases("after.md", symbols, table, &cases);
     Ok(SequentialMatcher { cases, token_size })
 }
 
@@ -28,8 +30,7 @@ fn sort_overlaps(_symbols: &SymbolTable, _ctx: &Context, cases: &mut [MatchCase]
         return;
     }
     let mut head = 0usize;
-    let mut tail = 0usize;
-    // pseudo index double linked list
+    // pseudo index double linked list, obs never empty
     let mut order_list: Vec<Option<usize>> = Vec::with_capacity(cases.len());
     order_list.push(None);
 
@@ -42,8 +43,15 @@ fn sort_overlaps(_symbols: &SymbolTable, _ctx: &Context, cases: &mut [MatchCase]
             let Some(i) = current else {
                 break None;
             };
-            if compare_number_of_constrained_bits(add, &cases[i]) == Some(Ordering::Greater) {
-                break Some(i);
+            match compare_number_of_constrained_bits(add, &cases[i]) {
+                MatcherOrdering::Equal(_) => {}
+                // @todo check if a solver pattern is available
+                MatcherOrdering::Conflict(true) => {}
+                MatcherOrdering::Conflict(false) => {}
+                MatcherOrdering::Contained(_) => {}
+                MatcherOrdering::Contain(false) => {}
+                // add is contained in case, including the value
+                MatcherOrdering::Contain(true) => break Some(i),
             }
             prev = Some(i);
             current = order_list[i];
@@ -59,8 +67,9 @@ fn sort_overlaps(_symbols: &SymbolTable, _ctx: &Context, cases: &mut [MatchCase]
             order_list.push(Some(pos));
         } else {
             // just add at the end of the list
+            // prev will always be the last element
+            let tail = prev.unwrap();
             order_list[tail] = Some(next_pos);
-            tail = next_pos;
             order_list.push(None);
         }
     }
@@ -80,36 +89,57 @@ fn sort_overlaps(_symbols: &SymbolTable, _ctx: &Context, cases: &mut [MatchCase]
 
 /// The specification requires that the most constrained constructors should be matched first so we
 /// check here the ordering.
-fn compare_number_of_constrained_bits(a: &MatchCase, b: &MatchCase) -> Option<Ordering> {
-    let (a_token, a_context) = pattern_mask(a);
-    let (b_token, b_context) = pattern_mask(b);
-    match (compare_bits_set(a_token, b_token), compare_bits_set(a_context, b_context)) {
-        // context or tokens contains bits not set by the other
-        (None, _) | (_, None) => None,
-        // context/tokens contains bits not set by the other and vise-versa.
-        (Some(Ordering::Greater), Some(Ordering::Less))
-        | (Some(Ordering::Less), Some(Ordering::Greater)) => None,
-        // if context/token are equal, just return the other (token/context) result
-        (Some(Ordering::Equal), x) | (x, Some(Ordering::Equal)) => x,
-        // both have the same result
-        (Some(x @ Ordering::Greater), Some(Ordering::Greater))
-        | (Some(x @ Ordering::Less), Some(Ordering::Less)) => Some(x),
-    }
+fn compare_number_of_constrained_bits(a: &MatchCase, b: &MatchCase) -> MatcherOrdering {
+    let (a_value, a_mask) = pattern_mask(a);
+    let (b_value, b_mask) = pattern_mask(b);
+    compare_bits_set(a_value, a_mask, b_value, b_mask)
 }
 
 /// Returns a mask for token and context fields representing the bits with constraints.
-fn pattern_mask(case: &MatchCase) -> (u64, u64) {
+fn pattern_mask(case: &MatchCase) -> (u128, u128) {
     let mut token_mask = case.token.mask;
     let mut context_mask = case.context.mask;
+    let mut token_value = case.token.bits;
+    let mut context_value = case.context.bits;
 
     // Add bits constrained by complex constraints to each mask.
     for constraint in &case.constraints {
         match constraint {
-            Constraint::Token { field, .. } => token_mask |= field.mask(),
-            Constraint::Context { field, .. } => context_mask |= field.mask(),
+            Constraint::Token {
+                field,
+                cmp: ConstraintCmp::Equal,
+                operand: ConstraintOperand::Constant(value),
+                ..
+            } => {
+                token_mask |= field.mask();
+                field.set(&mut token_value, *value);
+            }
+            Constraint::Context {
+                field,
+                cmp: ConstraintCmp::Equal,
+                operand: ConstraintOperand::Constant(value),
+                ..
+            } => {
+                context_mask |= field.mask();
+                field.set(&mut context_value, *value);
+            }
+            _ => {}
         }
     }
-    (token_mask, context_mask)
+    let mask = (token_mask as u128) << u64::BITS | context_mask as u128;
+    let value = (token_value as u128) << u64::BITS | context_value as u128;
+    (value, mask)
+}
+
+pub(crate) enum MatcherOrdering {
+    // Restrict diferent bits, bool if the intersection, if any, have the same value.
+    Conflict(bool),
+    // Equal mask, bool if have the same value.
+    Equal(bool),
+    // Contains, bool if is a specialization.
+    Contain(bool),
+    // Contained, bool if is a specialization.
+    Contained(bool),
 }
 
 /// Compares the bits set in self with other.
@@ -122,32 +152,51 @@ fn pattern_mask(case: &MatchCase) -> (u64, u64) {
 /// - [Some(Ordering::Greater)]: every bit in other is set in self, but self contains bits not set
 ///   in other.
 /// - [None]: both self and other contains bits not set by the other.
-fn compare_bits_set(a: u64, b: u64) -> Option<Ordering> {
-    let extra_a = a & (!b) != 0;
-    let extra_b = b & (!a) != 0;
+fn compare_bits_set(value_a: u128, mask_a: u128, value_b: u128, mask_b: u128) -> MatcherOrdering {
+    let extra_a = mask_a & (!mask_b) != 0;
+    let extra_b = mask_b & (!mask_a) != 0;
     match (extra_a, extra_b) {
-        (true, true) => None,
-        (false, false) => Some(Ordering::Equal),
-        (true, false) => Some(Ordering::Greater),
-        (false, true) => Some(Ordering::Less),
+        // Same mask
+        (false, false) => MatcherOrdering::Equal(value_a == value_b),
+        // Intersection,
+        (true, true) => MatcherOrdering::Conflict(value_a & mask_b == value_b & mask_a),
+        (true, false) => MatcherOrdering::Contain(value_a & mask_b == value_b),
+        (false, true) => MatcherOrdering::Contained(value_b & mask_a == value_a),
     }
 }
 
 #[allow(unused)]
-fn debug_cases(symbols: &SymbolTable, table: &Table, cases: &[MatchCase]) {
+fn bit_to_string(value: u64, mask: u64) -> String {
+    (0..64)
+        .into_iter()
+        .map(|bit| match (mask >> bit & 1 != 0, value >> bit & 1 != 0) {
+            (true, true) => '1',
+            (true, false) => '0',
+            (false, true) => unreachable!(),
+            (false, false) => '_',
+        })
+        .collect()
+}
+
+#[allow(unused)]
+fn debug_cases(file: &str, symbols: &SymbolTable, table: &Table, cases: &[MatchCase]) {
     use std::io::Write;
 
-    let mut out = std::fs::File::options().append(true).create(true).open("cases.txt").unwrap();
+    let mut out = std::fs::File::options().append(true).create(true).open(file).unwrap();
 
     let table_name = symbols.parser.get_ident_str(table.name);
     let _ = writeln!(out, "{table_name}:");
+    let _ = writeln!(out, "| id | src | context | token |");
+    let _ = writeln!(out, "|----|-----|---------|-------|");
 
     for case in cases {
         let _ = writeln!(
             out,
-            "\t[{}] {}",
+            "| {} | {} | {} | {} |",
             case.constructor,
-            symbols.format_constructor_line(case.constructor)
+            symbols.format_constructor_line(case.constructor),
+            bit_to_string(case.context.bits, case.context.mask),
+            bit_to_string(case.token.bits, case.token.mask),
         );
     }
     let _ = out.write_all(b"\n");
