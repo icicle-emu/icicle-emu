@@ -2,7 +2,7 @@ mod cases;
 
 use std::cmp::Ordering;
 
-use sleigh_runtime::matcher::{Constraint, MatchCase, SequentialMatcher, Pattern};
+use sleigh_runtime::matcher::{Constraint, MatchCase, Pattern, SequentialMatcher};
 
 use crate::{
     symbols::{SymbolTable, Table},
@@ -128,83 +128,62 @@ fn pattern_mask_complex(case: &MatchCase) -> u128 {
 /// Compares the bits set in self with other.
 fn compare_simple_match(case_a: &MatchCase, case_b: &MatchCase) -> MatcherOrdering {
     // restricted bit, but value is not known
-    let (mask_value_a, value_a) = pattern_mask_value_simple(case_a);
-    let (mask_value_b, value_b) = pattern_mask_value_simple(case_b);
-    let extra_a = mask_value_a & !mask_value_b != 0;
-    let extra_b = mask_value_b & !mask_value_a != 0;
+    let (mask_a, value_a) = pattern_mask_value_simple(case_a);
+    let (mask_b, value_b) = pattern_mask_value_simple(case_b);
+    let extra_a = mask_a & !mask_b != 0;
+    let extra_b = mask_b & !mask_a != 0;
     match (extra_a, extra_b) {
         // Same mask
         (false, false) => {
-            let same_intersection = value_a & mask_value_a == value_b & mask_value_b;
+            let same_intersection = value_a == value_b;
             MatcherOrdering { same_intersection, ord: Some(Ordering::Equal) }
         }
         // Intersection,
         (true, true) => {
-            let same_intersection = value_a & mask_value_b == value_b & mask_value_a;
+            let same_intersection = value_a & mask_b == value_b & mask_a;
             MatcherOrdering { same_intersection, ord: None }
         }
         (true, false) => {
-            let same_intersection = value_a & mask_value_b == value_b;
+            let same_intersection = value_a & mask_b == value_b;
             MatcherOrdering { same_intersection, ord: Some(Ordering::Greater) }
         }
         (false, true) => {
-            let same_intersection = value_b & mask_value_a == value_a;
+            let same_intersection = value_b & mask_a == value_a;
             MatcherOrdering { same_intersection, ord: Some(Ordering::Less) }
         }
     }
 }
 
 /// Compares the bits set in self with other.
-fn compare_complex_match(case_a: &MatchCase, case_b: &MatchCase) -> MatcherOrdering {
+fn complex_mask(case_a: &MatchCase, case_b: &MatchCase) -> Option<Ordering> {
     let mask_complex_a = pattern_mask_complex(case_a);
     let mask_complex_b = pattern_mask_complex(case_b);
-    if mask_complex_a == 0 && mask_complex_b == 0 {
-        // no complex, they are equal
-        return MatcherOrdering { same_intersection: true, ord: Some(Ordering::Equal) };
-    }
     let extra_a = mask_complex_a & !mask_complex_b != 0;
     let extra_b = mask_complex_b & !mask_complex_a != 0;
-    let intersection = mask_complex_a & mask_complex_b;
     match (extra_a, extra_b) {
-        // Same mask
-        (false, false) => MatcherOrdering {
-            ord: Some(Ordering::Equal),
-            same_intersection: complex_same_intersection(case_a, case_b, intersection),
-        },
-        // Intersection,
-        (true, true) => MatcherOrdering {
-            same_intersection: complex_same_intersection(case_a, case_b, intersection),
-            ord: None,
-        },
-        (true, false) => MatcherOrdering {
-            same_intersection: complex_same_intersection(case_a, case_b, intersection),
-            ord: Some(Ordering::Greater),
-        },
-        (false, true) => MatcherOrdering {
-            same_intersection: complex_same_intersection(case_a, case_b, intersection),
-            ord: Some(Ordering::Less),
-        },
+        (false, false) => Some(Ordering::Equal),
+        (true, true) => None,
+        (true, false) => Some(Ordering::Greater),
+        (false, true) => Some(Ordering::Less),
     }
 }
 
-#[cold]
-fn complex_same_intersection(case_a: &MatchCase, case_b: &MatchCase, mask: u128) -> bool {
+fn complex_same_intersection(case_a: &MatchCase, case_b: &MatchCase) -> bool {
     // TODO can a complex constraint be duplicated, or this is filtered previously?
     // mark all constraints that have a equivalent constraint at the other
     //TODO don't use equality, use equivalency.
     //eg: `unsigned_field > 0 => unsigned_field != 0`
-    let mut equivalent_a = vec![false; case_a.constraints.len()];
-    let mut equivalent_b = vec![false; case_b.constraints.len()];
-    let complex_iter_a =
-        case_a.constraints.iter().enumerate().filter(|(_, a)| constraint_in_mask(a, mask));
-    for (i_a, complex_a) in complex_iter_a {
-        let complex_iter_b = case_b
-            .constraints
-            .iter()
-            .enumerate()
-            .skip(i_a)
-            .filter(|(_, b)| constraint_in_mask(b, mask));
-        for (i_b, complex_b) in complex_iter_b {
+    let mask_complex_a = pattern_mask_complex(case_a);
+    let mask_complex_b = pattern_mask_complex(case_b);
+    let intersection = mask_complex_a & mask_complex_b;
+    let constraints_a: Vec<_> =
+        case_a.constraints.iter().filter(|a| constraint_in_mask(a, intersection)).collect();
+    let constraints_b: Vec<_> =
+        case_b.constraints.iter().filter(|b| constraint_in_mask(b, intersection)).collect();
+    let mut equivalent_a = vec![false; constraints_a.len()];
+    let mut equivalent_b = vec![false; constraints_b.len()];
+    for (i_a, complex_a) in constraints_a.iter().enumerate() {
+        for (i_b, complex_b) in constraints_b.iter().enumerate() {
             if complex_a == complex_b {
                 equivalent_a[i_a] = true;
                 equivalent_b[i_b] = true;
@@ -217,10 +196,9 @@ fn complex_same_intersection(case_a: &MatchCase, case_b: &MatchCase, mask: u128)
     // pattern of the other.
     // eg: case_a: simple: 0000, no complex
     //     case_b: simple: ____, complex: `b0001 == b0203`
-    !equivalent_a.contains(&false) && equivalent_b.contains(&false)
+    !equivalent_a.contains(&false) && !equivalent_b.contains(&false)
 }
 
-#[cold]
 fn constraint_in_mask(constraint: &Constraint, mask: u128) -> bool {
     match constraint {
         Constraint::Token { token, field, .. } => {
@@ -240,22 +218,17 @@ fn constraint_in_mask(constraint: &Constraint, mask: u128) -> bool {
 /// Compares the bits set in self with other.
 fn compare_match_cases(case_a: &MatchCase, case_b: &MatchCase) -> MatcherOrdering {
     let simple = compare_simple_match(case_a, case_b);
-    let complex = compare_complex_match(case_a, case_b);
-    let final_ord = match (simple.ord, complex.ord) {
-        (None, _) | (_, None) => None,
-        // context/tokens contains bits not set by the other and vise-versa.
-        (Some(Ordering::Greater), Some(Ordering::Less))
-        | (Some(Ordering::Less), Some(Ordering::Greater)) => None,
-        // if context/token are equal, just return the other (token/context) result
-        (Some(Ordering::Equal), x) | (x, Some(Ordering::Equal)) => x,
-        // both have the same result
-        (Some(x @ Ordering::Greater), Some(Ordering::Greater))
-        | (Some(x @ Ordering::Less), Some(Ordering::Less)) => Some(x),
-    };
-    MatcherOrdering {
-        same_intersection: simple.same_intersection && complex.same_intersection,
-        ord: final_ord,
-    }
+    let ord = simple.ord.and_then(|cmp| match (cmp, complex_mask(case_a, case_b)) {
+        // equal mask, if same value, it all depends on the complex comparison
+        (Ordering::Equal, other) => other,
+        // with greater and less, we need to compare both
+        (Ordering::Less, Some(Ordering::Less | Ordering::Equal))
+        | (Ordering::Greater, Some(Ordering::Greater | Ordering::Equal)) => Some(cmp),
+        _ => None,
+    });
+    // avoid calling complex_same_intersection if unecessary
+    let same_intersection = simple.same_intersection && complex_same_intersection(case_a, case_b);
+    MatcherOrdering { ord, same_intersection }
 }
 
 fn solver_conflict(conflict_a: &MatchCase, conflict_b: &MatchCase, cases: &[MatchCase]) -> bool {
