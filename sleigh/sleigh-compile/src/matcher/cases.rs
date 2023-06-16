@@ -198,7 +198,7 @@ impl BitMatcher {
     }
 }
 
-fn byteswap_value(value: u64, bits: u64) -> u64 {
+pub(crate) fn byteswap_value(value: u64, bits: u64) -> u64 {
     assert!(bits % 8 == 0 && bits <= 64);
     let mut bytes = value.to_le_bytes();
     bytes[0..(bits / 8) as usize].reverse();

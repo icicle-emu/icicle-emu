@@ -47,7 +47,7 @@ impl SequentialMatcher {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MatchCase {
     /// The constructor id of the matched constructor.
     pub constructor: ConstructorId,
@@ -95,14 +95,14 @@ impl Pattern {
 ///
 /// Note: Since full expressions are almost never used by real-world SLEIGH specifications we have
 /// special cases for constants, and field expressions to improve performance.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConstraintOperand {
     Constant(i64),
     Field(Field),
     Expr(Vec<PatternExprOp<Field>>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Constraint {
     Token { token: Token, field: Field, cmp: ConstraintCmp, operand: ConstraintOperand },
     Context { field: Field, cmp: ConstraintCmp, operand: ConstraintOperand },

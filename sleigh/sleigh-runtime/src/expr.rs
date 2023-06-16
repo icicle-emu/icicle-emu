@@ -3,7 +3,7 @@ pub type PatternExprRange = (u32, u32);
 pub use sleigh_parse::ast::PatternOp;
 
 /// Encodes an operation that is part of a pattern expression.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PatternExprOp<T> {
     Value(T),
     Constant(u64),
