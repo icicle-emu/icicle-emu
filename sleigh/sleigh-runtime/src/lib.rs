@@ -75,7 +75,7 @@ pub type TableId = u32;
 pub type ConstructorId = u32;
 pub type AttachmentId = u32;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone)]
 pub struct Token {
     /// Token could overwrite the global endian
     pub big_endian: bool,
@@ -99,7 +99,7 @@ impl Token {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone)]
 pub struct Field {
     /// The bit offset of the field within the parent value.
     pub offset: u16,

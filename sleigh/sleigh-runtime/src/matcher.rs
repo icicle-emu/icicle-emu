@@ -95,14 +95,14 @@ impl Pattern {
 ///
 /// Note: Since full expressions are almost never used by real-world SLEIGH specifications we have
 /// special cases for constants, and field expressions to improve performance.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum ConstraintOperand {
     Constant(i64),
     Field(Field),
     Expr(Vec<PatternExprOp<Field>>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum Constraint {
     Token { token: Token, field: Field, cmp: ConstraintCmp, operand: ConstraintOperand },
     Context { field: Field, cmp: ConstraintCmp, operand: ConstraintOperand },
