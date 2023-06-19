@@ -17,87 +17,94 @@ pub(crate) fn build_sequential_matcher(
     ctx: &Context,
 ) -> Result<SequentialMatcher, String> {
     let (mut cases, token_size) = cases::collect_constraints(table, symbols)?;
-    //debug_cases("before.md", symbols, table, &cases);
     sort_overlaps(symbols, ctx, &mut cases, token_size as u8);
-    //debug_cases("after.md", symbols, table, &cases);
     Ok(SequentialMatcher { cases, token_size })
+}
+
+struct IndexLinkedList<'a, T> {
+    head: Option<usize>,
+    order: Vec<Option<usize>>,
+    elements: &'a [T],
+}
+
+impl<'a, T> IndexLinkedList<'a, T> {
+    fn new_empty(elements: &'a [T]) -> Self {
+        let order = Vec::with_capacity(elements.len());
+        Self { head: None, order, elements }
+    }
+    fn final_order(self) -> impl Iterator<Item = usize> {
+        struct Iter(Vec<Option<usize>>, Option<usize>);
+        impl Iterator for Iter {
+            type Item = usize;
+            fn next(&mut self) -> Option<Self::Item> {
+                let next = self.0[self.1?];
+                if let Some(next) = next {
+                    self.1 = Some(next);
+                }
+                next
+            }
+        }
+        Iter(self.order, self.head)
+    }
+
+    fn insert_at(&mut self, pred: impl Fn(&'a T) -> bool) {
+        let new_index = self.order.len();
+        let mut last = &mut self.head;
+        let mut current = *last;
+        while let Some(current_index) = current {
+            if pred(&self.elements[current_index]) {
+                break;
+            }
+            last = &mut self.order[current_index];
+            current = *last;
+        }
+        *last = Some(new_index);
+        self.order.push(current);
+    }
 }
 
 /// Constructors are allowed to have overlapping constraints where the constructor with highest
 /// number of constrained bits is matched first. Here we take care of sorting the match cases so
 /// that to ensure the most constrained constructors are matched first.
 fn sort_overlaps(symbols: &SymbolTable, ctx: &Context, cases: &mut [MatchCase], _token_size: u8) {
-    if cases.len() < 2 {
-        //nothing to order
-        return;
-    }
-    let mut head = 0usize;
-    // index linked list, starts with the first element (index 0)
-    let mut order_list: Vec<Option<usize>> = Vec::with_capacity(cases.len());
-    order_list.push(None);
-
+    // linked-list with index analogous to cases
+    let mut order_list = IndexLinkedList::new_empty(cases);
     // insert sort all the cases in the "linked-list"
-    for add in cases.iter().skip(1) {
-        // find it's position on the list
-        let mut current = Some(head);
-        let mut prev = None;
-        let pos = loop {
-            let Some(i) = current else {
-                break None;
-            };
-            let cmp = compare_match_cases(add, &cases[i]);
+    for add in cases.iter() {
+        order_list.insert_at(|case| {
+            let cmp = compare_match_cases(add, case);
             match cmp.ord {
-                Some(Ordering::Equal) if cmp.equal_intersection => {
-                    if add.constructor != cases[i].constructor {
-                        if ctx.verbose {
-                            eprintln!(
-                                "[warning] different constructor, same pattern: {} {}",
-                                symbols.format_constructor_line(cases[i].constructor),
-                                symbols.format_constructor_line(add.constructor),
-                            );
-                        }
-                    }
+                Some(Ordering::Greater) if cmp.equal_intersection => return true,
+                Some(Ordering::Equal)
+                    if ctx.verbose
+                        && cmp.equal_intersection
+                        && add.constructor != case.constructor =>
+                {
+                    eprintln!(
+                        "[warning] different constructor, same pattern: {} {}",
+                        symbols.format_constructor_line(case.constructor),
+                        symbols.format_constructor_line(add.constructor),
+                    );
                 }
-                None if cmp.equal_intersection => {
-                    if ctx.verbose && find_conflict_solver(add, &cases[i], cases).is_none() {
-                        eprintln!(
-                            "[warning] unsolved conflict between: {} {}",
-                            symbols.format_constructor_line(cases[i].constructor),
-                            symbols.format_constructor_line(add.constructor),
-                        );
-                    }
+                None if ctx.verbose
+                    && cmp.equal_intersection
+                    && find_conflict_solver(add, case, cases).is_none() =>
+                {
+                    eprintln!(
+                        "[warning] unsolved conflict between: {} {}",
+                        symbols.format_constructor_line(case.constructor),
+                        symbols.format_constructor_line(add.constructor),
+                    );
                 }
-                Some(Ordering::Greater) if cmp.equal_intersection => break Some(i),
                 _ => {}
             }
-            prev = Some(i);
-            current = order_list[i];
-        };
-        let next_pos = order_list.len();
-        if let Some(pos) = pos {
-            // found a position, add the element before it
-            if let Some(prev) = prev {
-                order_list[prev] = Some(next_pos);
-            } else {
-                head = next_pos;
-            }
-            order_list.push(Some(pos));
-        } else {
-            // just add at the end of the list
-            // prev will always be the last element
-            let tail = prev.unwrap();
-            order_list[tail] = Some(next_pos);
-            order_list.push(None);
-        }
+            false
+        });
     }
 
-    // assigned ranks based on the index linked list position
-    let mut next = Some(head);
-    let mut counter = 0;
-    while let Some(i) = next {
-        cases[i].rank = counter;
-        counter += 1;
-        next = order_list[i];
+    // assigned ranks based on the linked list position
+    for (rank, index) in order_list.final_order().enumerate() {
+        cases[index].rank = rank;
     }
 
     // Sort cases according to their ranking.
@@ -167,8 +174,9 @@ fn complex_equal_intersection(case_a: &MatchCase, case_b: &MatchCase) -> bool {
 
     // @todo check if the unmatched constraint are always true on the simple
     // pattern of the other.
-    // eg: case_a: simple: 0000, no complex
-    //     case_b: simple: ____, complex: `b0001 == b0203`
+    // eg: case_a: simple: 0000____, no complex
+    //     case_b: simple: ________, complex: `b0001 == b0203`
+    // In this case both patterns conflict. AKA can have the same intersection.
     let constraints_a: usize =
         case_a.constraints.iter().filter(|a| constraint_in_mask(a, intersection)).count();
     let constraints_b: usize =
