@@ -21,38 +21,26 @@ pub(crate) fn build_sequential_matcher(
     Ok(SequentialMatcher { cases, token_size })
 }
 
-struct IndexLinkedList<'a, T> {
+struct IndexLinkedList {
     head: Option<usize>,
     order: Vec<Option<usize>>,
-    elements: &'a [T],
 }
 
-impl<'a, T> IndexLinkedList<'a, T> {
-    fn new_empty(elements: &'a [T]) -> Self {
-        let order = Vec::with_capacity(elements.len());
-        Self { head: None, order, elements }
+impl IndexLinkedList {
+    fn with_capacity(capacity: usize) -> Self {
+        let order = Vec::with_capacity(capacity);
+        Self { head: None, order }
     }
     fn final_order(self) -> impl Iterator<Item = usize> {
-        struct Iter(Vec<Option<usize>>, Option<usize>);
-        impl Iterator for Iter {
-            type Item = usize;
-            fn next(&mut self) -> Option<Self::Item> {
-                let next = self.0[self.1?];
-                if let Some(next) = next {
-                    self.1 = Some(next);
-                }
-                next
-            }
-        }
-        Iter(self.order, self.head)
+        std::iter::successors(self.head, move |i| self.order[*i])
     }
 
-    fn insert_at(&mut self, pred: impl Fn(&'a T) -> bool) {
+    fn insert_before(&mut self, pred: impl Fn(usize) -> bool) {
         let new_index = self.order.len();
         let mut last = &mut self.head;
         let mut current = *last;
         while let Some(current_index) = current {
-            if pred(&self.elements[current_index]) {
+            if pred(current_index) {
                 break;
             }
             last = &mut self.order[current_index];
@@ -68,10 +56,11 @@ impl<'a, T> IndexLinkedList<'a, T> {
 /// that to ensure the most constrained constructors are matched first.
 fn sort_overlaps(symbols: &SymbolTable, ctx: &Context, cases: &mut [MatchCase], _token_size: u8) {
     // linked-list with index analogous to cases
-    let mut order_list = IndexLinkedList::new_empty(cases);
+    let mut order_list = IndexLinkedList::with_capacity(cases.len());
     // insert sort all the cases in the "linked-list"
     for add in cases.iter() {
-        order_list.insert_at(|case| {
+        order_list.insert_before(|case_index| {
+            let case = &cases[case_index];
             let cmp = compare_match_cases(add, case);
             match cmp.ord {
                 Some(Ordering::Greater) if cmp.equal_intersection => return true,
@@ -182,8 +171,8 @@ fn complex_equal_intersection(case_a: &MatchCase, case_b: &MatchCase) -> bool {
     let constraints_b: usize =
         case_b.constraints.iter().filter(|b| constraint_in_mask(b, intersection)).count();
 
-    // for now, only identify complex constraints as being identical, if not
-    // complex constraint is affecting the intersection
+    // for now, only identify complex constraints as being identical, if the
+    // complex constraint is not affecting the intersection.
     constraints_a == 0 && constraints_b == 0
 }
 
