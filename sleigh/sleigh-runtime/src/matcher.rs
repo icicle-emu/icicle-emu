@@ -47,7 +47,7 @@ impl SequentialMatcher {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MatchCase {
     /// The constructor id of the matched constructor.
     pub constructor: ConstructorId,

@@ -887,7 +887,6 @@ name = "sleigh-compile"
 version = "0.3.0"
 dependencies = [
  "pcode",
- "petgraph",
  "sleigh-parse",
  "sleigh-runtime",
 ]
