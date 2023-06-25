@@ -190,7 +190,7 @@ impl SymbolTable {
         let sym = insert_and_map!(self, spaces, space.name, SymbolKind::Space, RamSpace {
             space_id: id,
             size: space.size,
-            word_size: space.word_size.unwrap_or(1),
+            word_size: space.word_size.unwrap_or(1)
         })?;
 
         if space.default {
@@ -223,7 +223,7 @@ impl SymbolTable {
             insert_and_map!(self, registers, ident, SymbolKind::Register, Register {
                 name: ident,
                 offset,
-                size: def.size,
+                size: def.size
             })?;
         }
 
@@ -238,7 +238,7 @@ impl SymbolTable {
         let register = self.lookup_kind(value.source, SymbolKind::Register)?;
         insert_and_map!(self, bit_ranges, value.name, SymbolKind::BitRange, BitRange {
             register,
-            range: value.range,
+            range: value.range
         })?;
         Ok(())
     }
@@ -288,7 +288,7 @@ impl SymbolTable {
             token.bits.try_into().map_err(|_| format!("token too large: {}", token.bits))?;
         let token_sym = insert_and_map!(self, tokens, token.name, SymbolKind::Token, Token {
             num_bits,
-            big_endian,
+            big_endian
         })?;
 
         for field in token.fields {
@@ -383,7 +383,7 @@ impl SymbolTable {
         insert_and_map!(self, macros, def.name, SymbolKind::Macro, Macro {
             name: def.name,
             params: def.params,
-            body: def.body,
+            body: def.body
         })?;
         Ok(())
     }
@@ -394,7 +394,7 @@ impl SymbolTable {
         insert_and_map!(self, tables, name, SymbolKind::Table, Table {
             name,
             constructors: vec![],
-            export: None,
+            export: None
         })?;
         Ok(())
     }

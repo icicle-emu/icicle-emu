@@ -4,7 +4,7 @@ use crate::{
 };
 
 use crate::{
-    expr::{eval_pattern_expr, PatternExprRange, EvalPatternValue},
+    expr::{eval_pattern_expr, EvalPatternValue, PatternExprRange},
     ConstructorId, Field, TableId, Token,
 };
 
