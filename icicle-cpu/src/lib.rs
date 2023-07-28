@@ -26,6 +26,7 @@ pub use crate::{
 };
 pub use icicle_mem as mem;
 pub use icicle_mem::Mmu;
+pub use lifter::DecodeError;
 
 #[derive(Copy, Clone, Debug, Default, Hash, PartialEq, Eq)]
 pub struct BlockKey {
@@ -187,6 +188,7 @@ pub enum ExceptionCode {
 
     ExecViolation = 0x0401,
     SelfModifyingCode = 0x0402,
+    ExecUnaligned = 0x0404,
     OutOfMemory = 0x0501,
     AddressOverflow = 0x0502,
 
@@ -327,6 +329,18 @@ impl From<icicle_mem::MemError> for ExceptionCode {
 
             // These are errors that should be handled by the memory subsystem.
             MemError::Unallocated | MemError::Unknown => Self::UnknownError,
+        }
+    }
+}
+
+impl From<DecodeError> for ExceptionCode {
+    fn from(err: DecodeError) -> Self {
+        match err {
+            DecodeError::InvalidInstruction => ExceptionCode::InvalidInstruction,
+            DecodeError::NonExecutableMemory => ExceptionCode::ExecViolation,
+            DecodeError::BadAlignment => ExceptionCode::ExecUnaligned,
+            DecodeError::DisassemblyChanged => ExceptionCode::SelfModifyingCode,
+            DecodeError::OptimizationError => ExceptionCode::UnknownError,
         }
     }
 }
