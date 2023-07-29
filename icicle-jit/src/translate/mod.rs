@@ -996,9 +996,8 @@ impl<'a> Translator<'a> {
                 let addr = self.read_zxt(*target, 8);
                 self.goto_jit_exit_external_addr(addr);
             }
-            Target::Invalid => {
-                let msg = u64::from_be_bytes(*b"inv_exit");
-                self.exit_with_exception(ExceptionCode::InvalidInstruction, msg);
+            Target::Invalid(e, addr) => {
+                self.exit_with_exception(ExceptionCode::from(*e), *addr);
             }
         }
     }

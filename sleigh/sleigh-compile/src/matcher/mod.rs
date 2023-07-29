@@ -108,10 +108,10 @@ struct MatcherOrdering {
     /// The kind of intersection
     ///
     /// - [Some(Ordering::Equal)]: both self and other set the same bits.
-    /// - [Some(Ordering::Less)]: every bit in self is set in other, but other contains bits not set in
-    ///   self.
-    /// - [Some(Ordering::Greater)]: every bit in other is set in self, but self contains bits not set
-    ///   in other.
+    /// - [Some(Ordering::Less)]: every bit in self is set in other, but other contains bits not
+    ///   set in self.
+    /// - [Some(Ordering::Greater)]: every bit in other is set in self, but self contains bits not
+    ///   set in other.
     /// - [None]: both self and other contains bits not set by the other
     pub ord: Option<Ordering>,
 }
