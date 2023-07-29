@@ -188,7 +188,7 @@ pub enum ExceptionCode {
 
     ExecViolation = 0x0401,
     SelfModifyingCode = 0x0402,
-    ExecUnaligned = 0x0404,
+    ExecUnaligned = 0x0403,
     OutOfMemory = 0x0501,
     AddressOverflow = 0x0502,
 
@@ -238,6 +238,7 @@ impl ExceptionCode {
 
             0x0401 => Self::ExecViolation,
             0x0402 => Self::SelfModifyingCode,
+            0x0403 => Self::ExecUnaligned,
             0x0501 => Self::OutOfMemory,
             0x0502 => Self::AddressOverflow,
 

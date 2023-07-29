@@ -186,7 +186,7 @@ fn run_bench(triple: &str, config: &TestConfig) -> anyhow::Result<()> {
             // @fixme: handle cases where there are multiple instructions in the testcase.
             lifter
                 .lift(&mut source, test.load_addr)
-                .ok_or_else(|| anyhow::format_err!("Failed to lift: {:#0x}", test.load_addr))?;
+                .map_err(|e| anyhow::format_err!("Failed to lift: {:#x}: {e:?}", test.load_addr))?;
             il_count += lifter.lifted.instructions.len();
         }
     }

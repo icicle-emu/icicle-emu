@@ -46,7 +46,7 @@ impl Tester for icicle_vm::Vm {
 
         let group = self.lift(test.load_addr);
         let mut decoded = vec![];
-        if let Some(group) = group {
+        if let Ok(group) = group {
             for block in &self.code.blocks[group.range()] {
                 for stmt in &block.pcode.instructions {
                     if let pcode::Op::InstructionMarker = stmt.op {
@@ -98,7 +98,7 @@ impl Tester for icicle_vm::Vm {
             output.push('\n');
         }
 
-        if let Some(group) = group {
+        if let Ok(group) = group {
             let lifted = icicle_vm::debug::debug_block_group(self, &group)?;
             output.push_str(&lifted);
         }

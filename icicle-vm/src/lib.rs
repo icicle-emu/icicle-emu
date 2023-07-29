@@ -21,9 +21,9 @@ use std::{
 };
 
 use icicle_cpu::{
-    lifter::{self, count_instructions, Target, DecodeError},
-    mem, BlockKey, Cpu, CpuSnapshot, Environment, ExceptionCode, InternalError, ValueSource,
-    Exception,
+    lifter::{self, count_instructions, DecodeError, Target},
+    mem, BlockKey, Cpu, CpuSnapshot, Environment, Exception, ExceptionCode, InternalError,
+    ValueSource,
 };
 use pcode::PcodeDisplay;
 
@@ -117,8 +117,8 @@ impl Vm {
     ///
     /// Note: the injector is only executed on newly lifted blocks.
     pub fn add_injector<C>(&mut self, injector: C) -> InjectorRef
-        where
-            C: CodeInjector + 'static,
+    where
+        C: CodeInjector + 'static,
     {
         // @todo: consider running the injector over all current blocks.
         let injector_id = self.injectors.len();
@@ -131,8 +131,8 @@ impl Vm {
     /// Note: Be wary of changing the behavior of the injector, sine it will _not_ re-executed on
     /// existing blocks.
     pub fn get_injector_mut<C>(&mut self, id: InjectorRef) -> Option<&mut C>
-        where
-            C: CodeInjector + 'static,
+    where
+        C: CodeInjector + 'static,
     {
         self.injectors[id].as_mut_any().downcast_mut::<C>()
     }
@@ -202,7 +202,8 @@ impl Vm {
 
                 // Clear fuel so `icount` is correct.
                 self.cpu.update_fuel(0);
-            } else {
+            }
+            else {
                 self.cpu.exception.code = ExceptionCode::InstructionLimit as u32;
             }
 
@@ -770,7 +771,7 @@ impl Vm {
 #[inline(never)]
 fn print_interpreter_enter(vm: &mut Vm, block_id: u64, offset: u64) {
     let addr = vm.code.address_of(block_id, offset);
-    eprintln!("interpreter_enter: next_addr={addr:#x}, block.id={block_id}, block.offset={offset}", );
+    eprintln!("interpreter_enter: next_addr={addr:#x}, block.id={block_id}, block.offset={offset}");
 }
 
 fn print_interpreter_exit(vm: &mut Vm) {
