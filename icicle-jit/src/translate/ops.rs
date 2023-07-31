@@ -582,7 +582,7 @@ pub(super) fn float_floor(trans: &mut Translator, x: Value) -> Value {
 }
 
 pub(super) fn float_round(trans: &mut Translator, x: Value) -> Value {
-    trans.builder.ins().trunc(x)
+    trans.builder.ins().nearest(x)
 }
 
 pub(super) fn int_not(trans: &mut Translator, x: Value) -> Value {
