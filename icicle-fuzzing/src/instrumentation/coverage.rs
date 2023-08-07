@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 
 use icicle_vm::{
-    cpu::{lifter::Block, BlockGroup, BlockKey, BlockTable, Cpu, HookHandler, StoreRef},
+    cpu::{
+        lifter::Block, BlockGroup, BlockKey, BlockTable, Cpu, HookHandler, StoreRef, ValueSource,
+    },
     CodeInjector, InjectorRef, Vm,
 };
-use pcode::Op;
+use pcode::{HookId, Op};
 
 use crate::{fnv_hash, fnv_hash_with};
 
@@ -24,11 +26,13 @@ pub fn register_afl_hit_counts(
 pub struct AFLHitCountsBuilder<F> {
     filter: F,
     context_bits: u8,
+    block_only: bool,
+    trampoline: bool,
 }
 
 impl AFLHitCountsBuilder<fn(&Block) -> bool> {
     pub fn new() -> Self {
-        Self { filter: |_| true, context_bits: 0 }
+        Self { filter: |_| true, context_bits: 0, block_only: false, trampoline: false }
     }
 }
 
@@ -37,7 +41,12 @@ impl<F> AFLHitCountsBuilder<F> {
     where
         NF: for<'r> FnMut(&Block) -> bool + 'static,
     {
-        AFLHitCountsBuilder { filter, context_bits: self.context_bits }
+        AFLHitCountsBuilder {
+            filter,
+            context_bits: self.context_bits,
+            block_only: self.block_only,
+            trampoline: self.trampoline,
+        }
     }
 
     /// Configures instrument to include calling context when determining coverage. Panics if `bits`
@@ -45,6 +54,11 @@ impl<F> AFLHitCountsBuilder<F> {
     pub fn with_context(mut self, bits: u8) -> Self {
         assert!(bits <= 16);
         self.context_bits = bits;
+        self
+    }
+
+    pub fn set_block_only(mut self, block_only: bool) -> Self {
+        self.block_only = block_only;
         self
     }
 
@@ -76,6 +90,17 @@ impl<F> AFLHitCountsBuilder<F> {
 
         let bitmap_mem_id = vm.cpu.trace.register_store((bitmap, size as usize));
 
+        let trampoline_hook = self.trampoline.then(|| {
+            vm.cpu.add_hook(move |cpu: &mut icicle_vm::cpu::Cpu, addr: u64| {
+                let key: u16 = (fnv_hash(addr) & size_mask) as u16;
+                let prev_pc = cpu.read_var::<u16>(prev_pc_var);
+                let index = key ^ prev_pc;
+                let data = cpu.trace[bitmap_mem_id].data_mut();
+                data[index as usize] = data[index as usize].wrapping_add(1);
+                cpu.write_var::<u16>(prev_pc_var, key >> 1);
+            })
+        });
+
         let injector = AFLHitCountsInjector {
             bitmap_mem_id,
             size_mask,
@@ -83,6 +108,8 @@ impl<F> AFLHitCountsBuilder<F> {
             tmp_block: pcode::Block::default(),
             context,
             filter: self.filter,
+            block_only: self.block_only,
+            trampoline_hook,
         };
         vm.add_injector(injector);
 
@@ -186,7 +213,9 @@ struct AFLHitCountsInjector<F> {
     size_mask: u32,
     prev_pc_var: pcode::VarNode,
     tmp_block: pcode::Block,
+    block_only: bool,
     context: Option<ContextState>,
+    trampoline_hook: Option<HookId>,
     filter: F,
 }
 
@@ -197,7 +226,12 @@ impl<F> AFLHitCountsInjector<F> {
 
         // index = key ^ prev
         let index = self.tmp_block.alloc_tmp(2);
-        self.tmp_block.push((index, Op::IntXor, key, self.prev_pc_var));
+        if self.block_only {
+            self.tmp_block.push((index, Op::Copy, key));
+        }
+        else {
+            self.tmp_block.push((index, Op::IntXor, key, self.prev_pc_var));
+        }
         if let Some(context) = self.context.as_ref() {
             // index = index ^ context
             self.tmp_block.push((index, Op::IntXor, index, context.var));
@@ -211,7 +245,9 @@ impl<F> AFLHitCountsInjector<F> {
         self.tmp_block.push((Op::Store(bitmap_id), (index, count)));
 
         // prev = key >> 1
-        self.tmp_block.push((self.prev_pc_var, Op::Copy, key >> 1_u8));
+        if !self.block_only {
+            self.tmp_block.push((self.prev_pc_var, Op::Copy, key >> 1_u8));
+        }
 
         // Add the rest of the instructions in the block
         self.tmp_block.instructions.extend(block.pcode.instructions.iter().cloned());
@@ -231,7 +267,12 @@ impl<F: FnMut(&Block) -> bool + 'static> CodeInjector for AFLHitCountsInjector<F
         }
 
         // Inject code to track hit counts.
-        self.inject_update_hit_count(&mut code.blocks[group.blocks.0]);
+        if let Some(hook) = self.trampoline_hook {
+            code.blocks[group.blocks.0].pcode.instructions.insert(0, pcode::Op::Hook(hook).into());
+        }
+        else {
+            self.inject_update_hit_count(&mut code.blocks[group.blocks.0]);
+        }
         code.modified.insert(group.blocks.0);
     }
 }
@@ -384,12 +425,18 @@ pub struct ExactBlockCountCoverageInjector {
     pub store: StoreRef,
     /// A mapping from block address to the byte allocated in the store for the block.
     pub mapping: HashMap<u64, usize>,
+    /// Whether to track block hit counts.
+    pub capture_counts: bool,
 }
 
 impl ExactBlockCountCoverageInjector {
     pub fn register(vm: &mut Vm) -> (InjectorRef, StoreRef) {
+        Self::register_with(vm, true)
+    }
+
+    pub fn register_with(vm: &mut Vm, capture_counts: bool) -> (InjectorRef, StoreRef) {
         let store = vm.cpu.trace.register_store(vec![0_u64; 128]);
-        let injector = vm.add_injector(Self { store, mapping: HashMap::new() });
+        let injector = vm.add_injector(Self { store, mapping: HashMap::new(), capture_counts });
         (injector, store)
     }
 }
@@ -407,13 +454,19 @@ impl CodeInjector for ExactBlockCountCoverageInjector {
             inner.resize(icicle_vm::cpu::utils::align_up(index as u64 / 8, 16) as usize, 0);
         }
 
-        // bitmap[index] += 1
         let block = &mut code.blocks[group.blocks.0];
         let bitmap_id = self.store.get_store_id();
-        let tmp = block.pcode.alloc_tmp(1);
-        block.pcode.instructions.insert(0, (tmp, Op::Load(bitmap_id), index as u64).into());
-        block.pcode.instructions.insert(1, (tmp, Op::IntAdd, (tmp, 1_u8)).into());
-        block.pcode.instructions.insert(2, (Op::Store(bitmap_id), (index as u64, tmp)).into());
+        if self.capture_counts {
+            // bitmap[index] += 1
+            let tmp = block.pcode.alloc_tmp(1);
+            block.pcode.instructions.insert(0, (tmp, Op::Load(bitmap_id), index as u64).into());
+            block.pcode.instructions.insert(1, (tmp, Op::IntAdd, (tmp, 1_u8)).into());
+            block.pcode.instructions.insert(2, (Op::Store(bitmap_id), (index as u64, tmp)).into());
+        }
+        else {
+            // bitmap[index] = 1
+            block.pcode.instructions.insert(0, (Op::Store(bitmap_id), (index as u64, 1_u8)).into());
+        }
     }
 }
 

@@ -64,6 +64,16 @@
     [02 24]                 "JEQ 0x9a98"
 };
 
+
+0x004002 [70 f1]            "AND.B @SP+, PC"
+    SP = 0x1000, mem[0x1000]:READ_WRITE = [ff] => SP = 0x1002, PC = 0x04;
+
+0x004000 [7f ff]            "AND.B @R15+, R15"
+    R15 = 0x1000, mem[0x1000]:READ = [ff] => R15 = 1;
+
+0x004000 [f0 f3 00 00]            "AND.B #-1, 0x4002";
+0x004000 [f0 f0 00 00 00 00]      "AND.B #0x0, 0x4004";
+
 ///
 /// 20-bit instruction handling (MSP430X)
 ///
@@ -162,7 +172,7 @@
 }
 
 0x000012 [40 aa]            "DADD.B R10, PC"
-    R10 = 0x34 => PC = 0x46;
+    R10 = 0x34 => PC = 0x48;
 
 //
 // Index handling
@@ -244,5 +254,4 @@
 
 // @todo: verify whether these are valid instructions
 0x004000 [0c 00 00 00 00]=2        "MOVA @PC, R12"
-    R12 = 0 => R12 = 0x0000_000c;
 0x004000 [1c 00]                   "MOVA @PC+, R12";

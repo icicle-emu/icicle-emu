@@ -290,12 +290,23 @@ fn rewrite_instruction(inst: pcode::Instruction, block: &mut pcode::Block) {
             block.push((x, pcode::Op::FloatToInt, a));
         }
         Op::IntToFloat => {
-            if a.size() == 9 && [4, 8].contains(&x.size) {
+            if a.size() == 9 {
                 // SLEIGH uses 9-byte int-to-float conversions to support _unsigned_ integer to
                 // float conversions. Instead we directly support unsigned float conversions.
                 //
                 // @fixme: we don't always know that the top byte is zeroed.
-                block.push((x, pcode::Op::UintToFloat, a.truncate(8)));
+
+                if [4, 8].contains(&x.size) {
+                    block.push((x, pcode::Op::UintToFloat, a.truncate(8)));
+                    return;
+                }
+
+                // Handle casts to 16 bit floats.
+                let tmp = block.alloc_tmp(8);
+                block.push((tmp, pcode::Op::UintToFloat, a.truncate(8)));
+                let result = emit_cast_float(block, tmp.into(), x.size);
+                block.push((x, pcode::Op::Copy, result));
+
                 return;
             }
             let tmp = match x.size {
@@ -1149,15 +1160,18 @@ pub fn register_read_pc_patcher(
     lifter: &mut BlockLifter,
     pc: pcode::VarNode,
     tmp_pc: pcode::VarNode,
+    use_next_pc: bool,
 ) {
     lifter.mark_as_temporary(tmp_pc.id);
 
     let handler = move |block: &mut pcode::Block| {
         let mut pc_written = false;
         let mut last_pc = 0;
+        let mut next_pc = 0;
         for inst in &mut block.instructions {
             if let pcode::Op::InstructionMarker = inst.op {
                 last_pc = inst.inputs.first().as_u64();
+                next_pc = last_pc + inst.inputs.second().as_u64()
             }
 
             let mut inputs = inst.inputs.get();
@@ -1168,8 +1182,8 @@ pub fn register_read_pc_patcher(
                             var.id = tmp_pc.id;
                         }
                         else {
-                            *input =
-                                pcode::Value::Const(last_pc, pc.size).slice(var.offset, var.size);
+                            let addr = if use_next_pc { next_pc } else { last_pc };
+                            *input = pcode::Value::Const(addr, pc.size).slice(var.offset, var.size);
                         }
                     }
                 }

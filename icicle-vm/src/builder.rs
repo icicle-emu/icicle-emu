@@ -136,7 +136,7 @@ fn register_helpers_for(vm: &mut Vm, arch: target_lexicon::Architecture) {
             // Fixes `pop {..., pc}`
             let pc = vm.cpu.arch.sleigh.get_reg("pc").unwrap().var;
             let tmp_pc = vm.cpu.arch.sleigh.add_custom_reg("tmp_pc", pc.size).unwrap();
-            icicle_cpu::lifter::register_read_pc_patcher(&mut vm.lifter, pc, tmp_pc);
+            icicle_cpu::lifter::register_read_pc_patcher(&mut vm.lifter, pc, tmp_pc, false);
         }
         Architecture::Aarch64(_) => register_helpers(vm, helpers::aarch64::HELPERS),
         Architecture::X86_32(_) | Architecture::X86_64 => {
@@ -147,7 +147,7 @@ fn register_helpers_for(vm: &mut Vm, arch: target_lexicon::Architecture) {
             // Fixes RETI, RETA, CALLA
             let pc = vm.cpu.arch.sleigh.get_reg("PC").unwrap().var;
             let tmp_pc = vm.cpu.arch.sleigh.add_custom_reg("TMP_PC", pc.size).unwrap();
-            icicle_cpu::lifter::register_read_pc_patcher(&mut vm.lifter, pc, tmp_pc);
+            icicle_cpu::lifter::register_read_pc_patcher(&mut vm.lifter, pc, tmp_pc, true);
         }
         _ => {}
     }

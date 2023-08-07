@@ -38,39 +38,56 @@ where
     }
 }
 
+fn gen_exception(
+    src: &dyn InstructionSource,
+    inputs: pcode::Inputs,
+    state: &mut BlockState,
+    code: ExceptionCode,
+) -> bool {
+    state.gen_set_next_pc(src);
+    let value = if !inputs.first().is_invalid() { inputs.first() } else { 0.into() };
+    state.pcode.push((pcode::Op::Exception, (code as u32, value)));
+    true
+}
+
 fn invalid_instruction(
-    _: &dyn InstructionSource,
+    src: &dyn InstructionSource,
     _: pcode::PcodeOpId,
     inputs: pcode::Inputs,
     _: pcode::VarNode,
     state: &mut BlockState,
 ) -> bool {
-    let value = if !inputs.first().is_invalid() { inputs.first() } else { 0.into() };
-    state.pcode.push((pcode::Op::Exception, (ExceptionCode::InvalidInstruction as u32, value)));
-    true
+    gen_exception(src, inputs, state, ExceptionCode::InvalidInstruction)
 }
 
 fn halt(
-    _: &dyn InstructionSource,
+    src: &dyn InstructionSource,
     _: pcode::PcodeOpId,
     inputs: pcode::Inputs,
     _: pcode::VarNode,
     state: &mut BlockState,
 ) -> bool {
-    let value = if !inputs.first().is_invalid() { inputs.first() } else { 0.into() };
-    state.pcode.push((pcode::Op::Exception, (ExceptionCode::Halt as u32, value)));
-    true
+    gen_exception(src, inputs, state, ExceptionCode::Halt)
 }
 
 fn sleep(
-    _: &dyn InstructionSource,
+    src: &dyn InstructionSource,
     _: pcode::PcodeOpId,
-    _: pcode::Inputs,
+    inputs: pcode::Inputs,
     _: pcode::VarNode,
     state: &mut BlockState,
 ) -> bool {
-    state.pcode.push((pcode::Op::Exception, (ExceptionCode::Sleep as u32, 0_u64)));
-    true
+    gen_exception(src, inputs, state, ExceptionCode::Sleep)
+}
+
+fn breakpoint(
+    src: &dyn InstructionSource,
+    _: pcode::PcodeOpId,
+    inputs: pcode::Inputs,
+    _: pcode::VarNode,
+    state: &mut BlockState,
+) -> bool {
+    gen_exception(src, inputs, state, ExceptionCode::SoftwareBreakpoint)
 }
 
 fn syscall(
@@ -80,10 +97,7 @@ fn syscall(
     _: pcode::VarNode,
     state: &mut BlockState,
 ) -> bool {
-    state.gen_set_next_pc(src);
-    let value = if !inputs.first().is_invalid() { inputs.first() } else { 0.into() };
-    state.pcode.push((pcode::Op::Exception, (ExceptionCode::Syscall as u32, value)));
-    true
+    gen_exception(src, inputs, state, ExceptionCode::Syscall)
 }
 
 fn ignored_hint(
@@ -96,13 +110,24 @@ fn ignored_hint(
     false
 }
 
+fn barrier(
+    _: &dyn InstructionSource,
+    _: pcode::PcodeOpId,
+    _: pcode::Inputs,
+    _: pcode::VarNode,
+    _: &mut BlockState,
+) -> bool {
+    // @fixme: convert barriers to block boundaries (currently not done for compatibility reasons).
+    false
+}
+
 pub fn get_injectors(
     cpu: &mut Cpu,
     injectors: &mut HashMap<pcode::PcodeOpId, Box<dyn PcodeOpInjector>>,
 ) {
     /// All the different ways that various SLEIGH specifications refer to syscalls/traps.
     const SYSCALL_OPS: &[&str] =
-        &["syscall", "ecall", "software_interrupt", "swi", "CallSupervisor", "software_bkpt"];
+        &["syscall", "ecall", "software_interrupt", "swi", "CallSupervisor"];
 
     for id in SYSCALL_OPS.iter().filter_map(|name| cpu.arch.sleigh.get_userop(name)) {
         injectors.insert(id, Box::new(syscall));
@@ -119,8 +144,7 @@ pub fn get_injectors(
         "DataSynchronizationBarrier",
     ];
     for id in BARRIER_OPS.iter().filter_map(|name| cpu.arch.sleigh.get_userop(name)) {
-        // We don't currently emulate caches so we ignore barrier-like operations.
-        injectors.insert(id, Box::new(ignored_hint));
+        injectors.insert(id, Box::new(barrier));
     }
 
     /// Names for hints
@@ -141,6 +165,11 @@ pub fn get_injectors(
         injectors.insert(id, Box::new(halt));
     }
 
+    /// Names for software breakpoint instructions.
+    const BREAKPOINT_OPS: &[&str] = &["software_bkpt"];
+    for id in BREAKPOINT_OPS.iter().filter_map(|name| cpu.arch.sleigh.get_userop(name)) {
+        injectors.insert(id, Box::new(breakpoint));
+    }
     if matches!(cpu.arch.triple.architecture, target_lexicon::Architecture::Aarch64(_)) {
         aarch64::get_injectors(cpu, injectors);
     }

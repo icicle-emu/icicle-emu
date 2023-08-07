@@ -380,6 +380,15 @@ impl<T: DynamicTarget> ext::monitor_cmd::MonitorCmd for VmState<T> {
                 let count = inner.parse().map_err(|e| anyhow::format_err!("{}", e))?;
                 let _ = self.vm.step(count);
             }
+            Some("goto") => {
+                let Some(inner) = parts.next() else {
+                    warn!("Expected icount");
+                    return Ok(());
+                };
+
+                let icount = inner.parse().map_err(|e| anyhow::format_err!("{}", e))?;
+                let _ = self.vm.goto_icount(icount);
+            }
             Some("backtrace") => {
                 let backtrace = icicle_vm::debug::backtrace(&mut self.vm);
                 out.write_raw(backtrace.as_bytes());

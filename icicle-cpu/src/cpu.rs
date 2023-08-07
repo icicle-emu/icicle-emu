@@ -384,6 +384,14 @@ impl Cpu {
         self.block_offset = 0;
     }
 
+    /// Configure the emulator to resume execution at the next instruction (i.e., the current value
+    /// of NEXT_PC)
+    #[inline(always)]
+    pub fn resume_next(&mut self) {
+        let next = self.read_var::<u64>(self.arch.reg_next_pc);
+        self.write_pc(next);
+    }
+
     #[inline(always)]
     pub fn set_isa_mode(&mut self, mode: u8) {
         if let Some(isa) = self.arch.reg_isa_mode {

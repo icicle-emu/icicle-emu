@@ -170,6 +170,7 @@ pub enum ExceptionCode {
     InstructionLimit = 0x0001,
     Halt = 0x0002,
     Sleep = 0x0003,
+    SoftwareBreakpoint = 0x0004,
 
     Syscall = 0x0101,
     CpuStateChanged = 0x0102,
@@ -189,6 +190,7 @@ pub enum ExceptionCode {
     ExecViolation = 0x0401,
     SelfModifyingCode = 0x0402,
     ExecUnaligned = 0x0403,
+
     OutOfMemory = 0x0501,
     AddressOverflow = 0x0502,
 
@@ -220,6 +222,7 @@ impl ExceptionCode {
             0x0001 => Self::InstructionLimit,
             0x0002 => Self::Halt,
             0x0003 => Self::Sleep,
+            0x0004 => Self::SoftwareBreakpoint,
 
             0x0101 => Self::Syscall,
             0x0102 => Self::CpuStateChanged,
@@ -239,6 +242,7 @@ impl ExceptionCode {
             0x0401 => Self::ExecViolation,
             0x0402 => Self::SelfModifyingCode,
             0x0403 => Self::ExecUnaligned,
+
             0x0501 => Self::OutOfMemory,
             0x0502 => Self::AddressOverflow,
 

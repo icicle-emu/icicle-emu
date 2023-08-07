@@ -31,6 +31,13 @@
 0x00011000 [01 ea 6c 40] "rsbmi lr,r12,r1, lsl #0x14";
 
 
+0x00011000 [10 8b bc ec] "vldmia r12!,{d8,d9,d10,d11,d12,d13,d14,d15}";
+0x00011000 [8f 40 60 f4] "vld4.32 {d20,d21,d22,d23},[r0]";
+
+@skip // Requires dynamically computed register offsets
+0x00011000 [02 08 41 f4] "vst2.8 {d16, d17}, [r1], r2";
+
+
 //
 // Thumb Mode
 //
@@ -240,3 +247,9 @@
 
 0x11000|1 [b8 ee 40 0a] "vcvt.f32.u32 s0,s0"
     s0 = 1 => s0 = 0x3f800000;
+
+// Saturating operations
+
+@skip // Broken in SLEIGH (addition is performed with insufficient precision).
+0x11000|1 [82 fa 8e f2] "qadd r2,r2,lr"
+    r2 = 0x7fffffff, lr = 1 => r2 = 0x7fffffff;

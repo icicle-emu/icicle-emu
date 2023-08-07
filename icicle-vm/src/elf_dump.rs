@@ -16,8 +16,8 @@ pub fn dump_elf(vm: &mut Vm, path: impl AsRef<std::path::Path>) -> anyhow::Resul
     let entry = vm.env.entry_point();
 
     let mut regions: Vec<MemoryRegion> = vec![];
-    for (start, end, entry) in vm.cpu.mem.get_mapping().iter() {
-        let len = (end - start) as usize;
+    for (start, len, entry) in vm.cpu.mem.get_mapping().iter() {
+        let len = len as usize;
         match entry {
             MemoryMapping::Physical(entry) => {
                 let offset = vm.cpu.mem.page_offset(start);
@@ -367,6 +367,7 @@ fn build_elf(vm: &Vm, entry: u64, mem: &mut [MemoryRegion]) -> anyhow::Result<Ve
     for (offset, symbol) in symbol_offsets.iter().zip(&symbols) {
         let st_type = match symbol.kind {
             SymbolKind::Function => elf::STT_FUNC,
+            SymbolKind::Label => elf::STT_NOTYPE,
             SymbolKind::Unknown => elf::STT_NOTYPE,
             SymbolKind::File => elf::STT_FILE,
             SymbolKind::Object => elf::STT_OBJECT,

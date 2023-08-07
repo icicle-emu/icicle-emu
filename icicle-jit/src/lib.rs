@@ -332,19 +332,16 @@ impl JIT {
         }
 
         let func = self.module.declare_anonymous_function(&self.code_ctx.func.signature)?;
-        let size = self
-            .module
-            .define_function(func, &mut self.code_ctx)
-            .map_err(|err| {
-                let entry = target.iter().find_map(|(_, block)| block.entry).unwrap_or(0x0);
-                std::fs::write(
-                    format!("failed_function_{entry:#0x}.clif"),
-                    debug::debug_il(&self.code_ctx, target),
-                )
-                .unwrap();
-                err
-            })?
-            .size;
+        self.module.define_function(func, &mut self.code_ctx).map_err(|err| {
+            let entry = target.iter().find_map(|(_, block)| block.entry).unwrap_or(0x0);
+            std::fs::write(
+                format!("failed_function_{entry:#0x}.clif"),
+                debug::debug_il(&self.code_ctx, target),
+            )
+            .unwrap();
+            err
+        })?;
+        let size = self.code_ctx.compiled_code().unwrap().code_info().total_size;
 
         for address in target.entry_points() {
             self.declared_functions.push((func, address));
@@ -375,12 +372,12 @@ fn init_module(endianness: Endianness) -> (JITModule, RuntimeFunctions) {
     // Always enable frame pointers to make debugging easier.
     flag_builder.set("preserve_frame_pointers", "true").unwrap();
 
-    // The verifier is quite slow, but generally we want it enabled for now to catch bugs while
-    // the JIT is being developed and we keep upgrading cranelift versions.
-    //
-    // Note: default if this flag is not set is enabled.
     if let Ok(value) = std::env::var("ICICLE_ENABLE_JIT_VERIFIER") {
         flag_builder.set("enable_verifier", &value).unwrap();
+    }
+    else {
+        // The JIT verifier is quite slow, so disable it by default
+        flag_builder.set("enable_verifier", "false").unwrap();
     }
 
     let opt_level = std::env::var("OPT_LEVEL").unwrap_or_else(|_| "speed_and_size".to_string());

@@ -1,7 +1,6 @@
 //! CompareCoverage instrumentation, aka laf-intel (inspired by the implementation from qemuafl)
 
-use std::collections::HashSet;
-
+use hashbrown::{HashMap, HashSet};
 use icicle_vm::{
     cpu::{
         lifter::{Block, BlockExit},
@@ -13,7 +12,7 @@ use icicle_vm::{
 use pcode::PcodeDisplay;
 
 use crate::{
-    fnv_hash, get_pointer_perm,
+    fnv_hash, fnv_hash_with, get_pointer_perm,
     instrumentation::cmp_finder::{CmpAttr, CmpFinder},
 };
 
@@ -44,9 +43,6 @@ impl<F> CompCovBuilder<F> {
     where
         F: for<'r> Fn(&Block) -> bool + 'static,
     {
-        if self.level == 0 {
-            return;
-        }
         CompareCov::register(vm, self.filter, self.level, coverage_map)
     }
 }
@@ -84,22 +80,29 @@ where
     F: FnMut(&Block) -> bool + 'static,
 {
     fn register(vm: &mut Vm, filter: F, level: u8, cov: StoreRef) {
+        tracing::info!("CompCov enable at level = {level}");
+
         let map_size = vm.cpu.trace[cov].data().len();
         assert!(map_size < u32::MAX as usize && map_size.is_power_of_two());
 
         let mut hooks = vec![];
+        let mut tracer = Tracer::new(cov);
         if let Some(entry) =
-            FunctionHook::add(vm, "memcmp", move |cpu, addr| trace_memcmp(cpu, addr, cov))
+            FunctionHook::add(vm, "memcmp", move |cpu, addr| tracer.memcmp(cpu, addr))
         {
             hooks.push(entry);
         }
+
+        let mut tracer = Tracer::new(cov);
         if let Some(entry) =
-            FunctionHook::add(vm, "strcmp", move |cpu, addr| trace_strcmp(cpu, addr, cov))
+            FunctionHook::add(vm, "strcmp", move |cpu, addr| tracer.strcmp(cpu, addr))
         {
             hooks.push(entry);
         }
+
+        let mut tracer = Tracer::new(cov);
         if let Some(entry) =
-            FunctionHook::add(vm, "strncmp", move |cpu, addr| trace_strncmp(cpu, addr, cov))
+            FunctionHook::add(vm, "strncmp", move |cpu, addr| tracer.strncmp(cpu, addr))
         {
             hooks.push(entry);
         }
@@ -162,8 +165,8 @@ where
             tmp_block.push(*stmt);
 
             while let Some(entry) = inject_iter.next_if(|entry| entry.offset <= i) {
-                assert_eq!(entry.arg1.size(), entry.arg2.size());
-                if entry.arg1.size() == 1 {
+                let size = entry.arg1.size().min(entry.arg2.size());
+                if size == 1 {
                     // Avoid adding extra instrumentation for byte-level comparisons
                     continue;
                 }
@@ -196,7 +199,7 @@ where
                 );
 
                 tmp_block.push(is_eq.copy_from(1_u8));
-                for i in 0..entry.arg1.size() {
+                for i in 0..size {
                     // is_eq &= arg1[i] == arg2[i]
                     let arg1 = entry.arg1.slice(i, 1);
                     let arg2 = entry.arg2.slice(i, 1);
@@ -234,7 +237,9 @@ where
         let mut instrumented = false;
 
         instrumented |= self.instrument_hooked_callers(block);
-        instrumented |= self.instrument_cmp(cpu, block);
+        if self.level > 0 {
+            instrumented |= self.instrument_cmp(cpu, block);
+        }
 
         if instrumented {
             code.modified.insert(group.blocks.0);
@@ -244,70 +249,108 @@ where
 
 const MAX_CMP_LENGTH: usize = 32;
 
-fn trace_memcmp(cpu: &mut Cpu, addr: u64, cov_map: StoreRef) {
-    let (mem1, mem2, len) = match (cpu.read_ptr_arg(0), cpu.read_ptr_arg(1), cpu.read_ptr_arg(2)) {
-        (Ok(x), Ok(y), Ok(z)) => (x, y, z),
-        _ => return,
-    };
-
-    let (mem1, mem2) = match read_pointers(cpu, mem1, mem2) {
-        Some(data) => data,
-        None => return,
-    };
-
-    let key = fnv_hash(addr);
-    let cov = cpu.trace[cov_map].data_mut();
-    let mask = (cov.len() - 1) as u32;
-    for i in 0..(len as usize).min(MAX_CMP_LENGTH) {
-        if mem1[i] != mem2[i] {
-            break;
-        }
-        cov[((key + i as u32) & mask) as usize] += 1;
-    }
-
-    tracing::trace!("[{addr:#x}] memcmp({}, {}, {len})", mem1.escape_ascii(), mem2.escape_ascii());
+#[derive(Clone)]
+struct Tracer {
+    cov_map: StoreRef,
+    best: HashMap<u64, u32>,
+    max_length: usize,
 }
 
-fn trace_strcmp(cpu: &mut Cpu, addr: u64, cov_map: StoreRef) {
-    if let (Ok(str1), Ok(str2)) = (cpu.read_ptr_arg(0), cpu.read_ptr_arg(1)) {
-        trace_strncmp_with(cpu, addr, cov_map, str1, str2, MAX_CMP_LENGTH as u64);
+impl Tracer {
+    fn new(cov_map: StoreRef) -> Self {
+        Self { cov_map, best: HashMap::new(), max_length: MAX_CMP_LENGTH }
     }
-}
 
-fn trace_strncmp(cpu: &mut Cpu, addr: u64, cov_map: StoreRef) {
-    if let (Ok(str1), Ok(str2), Ok(len)) =
-        (cpu.read_ptr_arg(0), cpu.read_ptr_arg(1), cpu.read_ptr_arg(2))
-    {
-        trace_strncmp_with(cpu, addr, cov_map, str1, str2, len);
-    }
-}
+    fn memcmp(&mut self, cpu: &mut Cpu, addr: u64) {
+        let (mem1, mem2, len) =
+            match (cpu.read_ptr_arg(0), cpu.read_ptr_arg(1), cpu.read_ptr_arg(2)) {
+                (Ok(x), Ok(y), Ok(z)) => (x, y, z),
+                _ => return,
+            };
 
-fn trace_strncmp_with(cpu: &mut Cpu, addr: u64, cov_map: StoreRef, str1: u64, str2: u64, len: u64) {
-    let (str1, str2) = match read_pointers(cpu, str1, str2) {
-        Some(data) => data,
-        None => return,
-    };
+        let (mem1, mem2) = match read_pointers(cpu, mem1, mem2) {
+            Some(data) => data,
+            None => return,
+        };
 
-    let key = fnv_hash(addr);
-    let cov = cpu.trace[cov_map].data_mut();
-    let mask = (cov.len() - 1) as u32;
-    for i in 0..(len as usize).min(MAX_CMP_LENGTH) {
-        if str1[i] == 0 || str2[i] == 0 {
-            break;
+        let key = fnv_hash(addr);
+        let cov = cpu.trace[self.cov_map].data_mut();
+        let mask = (cov.len() - 1) as u32;
+        for i in 0..(len as usize).min(self.max_length) {
+            if mem1[i] != mem2[i] {
+                break;
+            }
+            cov[((key + i as u32) & mask) as usize] += 1;
         }
-        cov[((key + (2 * i) as u32) & mask) as usize] += 1;
 
-        if str1[i] != str2[i] {
-            break;
-        }
-        cov[((key + (2 * i + 1) as u32) & mask) as usize] += 1;
+        tracing::trace!(
+            "[{addr:#x}] memcmp({}, {}, {len})",
+            mem1.escape_ascii(),
+            mem2.escape_ascii()
+        );
     }
 
-    tracing::trace!(
-        "[{addr:#x}] strncmp(\"{}\",\"{}\",{len})",
-        display_str(&str1),
-        display_str(&str2)
-    );
+    fn strcmp(&mut self, cpu: &mut Cpu, addr: u64) {
+        if let (Ok(str1), Ok(str2)) = (cpu.read_ptr_arg(0), cpu.read_ptr_arg(1)) {
+            self.trace_strncmp_with(cpu, addr, str1, str2, self.max_length as u64);
+        }
+    }
+
+    fn strncmp(&mut self, cpu: &mut Cpu, addr: u64) {
+        if let (Ok(str1), Ok(str2), Ok(len)) =
+            (cpu.read_ptr_arg(0), cpu.read_ptr_arg(1), cpu.read_ptr_arg(2))
+        {
+            self.trace_strncmp_with(cpu, addr, str1, str2, len);
+        }
+    }
+
+    fn trace_strncmp_with(&mut self, cpu: &mut Cpu, addr: u64, str1: u64, str2: u64, len: u64) {
+        let (str1, str2) = match read_pointers(cpu, str1, str2) {
+            Some(data) => data,
+            None => return,
+        };
+
+        let mut check_new_best_match = |idx: u32| {
+            let entry = self.best.entry(addr).or_default();
+            if *entry < idx {
+                tracing::debug!(
+                    "[{addr:#x}] new best match: idx={idx} (a=\"{}\", b=\"{}\")",
+                    display_str(&str1[..((idx / 2) + 1) as usize]),
+                    display_str(&str2[..((idx / 2) + 1) as usize]),
+                );
+                *entry = idx;
+            }
+        };
+
+        let key = fnv_hash(addr);
+        let cov = cpu.trace[self.cov_map].data_mut();
+        let mask = (cov.len() - 1) as u32;
+        let mut best_match = 0;
+        for i in 0..(len as usize).min(MAX_CMP_LENGTH) {
+            if str1[i] == 0 || str2[i] == 0 {
+                break;
+            }
+
+            let idx = fnv_hash_with(key, (2 * i) as u64) & mask;
+            cov[idx as usize] += 1;
+            best_match = (2 * i) as u32;
+
+            if str1[i] != str2[i] {
+                break;
+            }
+            let idx = fnv_hash_with(key, (2 * i + 1) as u64) & mask;
+            cov[idx as usize] += 1;
+
+            best_match = (2 * i + 1) as u32;
+        }
+        check_new_best_match(best_match);
+
+        tracing::trace!(
+            "[{addr:#x}] strncmp(\"{}\",\"{}\",{len})",
+            display_str(&str1),
+            display_str(&str2)
+        );
+    }
 }
 
 fn display_str(bytes: &[u8]) -> impl std::fmt::Display + '_ {

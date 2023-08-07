@@ -249,3 +249,25 @@ retaa
 	pc = x30
 	return x30
 
+adrp x0, 0x74000
+<L0> (entry=0x0):
+	x0 = 0x74000:8
+
+lsl x0, x0, #0x8
+<L0> (entry=0x0):
+	x0 = x0 << 0x8:8
+
+ld4r {v0.2D, v1.2D, v2.2D, v3.2D}, [sp], #0x20
+<L0> (entry=0x0):
+	$U1:8 = ram[sp]
+	tmp_ldXn = sp + 0x8:8
+	$U1:8 = ram[tmp_ldXn]
+	tmp_ldXn = tmp_ldXn + 0x8:8
+	$U1:8 = ram[tmp_ldXn]
+	tmp_ldXn = tmp_ldXn + 0x8:8
+	$U1:8 = ram[tmp_ldXn]
+	d3 = $U1:8
+	z3[8]:8 = $U1:8
+	tmp_ldXn = tmp_ldXn + 0x8:8
+	sp = tmp_ldXn
+

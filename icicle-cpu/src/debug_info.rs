@@ -40,12 +40,13 @@ impl DebugInfo {
     /// Load symbols and debug information about the loaded library.
     // @todo: consider doing this on-demand.
     // @todo: avoid needing to mantain a separate copy of the binary in memory.
-    pub fn add_file(&mut self, data: &[u8], relocation_offset: u64) -> Result<(), String> {
-        use addr2line::object::{Object, ObjectSymbol};
+    pub fn add_file(&mut self, data: &[u8], load_address: u64) -> Result<(), String> {
+        use addr2line::object::{Object, ObjectKind, ObjectSymbol};
 
         let file = addr2line::object::read::File::parse(data)
             .map_err(|e| format!("Error parsing elf: {}", e))?;
 
+        let relocation_offset = if file.kind() == ObjectKind::Dynamic { load_address } else { 0 };
         match addr2line::Context::new(&file) {
             Ok(ctx) => {
                 self.ctx.insert(relocation_offset, std::rc::Rc::new(ctx));
@@ -58,9 +59,13 @@ impl DebugInfo {
                 Ok(name) => name,
                 Err(_) => continue,
             };
+            let addr = sym.address() + relocation_offset;
+            if addr < load_address {
+                continue;
+            }
             std::rc::Rc::make_mut(&mut self.symbols).insert(
                 name.to_string(),
-                sym.address() + relocation_offset,
+                addr,
                 sym.size(),
                 get_symbol_kind(&sym),
             );
@@ -98,7 +103,7 @@ impl DebugInfo {
     }
 
     fn get_symbol(&self, addr: u64) -> Option<SourceLocation> {
-        let (name, base) = self.symbols.resolve_addr(addr)?;
+        let (name, base, _) = self.symbols.resolve_addr(addr)?;
         Some(SourceLocation {
             symbol_with_offset: Some((name.to_owned(), addr - base)),
             ..SourceLocation::default()
@@ -141,7 +146,8 @@ impl DebugInfo {
                 (inner.to_string(), function_start)
             }
             None => {
-                let (name, base) = self.symbols.resolve_addr(addr).unwrap_or(("<unknown>", 0));
+                let unknown_symbol = ("<unknown>", 0, SymbolKind::Unknown);
+                let (name, base, _) = self.symbols.resolve_addr(addr).unwrap_or(unknown_symbol);
                 (name.to_string(), base)
             }
         });
@@ -236,6 +242,7 @@ pub struct SymbolTable {
 #[derive(Debug, Copy, Clone)]
 pub enum SymbolKind {
     Function,
+    Label,
     Unknown,
     Null,
     Object,
@@ -246,7 +253,8 @@ fn get_symbol_kind(sym: &object::Symbol) -> SymbolKind {
     use object::ObjectSymbol;
     match sym.kind() {
         object::SymbolKind::Null => SymbolKind::Null,
-        object::SymbolKind::Text | object::SymbolKind::Label => SymbolKind::Function,
+        object::SymbolKind::Text => SymbolKind::Function,
+        object::SymbolKind::Label => SymbolKind::Label,
         object::SymbolKind::Data => SymbolKind::Object,
         object::SymbolKind::Section => SymbolKind::Unknown,
         object::SymbolKind::File => SymbolKind::File,
@@ -264,11 +272,11 @@ impl SymbolTable {
 
     /// Attempts to resolve a address to a symbol returning the name of the symbol and its starting
     /// address
-    pub fn resolve_addr(&self, addr: u64) -> Option<(&str, u64)> {
+    pub fn resolve_addr(&self, addr: u64) -> Option<(&str, u64, SymbolKind)> {
         // @fixme: optimize this search to avoid needing to iterate though the entire symbol array
-        for (start, (name, len, _)) in self.addr_to_sym.range(..=addr).rev() {
+        for (start, (name, len, kind)) in self.addr_to_sym.range(..=addr).rev() {
             if addr < start + len {
-                return Some((name, *start));
+                return Some((name, *start, *kind));
             }
         }
         None

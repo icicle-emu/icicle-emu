@@ -49,3 +49,11 @@ swr v0, 0x0(a0)
 	$U12:4 = $U8:4 | $U11:4
 	ram[$U3:4] = $U12:4
 
+jr ra
+<L0> (entry=0x0):
+	$U1:4 = ra & 0x1:4
+	ISAModeSwitch = $U1:4 != 0x0:4
+	$U2:4 = 0xfffffffe:4 & ra
+	pc = $U2:4
+	return $U2:4
+

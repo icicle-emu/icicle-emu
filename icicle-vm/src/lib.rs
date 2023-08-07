@@ -240,6 +240,7 @@ impl Vm {
                 self.update_timer();
                 VmExit::Running
             }
+            ExceptionCode::SoftwareBreakpoint => VmExit::Breakpoint,
 
             ExceptionCode::ExternalAddr => {
                 self.handle_external_addess(self.cpu.exception.value, u64::MAX)
@@ -308,11 +309,15 @@ impl Vm {
         }
     }
 
+	/// Handles the case where we encounter an unhandled user-defined pcode operation during 
+	/// execution.
+	///
+    /// Note: Handlers for many of the commonly used operations are mapped in 
+    /// icicle-cpu/src/exec/helpers.rs.
     #[cold]
     fn handle_unimplemented_op(&mut self) -> VmExit {
         let block = &self.code.blocks[self.cpu.block_id as usize];
         let stmt = block.pcode.instructions[self.cpu.block_offset as usize];
-        // NOTE: the UserOpId handlers are implemented in icicle-cpu/src/exec/helpers.rs
         tracing::error!(
             "[{:#0x}] unknown pcode operation: {}",
             self.cpu.read_pc(),
@@ -423,10 +428,8 @@ impl Vm {
                 }
                 Target::Invalid(e, addr) => {
                     tracing::debug!(
-                        "End of block has invalid target\n{}\n{:?} @ {:#x}, PC: {:#x}",
+                        "End of block has invalid target\n{}\n{e:?} @ {addr:#x}, PC: {:#x}",
                         debug::debug_addr(self, block.start).unwrap(),
-                        e,
-                        addr,
                         self.cpu.read_pc()
                     );
 
@@ -825,25 +828,30 @@ impl Vm {
     /// Step backward `count` instructions by first restoring a nearby snapshot then continuing
     /// execution until reaching correct address
     pub fn step_back(&mut self, count: u64) -> Option<VmExit> {
+        match self.cpu.icount().checked_sub(count) {
+            Some(target) => self.goto_icount(target),
+            None => None,
+        }
+    }
+
+    /// Goto a specific icount, stepping either backwards or fowards as required.
+    pub fn goto_icount(&mut self, target: u64) -> Option<VmExit> {
         let old_limit = self.icount_limit;
 
-        // Find the absolute instruction offset given the amount of steps we want to go back
-        let target = match self.cpu.icount().checked_sub(count) {
-            Some(target) => target,
-            None => return None,
-        };
-
-        // Find and restore a snapshot that was created before the target offset
-        match self.snapshots.range(..target).rev().next() {
-            Some((_, snapshot)) => self.restore(&snapshot.clone()),
-            None => return None,
+        // Check if we need to restore a snapshot
+        if self.cpu.icount() > target {
+            // Find and restore a snapshot that was created before the target offset
+            match self.snapshots.range(..target).rev().next() {
+                Some((_, snapshot)) => self.restore(&snapshot.clone()),
+                None => return None,
+            }
+            tracing::debug!("Restored snapshot icount={} and stepping forward", self.cpu.icount());
         }
-        tracing::debug!("Found snapshot at icount={}", self.cpu.icount());
 
         let steps = target - self.cpu.icount();
 
-        // If the snapshot was far away create a new snapshot closer to improve performance if we
-        // need to step back again
+        // If the snapshot was far away, create a new snapshot closer to improve performance if we
+        // need to step back again.
         if steps > 500 {
             self.icount_limit = target - 100;
             tracing::debug!("Creating nearby snapshot at icount={}", self.icount_limit);
@@ -920,6 +928,20 @@ impl Vm {
     pub fn get_callstack(&self) -> Vec<u64> {
         let pc = self.cpu.read_pc();
         self.cpu.shadow_stack.as_slice().iter().map(|entry| entry.addr).chain(Some(pc)).collect()
+    }
+
+    /// Like `get_callstack` returns callstack based on heuristics or debug info if shadow stack is
+    /// not available.
+    pub fn get_debug_callstack(&mut self) -> Vec<u64> {
+        if self.cpu.enable_shadow_stack {
+            return self.get_callstack();
+        }
+
+        // Use experimental backtrace collector using debug info or frame pointer.
+        // @fixme: we should prefer frame pointer base backtrace if available.
+        debug::callstack_from_debug_info(self)
+            .or_else(|| debug::callstack_from_frame_pointer(self))
+            .unwrap_or_else(|| vec![self.cpu.read_pc()])
     }
 
     pub fn save_snapshot(&mut self) {

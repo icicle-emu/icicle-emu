@@ -1,4 +1,4 @@
-use icicle_cpu::debug_info::SourceLocation;
+use icicle_cpu::{debug_info::SourceLocation, utils::get_u64};
 use pcode::PcodeDisplay;
 
 use crate::{lifter::BlockGroup, ValueSource, Vm};
@@ -123,7 +123,7 @@ pub fn backtrace_with_limit(vm: &mut Vm, max_frames: usize) -> String {
     use std::fmt::Write;
 
     let mut buf = String::new();
-    let callstack = vm.get_callstack();
+    let callstack = vm.get_debug_callstack();
     let is_truncated = max_frames < callstack.len();
 
     for (i, addr) in callstack.into_iter().rev().enumerate().take(max_frames) {
@@ -139,6 +139,104 @@ pub fn backtrace_with_limit(vm: &mut Vm, max_frames: usize) -> String {
         writeln!(buf, "<callstack truncated after {max_frames} frames>").unwrap();
     }
     buf
+}
+
+pub fn callstack_from_debug_info(vm: &mut Vm) -> Option<Vec<u64>> {
+    let debug_info = vm.env.debug_info()?;
+    // @todo: use proper dwarf based unwinding.
+
+    // Fallback mode: just look for values that look like addresses.
+    let sp = vm.cpu.read_reg(vm.cpu.arch.reg_sp);
+
+    // @fixme: we assume stack grows downwards here.
+    // @fixme: we assume we can read a full page of data.
+    // @fixme: check stack alignment.
+    if !vm.cpu.mem.is_regular_region(sp, 0x1000) {
+        // Stack pointer is corrupted.
+        tracing::debug!("Failed to resolve callstack because stack pointer is corrupted");
+        return None;
+    }
+
+    tracing::debug!("Trying to resolve callstack by reading: 0x1000 bytes from {sp:#x}");
+    let mut stack = [0; 0x1000];
+    vm.cpu.mem.read_bytes(sp, &mut stack, icicle_cpu::mem::perm::READ).ok()?;
+
+    let mut callstack = vec![vm.cpu.read_reg(vm.cpu.arch.reg_pc)];
+    if let Some(reg_lr) = get_link_register(vm) {
+        callstack.push(vm.cpu.read_reg(reg_lr));
+    }
+
+    let known_start_symbols = ["main", "reset", "start", "main_trampoline"];
+    for chunk in stack.chunks_exact(vm.cpu.arch.reg_pc.size as usize) {
+        let slot = get_u64(chunk);
+        if let Some((name, _addr, kind)) = debug_info.symbols.resolve_addr(slot) {
+            if matches!(kind, icicle_cpu::debug_info::SymbolKind::Function) {
+                callstack.push(slot);
+                if known_start_symbols
+                    .iter()
+                    .any(|x| name.trim_matches('_').eq_ignore_ascii_case(*x))
+                {
+                    break;
+                }
+            }
+        }
+    }
+
+    callstack.reverse();
+    Some(callstack)
+}
+
+pub fn callstack_from_frame_pointer(vm: &mut Vm) -> Option<Vec<u64>> {
+    let reg_sp = vm.cpu.arch.reg_sp;
+    let reg_pc = vm.cpu.arch.reg_pc;
+    let reg_bp = match vm.cpu.arch.triple.architecture {
+        target_lexicon::Architecture::X86_64 => vm.cpu.arch.sleigh.get_reg("RBP")?.var,
+        target_lexicon::Architecture::Arm(_) => vm.cpu.arch.sleigh.get_reg("r11")?.var,
+        _ => return None,
+    };
+
+    let sp = vm.cpu.read_reg(reg_sp);
+    let mut bp = vm.cpu.read_reg(reg_bp);
+
+    // @fixme: we assume stack grows downwards here.
+    if bp < sp {
+        // Invalid stack layout
+        return None;
+    }
+
+    if !vm.cpu.mem.is_regular_region(sp, 0x1000) {
+        // Stack pointer is corrupted.
+        return None;
+    }
+
+    let mut stack = [0; 0x100];
+    vm.cpu.mem.read_bytes(sp, &mut stack, icicle_cpu::mem::perm::READ).ok()?;
+
+    let mut callstack = vec![vm.cpu.read_reg(reg_pc)];
+    if let Some(reg_lr) = get_link_register(vm) {
+        callstack.push(vm.cpu.read_reg(reg_lr));
+    }
+
+    while bp >= sp
+        && ((bp - sp) as usize) < stack.len() + (reg_pc.size as usize + reg_bp.size as usize)
+    {
+        let offset = (bp - sp) as usize;
+        // @fixme: endianness.
+        bp = get_u64(&stack[offset..offset + 4]);
+        let pc = get_u64(&stack[offset + 4..offset + 8]);
+        callstack.push(pc);
+    }
+
+    callstack.reverse();
+    Some(callstack)
+}
+
+fn get_link_register(vm: &Vm) -> Option<pcode::VarNode> {
+    match vm.cpu.arch.triple.architecture {
+        target_lexicon::Architecture::Arm(_) => Some(vm.cpu.arch.sleigh.get_reg("lr")?.var),
+        // @todo: add other architectures.
+        _ => None,
+    }
 }
 
 pub fn print_regs(vm: &Vm, regs: &[pcode::VarNode]) -> String {

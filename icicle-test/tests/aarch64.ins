@@ -125,7 +125,7 @@
 
 0x08000000 [00 00 e7 9e] "fmov h0, x0"
     x0 = 0x4093480000000000 => h0 = 0x64d2;
-    
+
 //
 // Other
 //
@@ -137,3 +137,11 @@
               mem[0xfffffffffffffff0]       = [00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00];
 }
 0x08000000 [ff 0b 5f d6] "retaa";
+
+0x00000000 [a0 03 00 90] "adrp x0,0x74000"
+    x0 = 0 => x0 = 0x74000;
+
+0x00000000 [00 dc 78 d3] "lsl x0,x0,#0x8"
+    x0 = 0xaaaa_aaaaa_aaaa_aaaaa => x0 = 0xaaaa_aaaaa_aaaa_aa00;
+
+0x00000000 [e0 ef ff 4d] "ld4r {v0.2D, v1.2D, v2.2D, v3.2D}, [sp], #0x20";

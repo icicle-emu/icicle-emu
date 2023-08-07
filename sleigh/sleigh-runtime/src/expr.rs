@@ -47,20 +47,7 @@ where
             PatternExprOp::Op(op) => {
                 let rhs = stack.pop()?;
                 let lhs = stack.pop()?;
-                match op {
-                    PatternOp::Add => lhs + rhs,
-                    PatternOp::Sub => lhs - rhs,
-                    PatternOp::And => lhs & rhs,
-                    PatternOp::Or => lhs | rhs,
-                    PatternOp::Xor => lhs ^ rhs,
-                    PatternOp::IntLeft => lhs.checked_shl(rhs as u32).unwrap_or(0),
-                    PatternOp::IntRight => {
-                        let shift = (rhs as u32).min(std::mem::size_of::<i64>() as u32 * 8 - 1);
-                        lhs >> shift
-                    }
-                    PatternOp::Mult => lhs.wrapping_mul(rhs),
-                    PatternOp::Div => lhs / rhs,
-                }
+                eval_pattern_op(lhs, op, rhs)
             }
         };
 
@@ -72,4 +59,21 @@ where
     }
 
     stack.pop()
+}
+
+pub fn eval_pattern_op(lhs: i64, op: &PatternOp, rhs: i64) -> i64 {
+    match op {
+        PatternOp::Add => lhs + rhs,
+        PatternOp::Sub => lhs - rhs,
+        PatternOp::And => lhs & rhs,
+        PatternOp::Or => lhs | rhs,
+        PatternOp::Xor => lhs ^ rhs,
+        PatternOp::IntLeft => lhs.checked_shl(rhs as u32).unwrap_or(0),
+        PatternOp::IntRight => {
+            let shift = (rhs as u32).min(std::mem::size_of::<i64>() as u32 * 8 - 1);
+            lhs >> shift
+        }
+        PatternOp::Mult => lhs.wrapping_mul(rhs),
+        PatternOp::Div => lhs / rhs,
+    }
 }

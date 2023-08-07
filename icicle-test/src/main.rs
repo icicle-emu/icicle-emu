@@ -82,6 +82,7 @@ fn run() -> anyhow::Result<()> {
         if config.dump_il {
             vm.jit.il_dump = Some(String::new());
         }
+        vm.cpu.mem.detect_self_modifying_code = false;
 
         let result = run_test_and_print(&mut vm, &config);
 

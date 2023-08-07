@@ -16,6 +16,8 @@ pub const HELPERS: &[(&str, PcodeOpHelper)] = &[
     ("countLeadingOnes", count_leading_ones),
     ("bcd_add", bcd_add),
     ("UnsignedSaturate", unsigned_saturate),
+    ("SignedSaturate", signed_saturate),
+    ("SignedDoesSaturate", signed_does_saturate),
 ];
 
 fn enable_interrupts(_cpu: &mut Cpu, _: VarNode, _: [Value; 2]) {
@@ -134,6 +136,34 @@ fn unsigned_saturate(cpu: &mut Cpu, dst: pcode::VarNode, args: [Value; 2]) {
     let max = (1 << bits) - 1;
     let value: u64 = cpu.read_dynamic(args[0]).zxt();
     cpu.write_trunc(dst, value.min(max));
+}
+
+fn signed_saturate(cpu: &mut Cpu, dst: pcode::VarNode, args: [Value; 2]) {
+    if args[1].size() != 2 {
+        cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
+        cpu.exception.value = args[1].size() as u64;
+        return;
+    }
+    let bits = cpu.read::<u16>(args[1]);
+    let max = (1 << (bits - 1)) - 1;
+    let min = -(1 << (bits - 1));
+    let value: i64 = cpu.read_dynamic(args[0]).sxt();
+    cpu.write_trunc(dst, (value).min(max).max(min) as u64);
+}
+
+fn signed_does_saturate(cpu: &mut Cpu, dst: pcode::VarNode, args: [Value; 2]) {
+    if args[1].size() != 2 {
+        cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
+        cpu.exception.value = args[1].size() as u64;
+        return;
+    }
+    let bits = cpu.read::<u16>(args[1]);
+    let max = (1 << (bits - 1)) - 1;
+    let min = -(1 << (bits - 1));
+    let value: i64 = cpu.read_dynamic(args[0]).sxt();
+    // Note: This seems to be impossible to implement correctly because the `SignedSaturate` is
+    // applied before this step.
+    cpu.write_var::<u8>(dst, (value < min || value > max) as u8);
 }
 
 #[allow(unused)]

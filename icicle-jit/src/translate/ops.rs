@@ -35,6 +35,9 @@ impl<'a, 'b> Ctx<'a, 'b> {
 
     pub fn get_trace_store_ptr(&mut self, id: u16, offset: pcode::Value) -> Value {
         let base = self.load_tracer_mem_ptr(id);
+        if offset.const_eq(0) {
+            return base;
+        }
         let offset = self.trans.read_zxt(offset, 8);
         self.trans.builder.ins().iadd(base, offset)
     }

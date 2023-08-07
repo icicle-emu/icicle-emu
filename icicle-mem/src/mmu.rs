@@ -82,6 +82,9 @@ pub struct Mmu {
     // are later masked)
     pub track_uninitialized: bool,
 
+    /// @fixme: handle self-modifying code more carefully.
+    pub detect_self_modifying_code: bool,
+
     pub tlb_hit_count: u64,
     pub tlb_miss_count: u64,
     pub mapping_changed: bool,
@@ -139,6 +142,7 @@ impl Mmu {
         Self {
             invalidate_icache: false,
             track_uninitialized: false,
+            detect_self_modifying_code: DETECT_SELF_MODIFYING_CODE,
             tlb_hit_count: 0,
             tlb_miss_count: 0,
             mapping_changed: false,
@@ -547,7 +551,7 @@ impl Mmu {
                 MemoryMapping::Physical(entry) => {
                     tlb.remove_range(start, len);
                     let page = physical.get_mut(entry.index);
-                    if page.executed {
+                    if page.executed && self.detect_self_modifying_code {
                         check_self_modifying_memset(page.data(), start, len, value)?;
                     }
 
@@ -745,11 +749,17 @@ impl Mmu {
 
                     // Prevent writes to the region we are executing (we don't currently support
                     // self modifying code).
-                    unsafe {
-                        page.write_ptr().ptr.as_mut().perm[offset..offset + len].fill(
-                            perm::IN_CODE_CACHE | perm::READ | perm::INIT | perm::EXEC | perm::MAP,
-                        )
-                    };
+                    if self.detect_self_modifying_code {
+                        unsafe {
+                            page.write_ptr().ptr.as_mut().perm[offset..offset + len].fill(
+                                perm::IN_CODE_CACHE
+                                    | perm::READ
+                                    | perm::INIT
+                                    | perm::EXEC
+                                    | perm::MAP,
+                            )
+                        };
+                    }
 
                     tlb.remove_write(mapping.addr);
                     Ok(())
@@ -961,7 +971,7 @@ impl Mmu {
         let page_size = self.page_size();
 
         let mut page = self.physical.get_mut(index);
-        if page.executed {
+        if page.executed && self.detect_self_modifying_code {
             check_self_modifying_write(page.data(), addr, &value)?;
         }
 
@@ -1147,10 +1157,6 @@ impl Mmu {
 
 #[cold]
 fn check_self_modifying_memset(page: &PageData, start: u64, len: u64, value: u8) -> MemResult<()> {
-    if !DETECT_SELF_MODIFYING_CODE {
-        return Ok(());
-    }
-
     let offset = PageData::offset(start);
     for i in offset..offset + len as usize {
         if page.perm[i] & perm::IN_CODE_CACHE != 0 && page.data[i] != value {
@@ -1164,17 +1170,15 @@ fn check_self_modifying_memset(page: &PageData, start: u64, len: u64, value: u8)
 
 #[cold]
 fn check_self_modifying_write(page: &PageData, addr: u64, value: &[u8]) -> MemResult<()> {
-    if !DETECT_SELF_MODIFYING_CODE {
-        return Ok(());
-    }
-
     let offset = PageData::offset(addr);
     for (i, ((old, perm), new)) in
         page.data[offset..].iter().zip(&page.perm[offset..]).zip(value).enumerate()
     {
         if perm & perm::IN_CODE_CACHE != 0 && *old != *new {
-            let addr = addr + (i - offset) as u64;
-            tracing::error!("Self modifying code detected at {addr:#x}. Currently unsupported.");
+            tracing::error!(
+                "Self modifying code detected at {:#x}. Currently unsupported.",
+                addr + i as u64
+            );
             return Err(MemError::SelfModifyingCode);
         }
     }

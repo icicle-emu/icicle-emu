@@ -20,7 +20,7 @@ use icicle_vm::{cpu::ExceptionCode, Vm, VmExit};
 pub use crate::{config::CustomSetup, instrumentation::*};
 pub use icicle_vm::cpu::utils::parse_u64_with_prefix;
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum CoverageMode {
     /// Store a bit whenever a block is hit.
     Blocks,
@@ -69,6 +69,9 @@ pub struct FuzzConfig {
 
     /// Whether the JIT should be disabled.
     pub disable_jit: bool,
+
+    /// Whether the shadow stack is enabled.
+    pub enable_shadow_stack: bool,
 
     /// Configures whether we should attempt to read inputs from shared memory.
     pub shared_mem_inputs: bool,
@@ -222,6 +225,7 @@ impl FuzzConfig {
             cmplog_path: std::env::var_os("ICICLE_SAVE_CMPLOG_MAP").map(|x| x.into()),
             enable_dry_run: parse_bool_env("ICICLE_DRY_RUN")?.unwrap_or(false),
             track_path: parse_bool_env("ICICLE_TRACK_PATH")?.unwrap_or(false),
+            enable_shadow_stack: parse_bool_env("ICICLE_ENABLE_SHADOW_STACK")?.unwrap_or(true),
             arch,
             linux: linux::LinuxConfig::from_env(),
             coverage_mode,
@@ -264,6 +268,7 @@ impl FuzzConfig {
         icicle_vm::cpu::Config {
             triple: self.arch.clone(),
             enable_jit: !self.disable_jit,
+            enable_shadow_stack: self.enable_shadow_stack,
             // Disable automatically recompilation, since this causes AFL to think the emulator
             // hangs.
             enable_recompilation: false,
@@ -516,13 +521,11 @@ pub fn gen_crash_key(vm: &mut Vm, exit: VmExit) -> String {
     let pc = vm.cpu.read_pc();
     let last_addr = vm.code.blocks.get(vm.cpu.block_id as usize).map_or(pc, |x| x.end);
 
-    let stack = vm.get_callstack();
+    let stack = vm.get_debug_callstack();
     let stack_hash = match vm.cpu.enable_shadow_stack {
-        true => stack.iter().rev().skip(1).take(3).fold(0x0, |acc, x| acc ^ x),
-        false => match pc == last_addr {
-            true => pc,
-            false => pc ^ last_addr,
-        },
+        // Without shadow stack, callstack can be unreliable so just look at the parent function.
+        false => *stack.iter().rev().skip(1).next().unwrap_or(&last_addr),
+        _ => stack.iter().rev().skip(1).take(3).fold(0x0, |acc, x| acc ^ x),
     };
 
     // Choose a de-duplication strategy depending on how the program crashed.
@@ -612,7 +615,7 @@ pub fn add_debug_instrumentation(vm: &mut icicle_vm::Vm) {
                 Some((name, addr, reglist)) => {
                     icicle_vm::debug::log_regs(vm, name.to_string(), addr, &reglist);
                 }
-                _ => tracing::error!("Invalid write hook format: {entry}"),
+                _ => tracing::error!("Invalid register hook format: {entry}"),
             }
         }
     }
@@ -659,19 +662,26 @@ pub fn parse_reg_print_hook(entry: &str) -> Option<(&str, u64, Vec<&str>)> {
     Some((name, pc, reglist.split(',').map(str::trim).collect()))
 }
 
-/// Parse a string of the format `<address>(<reglist>)` and return a tuple with the address and
-/// register.
-pub fn parse_func_hook(entry: &str) -> Option<(u64, Vec<&str>)> {
-    let entry = entry.trim();
+/// Parse a string of the format `<address or symbol>(<reglist>)` and return a tuple with the
+/// address and register.
+pub fn parse_func_hook<'a>(vm: &mut Vm, line: &'a str) -> Option<(u64, Vec<&'a str>)> {
+    let entry = line.trim();
     if entry.is_empty() {
         return None;
     }
 
-    let (pc, reg) = entry.split_once('(')?;
-    let pc = parse_u64_with_prefix(pc)?;
+    let (addr_or_symbol, reg) = entry.split_once('(')?;
+    let addr = parse_addr_or_symbol(addr_or_symbol, vm)?;
     let reglist = reg.trim_end_matches(')');
 
-    Some((pc, reglist.split(',').map(str::trim).collect()))
+    Some((addr, reglist.split(',').map(str::trim).collect()))
+}
+
+pub fn parse_addr_or_symbol(addr_or_symbol: &str, vm: &mut Vm) -> Option<u64> {
+    match parse_u64_with_prefix(addr_or_symbol) {
+        Some(addr) => Some(addr),
+        None => vm.env.lookup_symbol(addr_or_symbol),
+    }
 }
 
 /// Parse a boolean environment varialbe
