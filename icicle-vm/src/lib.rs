@@ -556,12 +556,14 @@ impl Vm {
         let group = self.lifter.lift_block(&mut ctx)?;
 
         // Add breakpoints to the lifted code.
-        for block in &mut self.code.blocks[group.range()] {
-            for inst in &block.pcode.instructions {
-                if matches!(inst.op, pcode::Op::InstructionMarker)
-                    && self.code.breakpoints.contains(&inst.inputs.first().as_u64())
-                {
-                    block.breakpoints += 1;
+        if self.code.breakpoints.len() > 0 {
+            for block in &mut self.code.blocks[group.range()] {
+                for inst in &block.pcode.instructions {
+                    if matches!(inst.op, pcode::Op::InstructionMarker)
+                        && self.code.breakpoints.contains(&inst.inputs.first().as_u64())
+                    {
+                        block.breakpoints += 1;
+                    }
                 }
             }
         }
