@@ -201,7 +201,7 @@ impl InstHook {
     }
 
     fn drop_data<H: HookHandler>(data: *mut ()) {
-        unsafe { Box::from_raw(data.cast::<H>()) };
+        unsafe { _ = Box::from_raw(data.cast::<H>()); }
     }
 
     #[inline(always)]
