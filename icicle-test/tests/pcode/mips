@@ -57,3 +57,8 @@ jr ra
 	pc = $U2:4
 	return $U2:4
 
+lb t0, 0x0(t1)
+<L0> (entry=0x0):
+	$U1:1 = ram[t1]
+	t0 = sext($U1:1)
+

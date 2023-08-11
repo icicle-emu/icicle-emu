@@ -827,3 +827,15 @@ RRUM.W 0x1, R13
 	$U14:4 = $U14:4 << 0x1:4
 	SR = $U13:4 | $U14:4
 
+MOVA @PC, R12
+<L0> (entry=0x4000):
+	R12 = ram[0x4002:4]
+	$U1:4 = R12 & 0xfffff:4
+	R12 = $U1:4
+
+MOVA @PC+, R12
+<L0> (entry=0x4000):
+	R12 = ram[0x4002:4]
+	$U1:4 = R12 & 0xfffff:4
+	R12 = $U1:4
+

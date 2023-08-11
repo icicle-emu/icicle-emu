@@ -186,7 +186,7 @@ pub(super) fn load_host(trans: &mut Translator, addr: Value, size: u8) -> Value 
 
     // Setting the endianness doesn't actually do anything in x86_64 backend for cranelift
     // currently, so we manually perform a byte swap operation.
-    if trans.ctx.endianness != Endianness::Little {
+    if trans.ctx.endianness != Endianness::Little && size != 1 {
         result = trans.builder.ins().bswap(result);
     }
 
@@ -281,12 +281,12 @@ fn load_fallback(trans: &mut Translator, output: pcode::VarNode, guest_addr: Val
     value
 }
 
-pub(super) fn store_host(trans: &mut Translator, addr: Value, mut value: Value) {
+pub(super) fn store_host(trans: &mut Translator, addr: Value, mut value: Value, size: u8) {
     let mut flags = MemFlags::trusted().with_heap();
     flags.set_endianness(trans.ctx.endianness);
     // Setting the endianness doesn't actually do anything in x86_64 backend for cranelift
     // currently, so we manually perform a byte swap operation.
-    if trans.ctx.endianness != Endianness::Little {
+    if trans.ctx.endianness != Endianness::Little && size != 1 {
         value = trans.builder.ins().bswap(value);
     }
     trans.builder.ins().store(flags, value, addr, 0);
@@ -306,6 +306,7 @@ pub(super) fn store_ram(trans: &mut Translator, guest_addr: pcode::Value, value:
     }
 
     let guest_addr_val = trans.read_zxt(guest_addr, 8);
+    let store_size = value.size(); 
     let value = trans.read_int(value);
 
     if let pcode::Value::Const(addr, _) = guest_addr {
@@ -330,7 +331,7 @@ pub(super) fn store_ram(trans: &mut Translator, guest_addr: pcode::Value, value:
 
     // inline access (fallthrough):
     {
-        store_host(trans, host_addr, value);
+        store_host(trans, host_addr, value, store_size);
         trans.builder.ins().jump(success_block, &[]);
     }
 

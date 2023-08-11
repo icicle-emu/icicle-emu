@@ -802,7 +802,7 @@ impl<'a> Translator<'a> {
                         }
                         let ptr = ctx.get_trace_store_ptr(id - 1, inputs[0]);
                         let value = ctx.trans.read_int(inputs[1]);
-                        mem::store_host(ctx.trans, ptr, value);
+                        mem::store_host(ctx.trans, ptr, value, inputs[1].size());
                     }
                 },
 
