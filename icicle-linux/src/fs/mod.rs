@@ -868,7 +868,7 @@ impl VfsRoot {
         Ok(())
     }
 
-    /// Configure the file at `path` to generate a [icicle::VmExit] on first use.
+    /// Configure the file at `path` to generate a [icicle_cpu::VmExit] on first use.
     pub fn hook_path(&mut self, path: PathRef) -> Result<DirEntryRef> {
         let dentry = self.get_or_create_recursive(path)?;
         with_inode_mut(&dentry.borrow().inode, |inode| {

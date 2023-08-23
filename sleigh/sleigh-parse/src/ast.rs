@@ -96,7 +96,7 @@ impl std::str::FromStr for EndianKind {
 }
 
 /// Represents the sized associated with a operation on a VarNode, this is _larger_ than
-/// [pcode::VarSize], which is set after splitting large operations into multiple parts.
+/// \[pcode::VarSize\], which is set after splitting large operations into multiple parts.
 pub type VarSize = u16;
 
 pub type Range = (VarSize, VarSize);
