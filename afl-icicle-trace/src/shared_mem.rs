@@ -21,6 +21,7 @@ const SHM_FUZZ_ENV_VAR: &str = "__AFL_SHM_FUZZ_ID";
 const SHM_CMPLOG_ENV_VAR: &str = "__AFL_CMPLOG_SHM_ID";
 pub const IS_CMPLOG_FORK_SERVER: &str = "___AFL_EINS_ZWEI_POLIZEI___";
 
+#[allow(rustdoc::private_intra_doc_links)]
 /// Returns whether the program was invoked by AFL++ by checking [SHM_ENV_VAR].
 pub fn is_afl_connected() -> bool {
     std::env::var_os(SHM_ENV_VAR).is_some()
