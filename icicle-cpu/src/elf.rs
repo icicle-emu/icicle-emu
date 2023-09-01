@@ -53,13 +53,10 @@ pub trait ElfLoader {
         std::fs::read(path).map_err(|e| format!("Failed to read {path}: {e}"))
     }
 
-    fn load_elf(&mut self, cpu: &mut Cpu, path: &[u8]) -> Result<LoadedElf, String> {
+    fn load_elf(&mut self, cpu: &mut Cpu, data: &[u8]) -> Result<LoadedElf, String> {
         use object::read::elf::FileHeader;
 
-        tracing::info!("Loading ELF file from: {}", path.escape_ascii());
-
-        let file = self.read_file(path)?;
-        let data: &[u8] = &file;
+        tracing::info!("Loading ELF file");
 
         let mut metadata = match FileKind::parse(data) {
             Ok(FileKind::Elf32) => {
