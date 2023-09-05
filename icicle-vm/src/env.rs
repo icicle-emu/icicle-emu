@@ -1,5 +1,5 @@
-use std::{any::Any, path::PathBuf};
 use object::read::FileKind;
+use std::{any::Any, path::PathBuf};
 
 use icicle_cpu::{
     debug_info::{DebugInfo, SourceLocation},
@@ -18,58 +18,58 @@ impl GenericEmbedded {
     fn new() -> Self {
         Self { debug_info: DebugInfo::default() }
     }
-    
-    fn read_file(&mut self, path: &[u8]) -> Result<Vec<u8>, String> {
-        let path = std::str::from_utf8(path)
-            .map_err(|e| format!("@fixme: only utf-8 paths are supported: {e}"))?;
-        std::fs::read(path).map_err(|e| format!("Failed to read {path}: {e}"))
-    }
 }
 
 impl ElfLoader for GenericEmbedded {
     const DYNAMIC_MEMORY: bool = true;
 }
 
-impl PeLoader for GenericEmbedded {
+impl PeLoader for GenericEmbedded {}
 
+fn read_file(path: &[u8]) -> Result<Vec<u8>, String> {
+    let path = std::str::from_utf8(path)
+        .map_err(|e| format!("@fixme: only utf-8 paths are supported: {e}"))?;
+    std::fs::read(path).map_err(|e| format!("Failed to read {path}: {e}"))
 }
 
 impl Environment for GenericEmbedded {
     fn load(&mut self, cpu: &mut Cpu, path: &[u8]) -> Result<(), String> {
-        let file_content = self.read_file(path)?;
+        let file_content = read_file(path)?;
 
         let file_kind = FileKind::parse(&file_content[..]);
         match file_kind {
             Ok(FileKind::Elf32) | Ok(FileKind::Elf64) => {
-                let metadata = self.load_elf(cpu, &file_content[..])?;
+                let metadata = self.load_elf(cpu, path)?;
                 if metadata.interpreter.is_some() {
-                    return Err("Dynamically linked binaries are not supported for generic embedded".into());
+                    return Err(
+                        "Dynamically linked binaries are not supported for generic embedded".into(),
+                    );
                 }
-        
+
                 if metadata.binary.offset != 0 {
                     return Err(format!(
                         "Expected no relocations for generic embedded (offset={:#x})",
                         metadata.binary.offset
                     ));
                 }
-        
+
                 self.debug_info = metadata.debug_info;
                 self.debug_info.entry_ptr = metadata.binary.entry_ptr;
-        
+
                 (cpu.arch.on_boot)(cpu, metadata.binary.entry_ptr);
-        
+
                 Ok(())
             }
             Ok(FileKind::Pe32) | Ok(FileKind::Pe64) => {
                 let metadata = match file_kind {
                     Ok(FileKind::Pe32) => self.load_pe32(cpu, &file_content[..])?,
                     Ok(FileKind::Pe64) => self.load_pe64(cpu, &file_content[..])?,
-                    _ => return Err(format!("Unrecognized PE type"))
+                    _ => return Err(format!("Unrecognized PE type")),
                 };
-        
+
                 self.debug_info = metadata.debug_info;
-                self.debug_info.entry_ptr = metadata.binary.entry_ptr;        
-                (cpu.arch.on_boot)(cpu, metadata.binary.entry_ptr);        
+                self.debug_info.entry_ptr = metadata.binary.entry_ptr;
+                (cpu.arch.on_boot)(cpu, metadata.binary.entry_ptr);
                 Ok(())
             }
             Ok(other) => return Err(format!("unsupported file type: {:?}", other)),
