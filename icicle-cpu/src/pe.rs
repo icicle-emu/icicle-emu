@@ -60,7 +60,8 @@ pub trait PeLoader {
         use object::read::pe::ImageNtHeaders;
         tracing::info!("Loading 32-bit PE file");
 
-        let dos_header = ImageDosHeader::parse(data).unwrap();
+        let dos_header =
+            ImageDosHeader::parse(data).map_err(|e| format!("Error parsing DosHeader: {e}"))?;
         let mut offset = dos_header.nt_headers_offset().into();
 
         let (nt_headers, data_directories) = ImageNtHeaders32::parse(data, &mut offset)
