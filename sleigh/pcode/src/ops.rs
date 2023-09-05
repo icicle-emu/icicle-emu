@@ -77,6 +77,11 @@ impl VarNode {
     pub fn copy_from(self, src: impl Into<Value>) -> Instruction {
         (self, Op::Copy, Inputs::from(src.into())).into()
     }
+
+    #[inline]
+    pub fn extract_from_const(self, value: u64) -> u64 {
+        (value >> self.offset) & crate::mask(self.size as u64 * 8)
+    }
 }
 
 impl Default for VarNode {

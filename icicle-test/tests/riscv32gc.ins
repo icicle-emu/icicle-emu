@@ -1,0 +1,4 @@
+@skip // The SLEIGH specification for RISCV currently exports the _value_ of certain registers
+      // through temporaries. This causes issues when the exported reference is used in an
+      // address-of operation.
+0x000000 [d3 02 00 e0]   "fmv.x.w t0,ft0";

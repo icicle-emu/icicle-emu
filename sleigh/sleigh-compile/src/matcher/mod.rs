@@ -77,6 +77,7 @@ fn sort_overlaps(symbols: &SymbolTable, ctx: &Context, cases: &mut [MatchCase], 
                 }
                 None if ctx.verbose
                     && cmp.equal_intersection
+                    && add.constructor != case.constructor
                     && find_conflict_solver(add, case, cases).is_none() =>
                 {
                     eprintln!(

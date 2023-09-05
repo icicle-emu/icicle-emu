@@ -226,7 +226,7 @@ impl<'a> Scope<'a> {
     pub fn size_of(&self, local: Local) -> Option<ValueSize> {
         match local {
             Local::Register(id) => Some(self.globals.registers[id as usize].size),
-            Local::Subtable(index) => {
+            Local::Subtable(index) | Local::SubtableRef(index) => {
                 self.globals.tables[self.subtables[index as usize] as usize].export
             }
             Local::Field(idx) => {

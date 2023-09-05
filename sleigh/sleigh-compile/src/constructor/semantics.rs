@@ -26,9 +26,9 @@ enum ExprValue {
     UnaryOp(pcode::Op, Value),
     /// The result of applying `op` to the two values.
     BinOp(pcode::Op, (Value, Value)),
-    /// A location in memory.
-    Mem(Value, ValueSize),
-    /// A dynamicaly computed register.
+    /// A reference to location in memory.
+    RamRef(Value, ValueSize),
+    /// A reference to a dynamically computed register.
     RegisterRef(Value, ValueSize),
     /// Represents the address of a place (either a memory location, or a register).
     AddressOf(Value, Value, Option<ValueSize>),
@@ -97,8 +97,8 @@ pub(crate) fn resolve(
     if let Some(mut export) = builder.semantics.export.take() {
         match &mut export {
             Export::Value(value) => *value = builder.fix_size(*value),
-            Export::Pointer(value, _) => *value = builder.fix_size(*value),
-            Export::Register(value, _) => *value = builder.fix_size(*value),
+            Export::RamRef(value, _) => *value = builder.fix_size(*value),
+            Export::RegisterRef(value, _) => *value = builder.fix_size(*value),
         }
         builder.semantics.export = Some(export);
     }
@@ -156,7 +156,7 @@ pub struct Semantics {
 
 enum Destination {
     Local(Value),
-    Mem(Value, ValueSize),
+    RamRef(Value, ValueSize),
     BitRange(Value, ast::Range),
 }
 
@@ -544,8 +544,8 @@ impl<'a, 'b> Builder<'a, 'b> {
             }
             ast::Statement::Export { value } => {
                 let export = match self.resolve_expr(value)? {
-                    ExprValue::Mem(value, size) => Export::Pointer(value, size),
-                    ExprValue::RegisterRef(value, size) => Export::Register(value, size),
+                    ExprValue::RamRef(value, size) => Export::RamRef(value, size),
+                    ExprValue::RegisterRef(value, size) => Export::RegisterRef(value, size),
                     value => Export::Value(self.read_value(value, None)?),
                 };
                 self.semantics.export = Some(export);
@@ -572,7 +572,7 @@ impl<'a, 'b> Builder<'a, 'b> {
                     Destination::Local(dst) => {
                         self.read_value(value, Some(dst))?;
                     }
-                    Destination::Mem(ptr, size) => {
+                    Destination::RamRef(ptr, size) => {
                         let tmp = self.read_value(value, None)?;
                         self.store(size, ptr, tmp);
                     }
@@ -606,12 +606,12 @@ impl<'a, 'b> Builder<'a, 'b> {
             }
             ast::Statement::Store { space, size, pointer, value } => {
                 let value = self.resolve_expr_value(value)?;
-                match self.resolve_deref(space, *size, pointer)? {
-                    ExprValue::Mem(ptr, size) => self.store(size, ptr, value),
+                match self.resolve_address(space, *size, pointer)? {
+                    ExprValue::RamRef(ptr, size) => self.store(size, ptr, value),
                     ExprValue::RegisterRef(pointer, size) => self
                         .semantics
                         .actions
-                        .push(SemanticAction::CopyToDynamicRegister { pointer, value, size }),
+                        .push(SemanticAction::StoreRegister { pointer, value, size }),
                     val => {
                         return Err(format!(
                             "attempted to write to an invalid pointer: {}: {val:?}",
@@ -711,8 +711,8 @@ impl<'a, 'b> Builder<'a, 'b> {
                 let address = if is_direct {
                     match dst {
                         ExprValue::Local(mut value) => match value.local {
-                            Local::Subtable(_) => {
-                                value.address_offset = Some(Local::Constant(0));
+                            Local::Subtable(idx) => {
+                                value.local = Local::SubtableRef(idx);
                                 value
                             }
                             _ => value,
@@ -764,7 +764,11 @@ impl<'a, 'b> Builder<'a, 'b> {
             ast::PcodeExpr::AddressOf { size, value, offset } => {
                 let base = self.resolve_ident(*value)?;
                 let offset = self.resolve_expr_value(offset)?;
-                address_of(base, offset, *size)?
+                let ExprValue::Local(base) = base else {
+                    // @todo: check whether any other expressions are allowed.
+                    return Err(format!("{base:?} invalid expression used in address-of operation"));
+                };
+                ExprValue::AddressOf(base, offset, *size)
             }
             ast::PcodeExpr::Truncate { value, size } => {
                 let inner = self.resolve_expr(value)?;
@@ -783,7 +787,7 @@ impl<'a, 'b> Builder<'a, 'b> {
                 ExprValue::BinOp(op, (lhs, rhs))
             }
             ast::PcodeExpr::Deref { space, size, pointer } => {
-                self.resolve_deref(space, *size, pointer)?
+                self.resolve_address(space, *size, pointer)?
             }
             ast::PcodeExpr::ConstantPoolRef { .. } => {
                 return Err("constpoolref unimplemented".into());
@@ -922,7 +926,7 @@ impl<'a, 'b> Builder<'a, 'b> {
 
         match self.resolve_expr(expr)? {
             ExprValue::Local(value) => Ok(Destination::Local(value)),
-            ExprValue::Mem(pointer, size) => Ok(Destination::Mem(pointer, size)),
+            ExprValue::RamRef(pointer, size) => Ok(Destination::RamRef(pointer, size)),
             ExprValue::BitRange(value, range) => Ok(Destination::BitRange(value, range)),
             _ => Err(format!("cannot assign to expression: {expr:?}")),
         }
@@ -937,21 +941,17 @@ impl<'a, 'b> Builder<'a, 'b> {
                 let value = Value::constant(x).maybe_set_size(size);
                 out.map_or(value, |out| self.copy(value, out))
             }
+            ExprValue::BitRange(value, range) => self.read_slice(value, range, out)?,
             ExprValue::NullaryOp(op) => self.op(op, &[], out),
             ExprValue::UnaryOp(op, x) => self.op(op, &[x], out),
             ExprValue::BinOp(op, (a, b)) => self.op(op, &[a, b], out),
-            ExprValue::Mem(pointer, size) => self.load(size, pointer, out),
             ExprValue::AddressOf(value, offset, size) => {
                 self.compute_address_of(value, offset, size, out)?
             }
-            ExprValue::BitRange(value, range) => self.read_slice(value, range, out)?,
+            ExprValue::RamRef(pointer, size) => self.load(size, pointer, out),
             ExprValue::RegisterRef(pointer, size) => {
                 let output = out.unwrap_or_else(|| self.scope.add_tmp(Some(size)).into());
-                self.semantics.actions.push(SemanticAction::CopyFromDynamicRegister {
-                    pointer,
-                    output,
-                    size,
-                });
+                self.semantics.actions.push(SemanticAction::LoadRegister { pointer, output, size });
                 output
             }
         })
@@ -1023,7 +1023,7 @@ impl<'a, 'b> Builder<'a, 'b> {
         Ok((id, addr_size, word_size))
     }
 
-    fn resolve_deref(
+    fn resolve_address(
         &mut self,
         space: &Option<ast::Ident>,
         size: Option<ast::VarSize>,
@@ -1046,7 +1046,7 @@ impl<'a, 'b> Builder<'a, 'b> {
 
         Ok(match space_id {
             REGISTER_SPACE => ExprValue::RegisterRef(pointer, size.unwrap_or(0)),
-            RAM_SPACE => ExprValue::Mem(pointer, size.unwrap_or(0)),
+            RAM_SPACE => ExprValue::RamRef(pointer, size.unwrap_or(0)),
             _ => panic!("unknown space_id: {}", space_id),
         })
     }
@@ -1057,35 +1057,26 @@ impl<'a, 'b> Builder<'a, 'b> {
 
     fn compute_address_of(
         &mut self,
-        mut base: Value,
+        base: Value,
         offset: Value,
-        _size: Option<ast::VarSize>,
-        out: Option<Value>,
+        size: Option<ast::VarSize>,
+        output: Option<Value>,
     ) -> Result<Value, String> {
-        if offset.offset != 0 || offset.address_offset.is_some() {
+        if base.offset != 0 {
             return Err(format!(
-                "{:?} unsupported offset expression used address_of operation",
+                "{:?} unsupported base expression used address-of operation",
                 offset.local
             ));
         }
-        base.address_offset = Some(offset.local);
-        if let Some(output) = out {
-            base.size = self.size_of(output);
-        }
-        Ok(out.map_or(base, |out| self.copy(base, out)))
-    }
-}
 
-fn address_of(
-    base: ExprValue,
-    offset: Value,
-    size: Option<ValueSize>,
-) -> Result<ExprValue, String> {
-    let ExprValue::Local(base) = base else {
-        // @todo: check whether any other expressions are allowed.
-        return Err(format!("{base:?} invalid expression used in address_of operation"));
-    };
-    Ok(ExprValue::AddressOf(base, offset, size))
+        let Some(output) = output else {
+            return Err(format!("Result of address-of operator cannot be used in a sub-expression"));
+        };
+
+        let output = output.maybe_set_size(size);
+        self.semantics.actions.push(SemanticAction::AddressOf { output, base: base.local, offset });
+        Ok(output)
+    }
 }
 
 /// Try to slice a value by a bit-range by adjusting the underlying byte offset and size. Returns

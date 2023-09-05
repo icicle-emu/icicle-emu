@@ -3,8 +3,9 @@ pub type ValueSize = u16;
 #[derive(Debug, Clone)]
 pub enum SemanticAction {
     Op { op: pcode::Op, inputs: Vec<Value>, output: Option<Value> },
-    CopyFromDynamicRegister { pointer: Value, output: Value, size: ValueSize },
-    CopyToDynamicRegister { pointer: Value, value: Value, size: ValueSize },
+    AddressOf { output: Value, base: Local, offset: Value },
+    LoadRegister { pointer: Value, output: Value, size: ValueSize },
+    StoreRegister { pointer: Value, value: Value, size: ValueSize },
     DelaySlot,
     Build(u32),
 }
@@ -17,16 +18,13 @@ pub struct Value {
     /// The byte offset of the value from the start of the local.
     pub offset: ValueSize,
 
-    /// If not None, this value represents an address with the offset stored the saved local.
-    pub address_offset: Option<Local>,
-
     /// The size of the value in bytes.
     pub size: Option<ValueSize>,
 }
 
 impl Value {
     pub fn constant(value: u64) -> Self {
-        Self { local: Local::Constant(value), offset: 0, address_offset: None, size: None }
+        Self { local: Local::Constant(value), offset: 0, size: None }
     }
 
     pub fn truncate(self, size: ValueSize) -> Self {
@@ -45,7 +43,7 @@ impl Value {
 
 impl From<Local> for Value {
     fn from(local: Local) -> Self {
-        Self { local, offset: 0, size: None, address_offset: None }
+        Self { local, offset: 0, size: None }
     }
 }
 
@@ -56,18 +54,18 @@ pub enum Export {
     Value(Value),
 
     /// A pointer to an address in the RAM space.
-    Pointer(Value, ValueSize),
+    RamRef(Value, ValueSize),
 
     /// A dynamically computed register.
-    Register(Value, ValueSize),
+    RegisterRef(Value, ValueSize),
 }
 
 impl Export {
     pub fn size(&self) -> Option<ValueSize> {
         match self {
             Self::Value(inner) => inner.size,
-            Self::Pointer(_, size) => Some(*size),
-            Self::Register(_, size) => Some(*size),
+            Self::RamRef(_, size) => Some(*size),
+            Self::RegisterRef(_, size) => Some(*size),
         }
     }
 }
@@ -86,10 +84,14 @@ pub enum Local {
     /// A field declared in either the constraint expression or disassembly actions section
     Field(u32),
 
-    /// A reference to the exported value of a subtable.
+    /// A reference to the exported value of a subtable. On use this value is automatically
+    /// dereferenced.
     ///
     /// Note: this represents the offset into `constructor.subtables` not the TableId.
     Subtable(u32),
+
+    /// A reference to the export of a subtable that is not automatically dereferenced on use.
+    SubtableRef(u32),
 
     /// Represents a temporary inside of the semantics section
     PcodeTmp(u32),
