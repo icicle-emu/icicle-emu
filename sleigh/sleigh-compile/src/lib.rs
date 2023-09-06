@@ -82,13 +82,13 @@ pub fn build_inner(mut parser: Parser, verbose: bool) -> Result<SleighData, Stri
         let mut name = ctx.add_string(name_str);
 
         // Check if there is an existing mapping for this register, if so add it as an alias.
-        if let Some(&(id, byte_offset)) = ctx.data.register_mapping.get(&reg.offset) {
-            let alias = RegisterAlias { offset: byte_offset as u16, size: reg.size, name };
+        if let Some((id, varnode_offset)) = ctx.data.map_sleigh_reg(reg.offset, reg.size as u8) {
+            let alias = RegisterAlias { offset: varnode_offset as u16, size: reg.size, name };
             ctx.data.registers[id as usize].aliases.push(alias);
 
             ctx.data.named_registers[idx] = NamedRegister {
                 name,
-                var: pcode::VarNode::new(id, 16).slice(byte_offset, reg.size.min(16) as u8),
+                var: pcode::VarNode::new(id, 16).slice(varnode_offset, reg.size.min(16) as u8),
                 offset: reg.offset,
             };
             continue;

@@ -471,6 +471,16 @@ impl SleighData {
         Some(var)
     }
 
+    /// Maps a SLEIGH register to an internal VarNode ID and offset.
+    pub fn map_sleigh_reg(&self, offset: u32, size: u8) -> Option<(pcode::VarId, u8)> {
+        let &(id, mut varnode_offset) = self.register_mapping.get(&offset)?;
+        let parent_reg = &self.registers[id as usize];
+        if self.big_endian {
+            varnode_offset = parent_reg.size - varnode_offset - size;
+        }
+        Some((id, varnode_offset))
+    }
+
     #[inline]
     pub fn num_registers(&self) -> usize {
         self.registers.len()
