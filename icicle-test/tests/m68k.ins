@@ -1,3 +1,3 @@
-// D0w overlaps with D0 but t
+// Check that big-endian overlaps are handled correctly (D0w should overlap with the LSB of D0).
 0x0206ea [30 3c ff ff]  "move.w #-0x1,D0w"
     D0 = 0x00000001 => D0 = 0x0000ffff;
