@@ -1,6 +1,7 @@
 pub mod cpu;
 pub mod debug_info;
 pub mod elf;
+pub mod pe;
 pub mod exec;
 pub mod lifter;
 pub mod utils;

@@ -102,8 +102,7 @@ where
             .map_err(|e| format!("Failed to allocate memory: {e:?}"))?;
 
         (base_addr, base_addr - requested_base_addr)
-    }
-    else {
+    } else {
         (requested_base_addr, 0)
     };
 
