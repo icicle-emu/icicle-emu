@@ -420,6 +420,17 @@ fn get_spec_config(arch: target_lexicon::Architecture) -> Option<SpecConfig> {
             },
             on_boot: generic::on_boot,
         },
+        Architecture::M68k => SpecConfig {
+            path: "68000/data/languages/coldfire.slaspec",
+            processor_spec_path: None,
+            reg_pc: "PC",
+            reg_sp: "SP",
+            context: vec![generic::CTX],
+            init_registers: vec![],
+            temp_registers: vec![],
+            calling_cov: CallingCovSpec { integers: vec![], stack_align: 4, stack_offset: 0 },
+            on_boot: generic::on_boot,
+        },
         _ => return None,
     })
 }

@@ -100,10 +100,12 @@ fn run() -> anyhow::Result<()> {
             test_icicle_cpu("mipsel", TestConfig::default("mipsel"))?;
             test_icicle_cpu("mips", TestConfig::default("mips"))?;
             test_icicle_cpu("riscv64", TestConfig::default("riscv64gc"))?;
+            test_icicle_cpu("riscv32", TestConfig::default("riscv32gc"))?;
             test_icicle_cpu("msp430", TestConfig::default("msp430x"))?;
             test_icicle_cpu("arm", TestConfig::default("arm"))?;
             test_icicle_cpu("aarch64", TestConfig::default("aarch64"))?;
             test_icicle_cpu("powerpc", TestConfig::default("powerpc"))?;
+            test_icicle_cpu("m68k", TestConfig::default("m68k"))?;
         }
         TestMode::Debug => {
             test_icicle_cpu("x86_64", TestConfig {

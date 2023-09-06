@@ -376,8 +376,8 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
             return Ok(pcode::VarNode::new(id, MAX_REG_SIZE).slice(offset as u8, size));
         }
 
-        match self.subtable.data.register_mapping.get(&var.offset) {
-            Some(&(id, offset)) => Ok(pcode::VarNode::new(id, MAX_REG_SIZE).slice(offset, size)),
+        match self.subtable.data.map_sleigh_reg(var.offset, size) {
+            Some((id, offset)) => Ok(pcode::VarNode::new(id, MAX_REG_SIZE).slice(offset, size)),
             None => Err(Error::UnknownVarNode(var.offset, size)),
         }
     }

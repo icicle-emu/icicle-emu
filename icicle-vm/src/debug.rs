@@ -325,6 +325,12 @@ pub fn get_debug_regs(cpu: &crate::Cpu) -> Vec<pcode::VarNode> {
             "b0", "b1", "b2", "b3", "b4", "b5", "b6", "b7", "b8", "b9", "b10", "b11", "b12", "b13",
             "b14", "b15", "pc",
         ][..],
+        Architecture::M68k => &[
+            "D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7", // Data Registers
+            "A0", "A1", "A2", "A3", "A4", "A5", "A6", "SP", // Address Registers
+            "SR", "ZF", "NF", "VF", // Status Register and Zero Flag
+            "PC", // Program Counter
+        ][..],
         _ => &[][..],
     };
     names.iter().map(|name| cpu.arch.sleigh.get_reg(name).unwrap().var).collect()
