@@ -1,4 +1,3 @@
-use object::read::FileKind;
 use std::{any::Any, path::PathBuf};
 
 use icicle_cpu::{
@@ -7,6 +6,7 @@ use icicle_cpu::{
     pe::PeLoader,
     Cpu, Environment, EnvironmentAny, VmExit,
 };
+use object::read::FileKind;
 
 use crate::{BuildError, Vm};
 

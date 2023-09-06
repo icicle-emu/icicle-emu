@@ -306,7 +306,7 @@ pub(super) fn store_ram(trans: &mut Translator, guest_addr: pcode::Value, value:
     }
 
     let guest_addr_val = trans.read_zxt(guest_addr, 8);
-    let store_size = value.size(); 
+    let store_size = value.size();
     let value = trans.read_int(value);
 
     if let pcode::Value::Const(addr, _) = guest_addr {

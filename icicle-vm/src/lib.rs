@@ -309,10 +309,10 @@ impl Vm {
         }
     }
 
-	/// Handles the case where we encounter an unhandled user-defined pcode operation during 
-	/// execution.
-	///
-    /// Note: Handlers for many of the commonly used operations are mapped in 
+    /// Handles the case where we encounter an unhandled user-defined pcode operation during
+    /// execution.
+    ///
+    /// Note: Handlers for many of the commonly used operations are mapped in
     /// icicle-cpu/src/exec/helpers.rs.
     #[cold]
     fn handle_unimplemented_op(&mut self) -> VmExit {

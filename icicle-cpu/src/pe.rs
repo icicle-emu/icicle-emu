@@ -103,7 +103,8 @@ where
     let (base_addr, relocation_offset) =
         if dll_characteristics & pe::IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE == 0 {
             (requested_base_addr, 0)
-        } else {
+        }
+        else {
             let base_addr = cpu
                 .mem
                 .find_free_memory(layout)
@@ -127,11 +128,10 @@ where
     let aligned_size = utils::align_up(total_header_size as u64, sec_alignment);
 
     let bytes = &data[0..total_header_size as usize];
-    cpu.mem.map_memory_len(
-        base_addr,
-        aligned_size,
-        Mapping { perm: perm::MAP | perm::READ, value: 0x00 },
-    );
+    cpu.mem.map_memory_len(base_addr, aligned_size, Mapping {
+        perm: perm::MAP | perm::READ,
+        value: 0x00,
+    });
     cpu.mem.write_bytes(base_addr, bytes, perm::READ).unwrap();
 
     // map all sections
@@ -146,11 +146,8 @@ where
         let section_base = base_addr + rva;
         let aligned_size = utils::align_up(vsize, sec_alignment);
         let permission = get_permission(section);
-        cpu.mem.map_memory_len(
-            section_base,
-            aligned_size,
-            Mapping { perm: permission, value: 0x00 },
-        );
+        cpu.mem
+            .map_memory_len(section_base, aligned_size, Mapping { perm: permission, value: 0x00 });
         cpu.mem.write_bytes(section_base, bytes, permission).unwrap();
     }
 
@@ -160,8 +157,9 @@ where
         match data_directories.relocation_blocks(data, sections) {
             Ok(reloc_opt) => {
                 if let Some(mut reloc) = reloc_opt {
-                    while let Some(reloc) =
-                        reloc.next().map_err(|e| format!("Failed to read relocation data: {e:?}"))?
+                    while let Some(reloc) = reloc
+                        .next()
+                        .map_err(|e| format!("Failed to read relocation data: {e:?}"))?
                     {
                         for reloc in reloc {
                             let addr = base_addr + reloc.virtual_address as u64;
@@ -170,7 +168,7 @@ where
                         }
                     }
                 }
-            },
+            }
             Err(e) => {
                 return Err(e.to_string());
             }
