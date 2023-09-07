@@ -87,17 +87,18 @@ impl From<ResolvedValue> for Operand {
 #[derive(Copy, Clone, Debug)]
 struct VarNode {
     offset: u32,
+    base_size: u16,
     size: u16,
     is_tmp: bool,
 }
 
 impl VarNode {
-    fn register(offset: u32, size: u16) -> Self {
-        Self { offset, size, is_tmp: false }
+    fn register(offset: u32, base_size: u16) -> Self {
+        Self { offset, base_size, size: base_size, is_tmp: false }
     }
 
-    fn tmp(offset: u32, size: u16) -> Self {
-        Self { offset, size, is_tmp: true }
+    fn tmp(offset: u32, base_size: u16) -> Self {
+        Self { offset, base_size, size: base_size, is_tmp: true }
     }
 
     fn slice(self, offset: u16, size: u16) -> Self {
@@ -361,7 +362,9 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
     fn resolve_dynamic_varnode(&mut self, pointer: &Value, size: u16) -> Result<VarNode> {
         let value = self.resolve_value(*pointer)?;
         match self.get_runtime_value(value)? {
-            pcode::Value::Const(offset, _) => Ok(VarNode::register(offset as u32, size)),
+            pcode::Value::Const(offset, base_size) => {
+                Ok(VarNode::register(offset as u32, base_size as u16).slice(0, size))
+            }
             pcode::Value::Var(_) => Err(Error::VarNodeOffsetIsNotConstant),
         }
     }
@@ -376,7 +379,7 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
             return Ok(pcode::VarNode::new(id, MAX_REG_SIZE).slice(offset as u8, size));
         }
 
-        match self.subtable.data.map_sleigh_reg(var.offset, size) {
+        match self.subtable.data.map_sleigh_reg(var.offset, var.base_size as u8) {
             Some((id, offset)) => Ok(pcode::VarNode::new(id, MAX_REG_SIZE).slice(offset, size)),
             None => Err(Error::UnknownVarNode(var.offset, size)),
         }
@@ -403,7 +406,9 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
             Export::RamRef(ptr, size) => Ok(Operand::Pointer(self.resolve_value(ptr)?, 0, size)),
             Export::RegisterRef(offset, size) => match self.resolve_value(offset)? {
                 ResolvedValue::Var(_) => Err(Error::InvalidExport(self.subtable.constructor.id)),
-                ResolvedValue::Const(x, _) => Ok(VarNode::register(x as u32, size).into()),
+                ResolvedValue::Const(x, base_size) => {
+                    Ok(VarNode::register(x as u32, base_size).slice(0, size).into())
+                }
             },
         }
     }
@@ -426,8 +431,10 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
             Local::InstStart => constant!(self.subtable.inst.inst_start),
             Local::InstNext => constant!(self.subtable.inst.inst_next),
             Local::Register(id) => {
-                let base_offset = self.subtable.data.named_registers[id as usize].offset;
-                VarNode::register(base_offset + value_offset as u32, value_size).into()
+                let base = &self.subtable.data.named_registers[id as usize];
+                VarNode::register(base.offset, base.var.size as u16)
+                    .slice(value_offset, value_size)
+                    .into()
             }
             Local::Field(idx) => {
                 let field = self.subtable.fields()[idx as usize];
