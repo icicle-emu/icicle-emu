@@ -6,3 +6,7 @@ move.w #-0x1,D0w
 	VF = 0x0:1
 	CF = 0x0:1
 
+extb.l D0
+<L0> (entry=0xffbda):
+	D0 = sext(D0b)
+
