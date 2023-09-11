@@ -243,7 +243,7 @@ impl Vm {
             ExceptionCode::SoftwareBreakpoint => VmExit::Breakpoint,
 
             ExceptionCode::ExternalAddr => {
-                self.handle_external_addess(self.cpu.exception.value, u64::MAX)
+                self.handle_external_address(self.cpu.exception.value, u64::MAX)
             }
             ExceptionCode::CodeNotTranslated => self.handle_code_not_translated(),
             ExceptionCode::UnimplementedOp => self.handle_unimplemented_op(),
@@ -259,7 +259,7 @@ impl Vm {
         }
     }
 
-    fn handle_external_addess(&mut self, addr: u64, prev_block: u64) -> VmExit {
+    fn handle_external_address(&mut self, addr: u64, prev_block: u64) -> VmExit {
         self.cpu.write_pc(addr);
 
         let key = self.get_block_key(addr);
