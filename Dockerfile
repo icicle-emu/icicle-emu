@@ -24,5 +24,8 @@ run git init && \
 workdir /src/icicle-emu
 copy . .
 
+# Link Ghidra
+run ln -s /src/ghidra/Ghidra ./Ghidra
+
 # Build
 run /root/.cargo/bin/cargo build --release
