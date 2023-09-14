@@ -19,6 +19,7 @@ run git init && \
     git remote add origin https://github.com/NationalSecurityAgency/ghidra.git && \
     git -c http.sslVerify=false fetch --depth 1 origin ${SUPPORTED_GHIDRA_SHA256} && \
     git checkout FETCH_HEAD 
+env GHIDRA_SRC=/src/ghidra
 
 # Copy in the icicle source
 workdir /src/icicle-emu
