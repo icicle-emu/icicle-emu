@@ -100,7 +100,7 @@ pub struct Parser {
 }
 
 impl Parser {
-    pub fn new<I: Input + 'static>(input: I) -> Self {
+    fn new<I: Input + 'static>(input: I) -> Self {
         Self {
             input: Box::new(input),
             sources: vec![],
@@ -125,8 +125,14 @@ impl Parser {
         preprocessor
     }
 
-    pub fn from_data(root: &str, data: HashMap<String, String>) -> Result<Self, String> {
-        let mut parser = Self::new(data);
+    pub fn from_input<I: Input + 'static>(root: &str, input: I) -> Result<Self, String> {
+        let mut parser = Self::new(input);
+
+        // Define a custom symbol before we parse the Sleigh specification to allow using `ifdef`
+        // for Icicle specific changes.
+        let icicle_ident = ast::Ident(parser.interner.intern("ICICLE"));
+        preprocessor::define(&mut parser, icicle_ident, "");
+
         match parser.include_file(root) {
             Ok(_) => Ok(parser),
             Err(e) => Err(format!("{}", parser.error_formatter(e))),
@@ -140,12 +146,7 @@ impl Parser {
         let input_source = crate::input::FileLoader::new(root.to_owned());
 
         let initial_file = path.file_name().and_then(|x| x.to_str()).ok_or("Invalid input path")?;
-
-        let mut parser = Self::new(input_source);
-        match parser.include_file(initial_file) {
-            Ok(_) => Ok(parser),
-            Err(e) => Err(format!("{}", parser.error_formatter(e))),
-        }
+        Self::from_input(initial_file, input_source)
     }
 
     /// Gets or creates a new [ast::Ident] in the interner from the given string.
@@ -264,7 +265,8 @@ impl Parser {
             let lexer = self.lexers.last_mut()?;
             let src = &self.sources[lexer.src as usize];
 
-            let Some(token) = lexer.next_token(&src.content, self.lexer_mode) else {
+            let Some(token) = lexer.next_token(&src.content, self.lexer_mode)
+            else {
                 // We are done with this source, remove it from the stack, and continue with the
                 // next entry
                 self.lexers.pop();
@@ -536,8 +538,9 @@ impl Parse for i64 {
 
     fn try_parse(p: &mut Parser) -> Result<Option<Self>, Error> {
         let negative = p.bump_if(TokenKind::Minus)?.is_some();
-        let Some(value) = u64::try_parse(p)? else {
-            return Ok(None)
+        let Some(value) = u64::try_parse(p)?
+        else {
+            return Ok(None);
         };
         let mut value = value as i64;
         if negative {

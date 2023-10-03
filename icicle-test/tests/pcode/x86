@@ -168,20 +168,18 @@ STOSD.REP ES:EDI
 
 CMP EBX,dword ptr [EBP + 0xfffffff8]
 <L0> (entry=0x38):
-	$U6:4 = EBP + 0xfffffff8:4
-	$U5:8 = zext($U6:4)
-	$U7:4 = ram[$U5:8]
-	CF = EBX < $U7:4
-	$U8:4 = ram[$U5:8]
-	OF = EBX sborrow $U8:4
-	$U9:4 = ram[$U5:8]
-	$U1:4 = EBX - $U9:4
-	SF = $U1:4 s< 0x0:4
-	ZF = $U1:4 == 0x0:4
-	$U2:4 = $U1:4 & 0xff:4
-	$U3:1 = popcount($U2:4)
-	$U4:1 = $U3:1 & 0x1:1
-	PF = $U4:1 == 0x0:1
+	$U7:4 = EBP + 0xfffffff8:4
+	$U6:8 = zext($U7:4)
+	$U1:4 = ram[$U6:8]
+	CF = EBX < $U1:4
+	OF = EBX sborrow $U1:4
+	$U2:4 = EBX - $U1:4
+	SF = $U2:4 s< 0x0:4
+	ZF = $U2:4 == 0x0:4
+	$U3:4 = $U2:4 & 0xff:4
+	$U4:1 = popcount($U3:4)
+	$U5:1 = $U4:1 & 0x1:1
+	PF = $U5:1 == 0x0:1
 
 PUSH dword ptr [EBP]
 <L0> (entry=0x3e):

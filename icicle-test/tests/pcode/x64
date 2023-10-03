@@ -238,13 +238,13 @@ CMP R8D,-0x4
 <L0> (entry=0x0):
 	CF = R8D < 0xfffffffc:4
 	OF = R8D sborrow 0xfffffffc:4
-	$U1:4 = R8D - 0xfffffffc:4
-	SF = $U1:4 s< 0x0:4
-	ZF = $U1:4 == 0x0:4
-	$U2:4 = $U1:4 & 0xff:4
-	$U3:1 = popcount($U2:4)
-	$U4:1 = $U3:1 & 0x1:1
-	PF = $U4:1 == 0x0:1
+	$U2:4 = R8D - 0xfffffffc:4
+	SF = $U2:4 s< 0x0:4
+	ZF = $U2:4 == 0x0:4
+	$U3:4 = $U2:4 & 0xff:4
+	$U4:1 = popcount($U3:4)
+	$U5:1 = $U4:1 & 0x1:1
+	PF = $U5:1 == 0x0:1
 
 MOV RCX,-0x5555555555555555
 <L0> (entry=0x29):
@@ -1050,13 +1050,13 @@ CMP AX,BX
 <L0> (entry=0x0):
 	CF = AX < BX
 	OF = AX sborrow BX
-	$U1:2 = AX - BX
-	SF = $U1:2 s< 0x0:2
-	ZF = $U1:2 == 0x0:2
-	$U2:2 = $U1:2 & 0xff:2
-	$U3:1 = popcount($U2:2)
-	$U4:1 = $U3:1 & 0x1:1
-	PF = $U4:1 == 0x0:1
+	$U2:2 = AX - BX
+	SF = $U2:2 s< 0x0:2
+	ZF = $U2:2 == 0x0:2
+	$U3:2 = $U2:2 & 0xff:2
+	$U4:1 = popcount($U3:2)
+	$U5:1 = $U4:1 & 0x1:1
+	PF = $U5:1 == 0x0:1
 
 MUL AX
 <L0> (entry=0x0):
@@ -1081,18 +1081,16 @@ XOR AX,0x23ec
 
 CMP word ptr [0x100029],0x40
 <L0> (entry=0x21):
-	$U5:2 = ram[0x100029:8]
-	CF = $U5:2 < 0x40:2
-	$U6:2 = ram[0x100029:8]
-	OF = $U6:2 sborrow 0x40:2
-	$U7:2 = ram[0x100029:8]
-	$U1:2 = $U7:2 - 0x40:2
-	SF = $U1:2 s< 0x0:2
-	ZF = $U1:2 == 0x0:2
-	$U2:2 = $U1:2 & 0xff:2
-	$U3:1 = popcount($U2:2)
-	$U4:1 = $U3:1 & 0x1:1
-	PF = $U4:1 == 0x0:1
+	$U1:2 = ram[0x100029:8]
+	CF = $U1:2 < 0x40:2
+	OF = $U1:2 sborrow 0x40:2
+	$U2:2 = $U1:2 - 0x40:2
+	SF = $U2:2 s< 0x0:2
+	ZF = $U2:2 == 0x0:2
+	$U3:2 = $U2:2 & 0xff:2
+	$U4:1 = popcount($U3:2)
+	$U5:1 = $U4:1 & 0x1:1
+	PF = $U5:1 == 0x0:1
 
 PXOR XMM0, XMM0
 <L0> (entry=0x0):
@@ -1892,10 +1890,6 @@ FXCH
 	ST0 = ST1
 	ST1 = $U1:10
 
-F2XM1
-<L0> (entry=0x0):
-	ST0 = f2xm1(ST0)
-
 FADDP
 <L0> (entry=0x0):
 	$U1:8 = float2float(ST0)
@@ -1978,65 +1972,60 @@ CVTSI2SD XMM6, dword ptr [RBP + 0x20]
 
 CMPXCHG8B qword ptr [RDX + -0x3ea0fba4]
 <L0> (entry=0x12026):
-	$tmp0:8 = RDX + 0xffffffffc15f045c:8
-	$U1:8 = zext(EDX)
-	$U2:8 = $U1:8 << 0x20:8
-	$U3:8 = zext(EAX)
-	$U4:8 = $U2:8 | $U3:8
-	$U10:8 = ram[$tmp0:8]
-	ZF = $U4:8 == $U10:8
+	$tmp1:8 = RDX + 0xffffffffc15f045c:8
+	$tmp0:8 = ram[$tmp1:8]
+	$U2:8 = zext(EDX)
+	$U3:8 = $U2:8 << 0x20:8
+	$U4:8 = zext(EAX)
+	$U5:8 = $U3:8 | $U4:8
+	ZF = $U5:8 == $tmp0:8
 	if ZF jump <L2>
 <L1>:
-	$U11:8 = $tmp0:8 + 0x4:8
-	EDX = ram[$U11:8]
-	EAX = ram[$tmp0:8]
+	EDX = $tmp0[4]:4
+	EAX = $tmp0:4
 	jump 0x1202d:8
 <L2>:
-	$U6:8 = zext(ECX)
-	$U7:8 = $U6:8 << 0x20:8
-	$U8:8 = zext(EBX)
-	$U12:8 = $U7:8 | $U8:8
-	ram[$tmp0:8] = $U12:8
+	$U7:8 = zext(ECX)
+	$U8:8 = $U7:8 << 0x20:8
+	$U9:8 = zext(EBX)
+	$U11:8 = $U8:8 | $U9:8
+	ram[$tmp1:8] = $U11:8
 
 CMPXCHG8B qword ptr [RAX]
 <L0> (entry=0x65):
-	$U1:8 = zext(EDX)
-	$U2:8 = $U1:8 << 0x20:8
-	$U3:8 = zext(EAX)
-	$U4:8 = $U2:8 | $U3:8
-	$U9:8 = ram[RAX]
-	ZF = $U4:8 == $U9:8
+	$tmp0:8 = ram[RAX]
+	$U2:8 = zext(EDX)
+	$U3:8 = $U2:8 << 0x20:8
+	$U4:8 = zext(EAX)
+	$U5:8 = $U3:8 | $U4:8
+	ZF = $U5:8 == $tmp0:8
 	if ZF jump <L2>
 <L1>:
-	$U10:8 = RAX + 0x4:8
-	EDX = ram[$U10:8]
-	EAX = ram[RAX]
+	EDX = $tmp0[4]:4
+	EAX = $tmp0:4
 	jump 0x68:8
 <L2>:
-	$U6:8 = zext(ECX)
-	$U7:8 = $U6:8 << 0x20:8
-	$U8:8 = zext(EBX)
-	$U11:8 = $U7:8 | $U8:8
-	ram[RAX] = $U11:8
+	$U7:8 = zext(ECX)
+	$U8:8 = $U7:8 << 0x20:8
+	$U9:8 = zext(EBX)
+	$U10:8 = $U8:8 | $U9:8
+	ram[RAX] = $U10:8
 
 CMPXCHG dword ptr [0x1010],ESI
 <L0> (entry=0x0):
-	$U6:4 = ram[0x1010:8]
-	CF = EAX < $U6:4
-	$U7:4 = ram[0x1010:8]
-	OF = EAX sborrow $U7:4
-	$U8:4 = ram[0x1010:8]
-	$U1:4 = EAX - $U8:4
-	SF = $U1:4 s< 0x0:4
-	ZF = $U1:4 == 0x0:4
-	$U2:4 = $U1:4 & 0xff:4
-	$U3:1 = popcount($U2:4)
-	$U4:1 = $U3:1 & 0x1:1
-	PF = $U4:1 == 0x0:1
+	$tmp0:4 = ram[0x1010:8]
+	CF = EAX < $tmp0:4
+	OF = EAX sborrow $tmp0:4
+	$U2:4 = EAX - $tmp0:4
+	SF = $U2:4 s< 0x0:4
+	ZF = $U2:4 == 0x0:4
+	$U3:4 = $U2:4 & 0xff:4
+	$U4:1 = popcount($U3:4)
+	$U5:1 = $U4:1 & 0x1:1
+	PF = $U5:1 == 0x0:1
 	if ZF jump <L2>
 <L1>:
-	EAX = ram[0x1010:8]
-	RAX = zext(EAX)
+	RAX = zext($tmp0:4)
 	jump 0x7:8
 <L2>:
 	ram[0x1010:8] = ESI
@@ -2239,9 +2228,9 @@ PUSHF
 
 LEAVE
 <L0> (entry=0x0):
-	RSP = RBP
-	RBP = ram[RBP]
-	RSP = RSP + 0x8:8
+	$U1:8 = ram[RBP]
+	RSP = RBP + 0x8:8
+	RBP = $U1:8
 
 MOV RSP, DR6
 <L0> (entry=0x11000):

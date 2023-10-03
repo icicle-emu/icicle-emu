@@ -9,7 +9,11 @@ mod preprocessor;
 #[cfg(test)]
 mod tests;
 
-pub use crate::{error::*, input::FileLoader, parser::Parser};
+pub use crate::{
+    error::*,
+    input::{FileLoader, Input},
+    parser::Parser,
+};
 
 use std::collections::HashMap;
 
