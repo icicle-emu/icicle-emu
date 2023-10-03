@@ -19,7 +19,7 @@ pub fn from_path(sleigh_spec: impl AsRef<Path>) -> Result<SleighData, String> {
 }
 
 pub fn from_data(root: &str, data: HashMap<String, String>) -> Result<SleighData, String> {
-    build_inner(Parser::from_data(root, data)?, false)
+    build_inner(Parser::from_input(root, data)?, false)
 }
 
 pub fn build_inner(mut parser: Parser, verbose: bool) -> Result<SleighData, String> {

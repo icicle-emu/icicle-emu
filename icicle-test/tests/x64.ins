@@ -632,10 +632,10 @@
 0x000000 [df e0]                   "FNSTSW AX"
     AX = 0x0, FPUStatusWord = 0x1 => AX = 0x1;
 
-
 0x000000 [d9 fc]                   "FRNDINT";
 0x000000 [dc e9]                   "FSUB ST1,ST0";
 0x000000 [d9 c9]                   "FXCH";
+@skip // Inconsistent b (https://github.com/icicle-emu/icicle-emu/issues/54)
 0x000000 [d9 f0]                   "F2XM1"
 {
     // -0.0 -> -0.0

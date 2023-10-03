@@ -164,7 +164,7 @@ pub(crate) fn handle_macro(p: &mut Parser, kind: MacroKind) -> Result<(), Error>
 /// `content`
 ///
 /// Note: preprocessor symbols are allowed to be redefined
-fn define(p: &mut Parser, ident: ast::Ident, content: impl Into<String>) {
+pub(crate) fn define(p: &mut Parser, ident: ast::Ident, content: impl Into<String>) {
     let name = format!("$({})", p.interner.get(ident.0));
     let src_id = p.load_content(name, content.into());
     p.state.definitions.insert(ident, src_id);
