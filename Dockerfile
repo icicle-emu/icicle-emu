@@ -1,6 +1,7 @@
 from ubuntu:22.04
 
-arg SUPPORTED_GHIDRA_SHA256=77373649fd96bc3f7c6c34bc76df0b276d913131
+arg GHIDRA_SUPPORTED_SHA256=50230050fa58bd40d5a96cab9c167fc55bc92a76
+arg GHIDRA_REMOTE='https://github.com/icicle-emu/ghidra.git'
 
 env DEBIAN_FRONTEND=none
 
@@ -16,8 +17,8 @@ run curl https://sh.rustup.rs -sSf | \
 # Get ghidra
 workdir /src/ghidra
 run git init && \
-    git remote add origin https://github.com/NationalSecurityAgency/ghidra.git && \
-    git -c http.sslVerify=false fetch --depth 1 origin ${SUPPORTED_GHIDRA_SHA256} && \
+    git remote add origin ${GHIDRA_REMOTE} && \
+    git -c http.sslVerify=false fetch --depth 1 origin ${GHIDRA_SUPPORTED_SHA256} && \
     git checkout FETCH_HEAD 
 env GHIDRA_SRC=/src/ghidra
 
