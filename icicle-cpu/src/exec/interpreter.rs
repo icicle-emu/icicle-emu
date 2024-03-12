@@ -615,7 +615,7 @@ fn load<E: PcodeExecutor>(exec: &mut E, id: MemId, dst: VarNode, addr: u64) -> M
     macro_rules! load {
         ($dst:expr, $addr:expr, $ty:ty) => {{
             let tmp = exec.load_mem(id, $addr)?;
-            let value = match exec.is_big_endian() {
+            let value = match exec.is_big_endian() && id == pcode::RAM_SPACE {
                 true => <$ty>::from_be_bytes(tmp),
                 false => <$ty>::from_le_bytes(tmp),
             };
@@ -629,7 +629,7 @@ fn load<E: PcodeExecutor>(exec: &mut E, id: MemId, dst: VarNode, addr: u64) -> M
         4 => load!(dst, addr, u32),
         8 => load!(dst, addr, u64),
         16 => {
-            if exec.is_big_endian() {
+            if exec.is_big_endian() && id == pcode::RAM_SPACE {
                 load!(dst.slice(8, 8), addr, u64);
                 load!(dst.slice(0, 8), addr.wrapping_add(8), u64);
             }
@@ -639,7 +639,7 @@ fn load<E: PcodeExecutor>(exec: &mut E, id: MemId, dst: VarNode, addr: u64) -> M
             }
         }
         size => {
-            if exec.is_big_endian() {
+            if exec.is_big_endian() && id == pcode::RAM_SPACE {
                 for i in 0..size {
                     load!(dst.slice(size - 1 - i, 1), addr.wrapping_add(i as u64), u8);
                 }
@@ -659,7 +659,7 @@ fn store<E: PcodeExecutor>(exec: &mut E, id: MemId, addr: u64, value: Value) -> 
     macro_rules! writer {
         ($addr:expr, $value:expr) => {{
             let val = $value;
-            let bytes = match exec.is_big_endian() {
+            let bytes = match exec.is_big_endian() && id == pcode::RAM_SPACE {
                 true => val.to_be_bytes(),
                 false => val.to_le_bytes(),
             };
@@ -673,7 +673,7 @@ fn store<E: PcodeExecutor>(exec: &mut E, id: MemId, addr: u64, value: Value) -> 
         4 => writer!(addr, exec.read::<u32>(value))?,
         8 => writer!(addr, exec.read::<u64>(value))?,
         16 => {
-            if exec.is_big_endian() {
+            if exec.is_big_endian() && id == pcode::RAM_SPACE {
                 writer!(addr, exec.read::<u64>(value.slice(8, 8)))?;
                 writer!(addr.wrapping_add(8), exec.read::<u64>(value.slice(0, 8)))?;
             }
@@ -683,7 +683,7 @@ fn store<E: PcodeExecutor>(exec: &mut E, id: MemId, addr: u64, value: Value) -> 
             }
         }
         size => {
-            if exec.is_big_endian() {
+            if exec.is_big_endian() && id == pcode::RAM_SPACE {
                 for i in 0..size {
                     writer!(
                         addr.wrapping_add(size as u64 - 1 - i as u64),

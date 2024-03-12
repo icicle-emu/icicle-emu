@@ -8,7 +8,7 @@ use sleigh_runtime::semantics::{Export, Local, SemanticAction, Value, ValueSize}
 
 use crate::{
     constructor::Scope,
-    symbols::{Symbol, SymbolKind, TableId, RAM_SPACE, REGISTER_SPACE},
+    symbols::{Symbol, SymbolKind, TableId},
 };
 
 /// Represents a value that can either appear as a destination (lvalue) or as an operand (rvalue).
@@ -378,7 +378,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             }
             self.set_size(&mut output, size);
         }
-        self.op(pcode::Op::Load(0), &[ptr], Some(output))
+        self.op(pcode::Op::Load(pcode::RAM_SPACE), &[ptr], Some(output))
     }
 
     fn store(&mut self, size: ValueSize, ptr: Value, mut value: Value) {
@@ -389,7 +389,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             }
             self.set_size(&mut value, size);
         }
-        self.op_no_output(pcode::Op::Store(0), &[ptr, value]);
+        self.op_no_output(pcode::Op::Store(pcode::RAM_SPACE), &[ptr, value]);
     }
 
     fn unimplemented(&mut self) {
@@ -1012,7 +1012,7 @@ impl<'a, 'b> Builder<'a, 'b> {
     fn resolve_space(
         &mut self,
         space: &Option<ast::Ident>,
-    ) -> Result<(u64, ValueSize, ValueSize), String> {
+    ) -> Result<(pcode::MemId, ValueSize, ValueSize), String> {
         let space = match space {
             Some(ident) => self.scope.globals.lookup_kind(*ident, SymbolKind::Space)?,
             None => self.scope.globals.default_space.ok_or("no default space")?,
@@ -1045,8 +1045,8 @@ impl<'a, 'b> Builder<'a, 'b> {
         let pointer = self.read_value(pointer, None)?;
 
         Ok(match space_id {
-            REGISTER_SPACE => ExprValue::RegisterRef(pointer, size.unwrap_or(0)),
-            RAM_SPACE => ExprValue::RamRef(pointer, size.unwrap_or(0)),
+            pcode::REGISTER_SPACE => ExprValue::RegisterRef(pointer, size.unwrap_or(0)),
+            pcode::RAM_SPACE => ExprValue::RamRef(pointer, size.unwrap_or(0)),
             _ => panic!("unknown space_id: {}", space_id),
         })
     }

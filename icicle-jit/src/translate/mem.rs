@@ -177,10 +177,10 @@ fn splat_const(trans: &mut Translator, value: u8, ty: Type) -> Value {
     }
 }
 
-pub(super) fn load_host(trans: &mut Translator, addr: Value, size: u8) -> Value {
+fn load_host(trans: &mut Translator, addr: Value, size: u8) -> Value {
     let ty = sized_int(size);
 
-    let mut flags = MemFlags::trusted().with_heap();
+    let mut flags = MemFlags::new().with_notrap().with_heap();
     flags.set_endianness(trans.ctx.endianness);
     let mut result = trans.builder.ins().load(ty, flags, addr, 0);
 
@@ -199,7 +199,7 @@ pub(super) fn load_ram(trans: &mut Translator, guest_addr: pcode::Value, output:
     if !is_jit_supported_size(size) || trans.ctx.disable_jit_mem {
         trans.interpret(pcode::Instruction::from((
             output,
-            pcode::Op::Load(0),
+            pcode::Op::Load(pcode::RAM_SPACE),
             pcode::Inputs::one(guest_addr),
         )));
         // Check for memory exceptions.
@@ -281,8 +281,8 @@ fn load_fallback(trans: &mut Translator, output: pcode::VarNode, guest_addr: Val
     value
 }
 
-pub(super) fn store_host(trans: &mut Translator, addr: Value, mut value: Value, size: u8) {
-    let mut flags = MemFlags::trusted().with_heap();
+fn store_host(trans: &mut Translator, addr: Value, mut value: Value, size: u8) {
+    let mut flags = MemFlags::new().with_notrap().with_heap();
     flags.set_endianness(trans.ctx.endianness);
     // Setting the endianness doesn't actually do anything in x86_64 backend for cranelift
     // currently, so we manually perform a byte swap operation.
@@ -297,7 +297,7 @@ pub(super) fn store_ram(trans: &mut Translator, guest_addr: pcode::Value, value:
     let size = value.size();
     if !is_jit_supported_size(size) || trans.ctx.disable_jit_mem {
         trans.interpret(pcode::Instruction::from((
-            pcode::Op::Store(0),
+            pcode::Op::Store(pcode::RAM_SPACE),
             pcode::Inputs::new(guest_addr, value),
         )));
         // Check for memory exceptions.

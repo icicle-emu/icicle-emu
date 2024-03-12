@@ -317,18 +317,42 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
                     };
                 }
                 SemanticAction::LoadRegister { pointer, output, size } => {
-                    let var = self.resolve_dynamic_varnode(pointer, *size)?;
+                    let reg_ptr = self.resolve_value(*pointer)?;
                     match self.resolve_output(output)? {
-                        Output::Var(dst) => self.emit_copy(var.into(), dst)?,
+                        Output::Var(dst) => match self.get_runtime_value(reg_ptr)? {
+                            pcode::Value::Const(offset, base_size) => {
+                                // SLEIGH offset for register is known at disassembly time, so
+                                // directly translate it to a varnode.
+                                let var = VarNode::register(offset as u32, base_size as u16)
+                                    .slice(0, *size);
+                                self.emit_copy(var.into(), dst)?
+                            }
+                            reg => {
+                                // Non-constant register offset, so we must emit a dynamic register
+                                // load instruction.
+                                let dst = self.get_runtime_var(dst)?;
+                                self.push((dst, pcode::Op::Load(pcode::REGISTER_SPACE), reg));
+                            }
+                        },
                         Output::Pointer(addr, offset, size) => {
-                            self.emit_store(addr, offset, var.slice(0, size).into())?;
+                            self.emit_store(addr, offset, reg_ptr.slice(0, size).into())?;
                         }
                     }
                 }
                 SemanticAction::StoreRegister { pointer, value, size } => {
-                    let var = self.resolve_dynamic_varnode(pointer, *size)?;
+                    let reg_ptr = self.resolve_value(*pointer)?;
                     let value = self.resolve_value(*value)?;
-                    self.emit_copy(value, var.into())?;
+                    match self.get_runtime_value(reg_ptr)? {
+                        pcode::Value::Const(offset, base_size) => {
+                            let var =
+                                VarNode::register(offset as u32, base_size as u16).slice(0, *size);
+                            self.emit_copy(value, var.into())?
+                        }
+                        reg => {
+                            let value = self.get_runtime_value(value)?;
+                            self.push((pcode::Op::Store(pcode::REGISTER_SPACE), (reg, value)));
+                        }
+                    }
                 }
                 SemanticAction::DelaySlot => {
                     // @todo: do we want an instruction marker here?
@@ -359,16 +383,6 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
         Ok(export)
     }
 
-    fn resolve_dynamic_varnode(&mut self, pointer: &Value, size: u16) -> Result<VarNode> {
-        let value = self.resolve_value(*pointer)?;
-        match self.get_runtime_value(value)? {
-            pcode::Value::Const(offset, base_size) => {
-                Ok(VarNode::register(offset as u32, base_size as u16).slice(0, size))
-            }
-            pcode::Value::Var(_) => Err(Error::VarNodeOffsetIsNotConstant),
-        }
-    }
-
     /// Returns the runtime register associated with the provided variable.
     fn get_runtime_var(&mut self, var: VarNode) -> Result<pcode::VarNode> {
         let size = self.resolve_var_size(var.size)?;
@@ -385,6 +399,7 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
         }
     }
 
+    /// Returns the runtime register or constant associated with the input value.
     fn get_runtime_value(&mut self, value: ResolvedValue) -> Result<pcode::Value> {
         match value {
             ResolvedValue::Var(var) => {
@@ -608,7 +623,7 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
         self.split_large_op(dst, |this, i, dst| {
             let addr = this.emit_add_offset(addr, offset + i as u64)?;
             let dst = this.get_runtime_var(dst)?;
-            this.push((dst, pcode::Op::Load(0), addr));
+            this.push((dst, pcode::Op::Load(pcode::RAM_SPACE), addr));
             Ok(())
         })
     }
@@ -618,12 +633,12 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
             ResolvedValue::Const(value, size) => {
                 let addr = self.emit_add_offset(addr, offset)?;
                 let value = pcode::Value::Const(value, self.resolve_var_size(size)?);
-                self.push((pcode::Op::Store(0), pcode::Inputs::new(addr, value)));
+                self.push((pcode::Op::Store(pcode::RAM_SPACE), pcode::Inputs::new(addr, value)));
             }
             ResolvedValue::Var(var) => self.split_large_op(var, |this, i, value| {
                 let addr = this.emit_add_offset(addr, offset + i as u64)?;
                 let var = this.get_runtime_var(value)?;
-                this.push((pcode::Op::Store(0), pcode::Inputs::new(addr, var)));
+                this.push((pcode::Op::Store(pcode::RAM_SPACE), pcode::Inputs::new(addr, var)));
                 Ok(())
             })?,
         }

@@ -4,3 +4,8 @@
     cr7 = 2 => pc = 0x1000000c;
     cr7 = 0 => pc = 0x10000004;
 }
+
+// Dynamically computed register offsets.
+0xc1000000 [7c 60 25 26]    "mfsrin r3,r4"
+              // 0xc0000000 => sr3
+    r3 = 0, r4 = 0xc0000000, sr3 = 0x1234 => r3 = 0x1234;

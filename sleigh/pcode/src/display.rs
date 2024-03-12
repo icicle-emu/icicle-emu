@@ -218,7 +218,11 @@ pub struct SpaceId(pub u16);
 
 impl PcodeDisplay<()> for SpaceId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>, _: &()) -> std::fmt::Result {
-        write!(f, "mem.{}", self.0)
+        match self.0 {
+            crate::RAM_SPACE => f.write_str("ram"),
+            crate::REGISTER_SPACE => f.write_str("register"),
+            crate::RESERVED_SPACE_END.. => write!(f, "mem.{}", self.0),
+        }
     }
 }
 

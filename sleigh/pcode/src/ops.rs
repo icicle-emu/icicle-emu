@@ -26,6 +26,15 @@ pub type StoreId = u16;
 /// The ID associated with a particular memory location.
 pub type MemId = u16;
 
+/// The memory ID associated with the RAM space.
+pub const RAM_SPACE: MemId = 0;
+
+/// The memory ID associated with the register space.
+pub const REGISTER_SPACE: MemId = 1;
+
+/// The memory ID after all reserved spaces.
+pub const RESERVED_SPACE_END: MemId = 2;
+
 /// Represents a reference to a slice of a P-code variable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct VarNode {

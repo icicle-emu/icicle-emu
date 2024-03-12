@@ -17,3 +17,9 @@ beq cr7,0x1000000c
 	$U1:1 = $U3:1 & 0x1:1
 	if $U1:1 jump 0x1000000c:4
 
+mfsrin r3,r4
+<L0> (entry=0xc1000000):
+	$U1:4 = r4 >> 0x1c:4
+	$U2:4 = 0x800:4 + $U1:4
+	r3 = register[$U2:4]
+
