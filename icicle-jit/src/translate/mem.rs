@@ -177,10 +177,10 @@ fn splat_const(trans: &mut Translator, value: u8, ty: Type) -> Value {
     }
 }
 
-pub(super) fn load_host(trans: &mut Translator, addr: Value, size: u8) -> Value {
+fn load_host(trans: &mut Translator, addr: Value, size: u8) -> Value {
     let ty = sized_int(size);
 
-    let mut flags = MemFlags::trusted().with_heap();
+    let mut flags = MemFlags::new().with_notrap().with_heap();
     flags.set_endianness(trans.ctx.endianness);
     let mut result = trans.builder.ins().load(ty, flags, addr, 0);
 
@@ -281,8 +281,8 @@ fn load_fallback(trans: &mut Translator, output: pcode::VarNode, guest_addr: Val
     value
 }
 
-pub(super) fn store_host(trans: &mut Translator, addr: Value, mut value: Value, size: u8) {
-    let mut flags = MemFlags::trusted().with_heap();
+fn store_host(trans: &mut Translator, addr: Value, mut value: Value, size: u8) {
+    let mut flags = MemFlags::new().with_notrap().with_heap();
     flags.set_endianness(trans.ctx.endianness);
     // Setting the endianness doesn't actually do anything in x86_64 backend for cranelift
     // currently, so we manually perform a byte swap operation.

@@ -795,7 +795,10 @@ impl<'a> Translator<'a> {
                         }
                         let ptr =
                             ctx.get_trace_store_ptr(id - pcode::RESERVED_SPACE_END, inputs[0]);
-                        let value = mem::load_host(ctx.trans, ptr, output.size);
+
+                        let load_flags = MemFlags::new().with_notrap().with_heap();
+                        let ty = sized_int(output.size);
+                        let value = ctx.trans.builder.ins().load(ty, load_flags, ptr, 0);
                         self.write(output, value);
                     }
                 },
@@ -814,7 +817,9 @@ impl<'a> Translator<'a> {
                         let ptr =
                             ctx.get_trace_store_ptr(id - pcode::RESERVED_SPACE_END, inputs[0]);
                         let value = ctx.trans.read_int(inputs[1]);
-                        mem::store_host(ctx.trans, ptr, value, inputs[1].size());
+
+                        let store_flags = MemFlags::new().with_notrap().with_heap();
+                        ctx.trans.builder.ins().store(store_flags, value, ptr, 0);
                     }
                 },
 
