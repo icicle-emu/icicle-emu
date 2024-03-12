@@ -199,7 +199,7 @@ pub(super) fn load_ram(trans: &mut Translator, guest_addr: pcode::Value, output:
     if !is_jit_supported_size(size) || trans.ctx.disable_jit_mem {
         trans.interpret(pcode::Instruction::from((
             output,
-            pcode::Op::Load(0),
+            pcode::Op::Load(pcode::RAM_SPACE),
             pcode::Inputs::one(guest_addr),
         )));
         // Check for memory exceptions.
@@ -297,7 +297,7 @@ pub(super) fn store_ram(trans: &mut Translator, guest_addr: pcode::Value, value:
     let size = value.size();
     if !is_jit_supported_size(size) || trans.ctx.disable_jit_mem {
         trans.interpret(pcode::Instruction::from((
-            pcode::Op::Store(0),
+            pcode::Op::Store(pcode::RAM_SPACE),
             pcode::Inputs::new(guest_addr, value),
         )));
         // Check for memory exceptions.

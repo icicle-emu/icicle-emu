@@ -782,25 +782,37 @@ impl<'a> Translator<'a> {
                 Op::FloatLessEqual => ctx.emit_float_cmp(ops::float_less_equal),
 
                 Op::Load(id) => match id {
-                    0 => mem::load_ram(self, inputs[0], output),
-                    _ => {
+                    pcode::RAM_SPACE => mem::load_ram(self, inputs[0], output),
+                    pcode::REGISTER_SPACE => {
+                        // The target register needs to be resolved dynamically using SLEIGH data,
+                        // so we defer this to the interpreter.
+                        ctx.trans.interpret(ctx.instruction);
+                    }
+                    pcode::RESERVED_SPACE_END.. => {
                         if !is_jit_supported_size(output.size) {
                             ctx.trans.interpret(ctx.instruction);
                             continue;
                         }
-                        let ptr = ctx.get_trace_store_ptr(id - 1, inputs[0]);
+                        let ptr =
+                            ctx.get_trace_store_ptr(id - pcode::RESERVED_SPACE_END, inputs[0]);
                         let value = mem::load_host(ctx.trans, ptr, output.size);
                         self.write(output, value);
                     }
                 },
                 Op::Store(id) => match id {
-                    0 => mem::store_ram(self, inputs[0], inputs[1]),
-                    _ => {
+                    pcode::RAM_SPACE => mem::store_ram(self, inputs[0], inputs[1]),
+                    pcode::REGISTER_SPACE => {
+                        // The target register needs to be resolved dynamically using SLEIGH data,
+                        // so we defer this to the interpreter.
+                        ctx.trans.interpret(ctx.instruction);
+                    }
+                    pcode::RESERVED_SPACE_END.. => {
                         if !is_jit_supported_size(inputs[1].size()) {
                             ctx.trans.interpret(ctx.instruction);
                             continue;
                         }
-                        let ptr = ctx.get_trace_store_ptr(id - 1, inputs[0]);
+                        let ptr =
+                            ctx.get_trace_store_ptr(id - pcode::RESERVED_SPACE_END, inputs[0]);
                         let value = ctx.trans.read_int(inputs[1]);
                         mem::store_host(ctx.trans, ptr, value, inputs[1].size());
                     }

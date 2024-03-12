@@ -21,9 +21,6 @@ pub(crate) enum SymbolKind {
     UserOp,
 }
 
-pub const RAM_SPACE: u64 = 0;
-pub const REGISTER_SPACE: u64 = 1;
-
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub(crate) struct Symbol {
     pub kind: SymbolKind,
@@ -182,8 +179,8 @@ impl SymbolTable {
     ///  - The name of the space overlaps with an existing identifier.
     pub fn define_space(&mut self, space: ast::Space) -> Result<(), String> {
         let id = match space.kind {
-            ast::SpaceKind::RamSpace => RAM_SPACE,
-            ast::SpaceKind::RegisterSpace => REGISTER_SPACE,
+            ast::SpaceKind::RamSpace => pcode::RAM_SPACE,
+            ast::SpaceKind::RegisterSpace => pcode::REGISTER_SPACE,
             ast::SpaceKind::RomSpace => return Err("only ROM space not supported".into()),
         };
 
@@ -461,7 +458,7 @@ impl SymbolTable {
 #[derive(Clone, Debug)]
 pub(crate) struct RamSpace {
     /// The ID assigned to varnodes referencing this space
-    pub space_id: u64,
+    pub space_id: pcode::MemId,
 
     /// Represents the number of bytes required to reference an arbitary address in the space (i.e.
     /// size_of::<*mut u8>()))

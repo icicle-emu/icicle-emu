@@ -11,7 +11,7 @@ use std::{collections::HashMap, fmt::Display};
 pub use crate::{
     decoder::{ContextModValue, Decoder, DisasmConstantValue, Instruction},
     expr::PatternExprOp,
-    lifter::Lifter,
+    lifter::{Error as LifterError, Lifter},
 };
 use crate::{
     expr::PatternExprRange,
@@ -584,8 +584,9 @@ impl pcode::PcodeDisplay<SleighData> for pcode::SpaceId {
     fn fmt(&self, f: &mut std::fmt::Formatter, _: &SleighData) -> std::fmt::Result {
         // @todo: support names for other address spaces.
         match self.0 {
-            0 => f.write_str("ram"),
-            x => write!(f, "mem.{x}"),
+            pcode::RAM_SPACE => f.write_str("ram"),
+            pcode::REGISTER_SPACE => f.write_str("register"),
+            pcode::RESERVED_SPACE_END.. => write!(f, "mem.{}", self.0),
         }
     }
 }

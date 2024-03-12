@@ -1,6 +1,6 @@
 use std::cell::UnsafeCell;
 
-use icicle_mem::{perm, MemResult, Mmu};
+use icicle_mem::{perm, MemError, MemResult, Mmu};
 use pcode::PcodeDisplay;
 
 use crate::{
@@ -346,6 +346,12 @@ impl Cpu {
         self.icount + self.fuel.start - self.fuel.remaining
     }
 
+    /// Translate a SLEIGH register offset to an Icicle varnode.
+    pub fn var_for_offset(&self, offset: u32, size: u8) -> Option<pcode::VarNode> {
+        let (id, reg_offset) = self.arch.sleigh.map_sleigh_reg(offset, size)?;
+        Some(pcode::VarNode::new(id, 16).slice(reg_offset, size))
+    }
+
     /// Reads the register represented by `var`. For special registers, this may perform additional
     /// operations.
     pub fn read_reg(&mut self, var: pcode::VarNode) -> u64 {
@@ -573,8 +579,13 @@ impl<'a> PcodeExecutor for UncheckedExecutor<'a> {
 
     fn load_mem<const N: usize>(&mut self, id: pcode::MemId, addr: u64) -> MemResult<[u8; N]> {
         match id {
-            0 => self.cpu.mem.read::<N>(addr, perm::READ),
-            _ => {
+            pcode::RAM_SPACE => self.cpu.mem.read::<N>(addr, perm::READ),
+            pcode::REGISTER_SPACE => {
+                let var =
+                    self.cpu.var_for_offset(addr as u32, N as u8).ok_or(MemError::Unmapped)?;
+                Ok(self.cpu.read_var(var))
+            }
+            pcode::RESERVED_SPACE_END.. => {
                 let offset = addr as usize;
                 let mut value = [0; N];
                 value.copy_from_slice(
@@ -592,8 +603,13 @@ impl<'a> PcodeExecutor for UncheckedExecutor<'a> {
         value: [u8; N],
     ) -> MemResult<()> {
         match id {
-            0 => self.cpu.mem.write(addr, value, perm::WRITE),
-            _ => {
+            pcode::RAM_SPACE => self.cpu.mem.write(addr, value, perm::WRITE),
+            pcode::REGISTER_SPACE => {
+                let var =
+                    self.cpu.var_for_offset(addr as u32, N as u8).ok_or(MemError::Unmapped)?;
+                Ok(self.cpu.write_var(var, value))
+            }
+            pcode::RESERVED_SPACE_END.. => {
                 let offset = addr as usize;
                 self.cpu.trace.storage[id as usize - 1].data_mut()[offset..offset + N]
                     .copy_from_slice(&value);

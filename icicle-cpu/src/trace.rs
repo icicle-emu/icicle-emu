@@ -148,7 +148,7 @@ pub struct StoreRef(usize);
 impl StoreRef {
     #[inline]
     pub fn get_store_id(&self) -> u16 {
-        self.0 as u16 + 1
+        self.0 as u16 + pcode::RESERVED_SPACE_END
     }
 }
 
