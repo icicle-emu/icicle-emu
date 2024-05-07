@@ -23,28 +23,6 @@ impl CmpAttr {
     pub fn from_u8(value: u8) -> Self {
         Self::from_bits(value).unwrap_or_else(Self::empty)
     }
-
-    fn invert(self) -> Self {
-        let mut inverted = Self::NOT_EQUAL;
-        if !self.contains(Self::IS_EQUAL) {
-            inverted |= Self::IS_EQUAL;
-        }
-
-        if self.contains(CmpAttr::IS_LESSER) {
-            inverted |= Self::IS_GREATER;
-        }
-        if self.contains(CmpAttr::IS_GREATER) {
-            inverted |= Self::IS_LESSER;
-        }
-        inverted
-    }
-
-    fn invert_if(self, should_invert: bool) -> Self {
-        match should_invert {
-            true => self.invert(),
-            false => self,
-        }
-    }
 }
 
 impl From<Op> for CmpAttr {
@@ -76,12 +54,11 @@ pub struct CmpOp {
     pub offset: usize,
 }
 
-impl pcode::PcodeDisplay<sleigh_runtime::SleighData> for CmpOp {
-    fn fmt(
-        &self,
-        f: &mut std::fmt::Formatter,
-        ctx: &sleigh_runtime::SleighData,
-    ) -> std::fmt::Result {
+impl<T> pcode::PcodeDisplay<T> for CmpOp
+where
+    pcode::VarNode: PcodeDisplay<T>,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter, ctx: &T) -> std::fmt::Result {
         f.debug_struct("CmpOp")
             .field("kind", &format_args!("{:?}", self.kind))
             .field("arg1", &format_args!("{}", self.arg1.display(ctx)))
@@ -95,7 +72,6 @@ pub struct CmpFinder {
     buf: Vec<CmpOp>,
     const_eval: icicle_vm::cpu::exec::const_eval::ConstEval,
     find_cmov: bool,
-    find_adds: bool,
 }
 
 impl CmpFinder {
@@ -104,7 +80,6 @@ impl CmpFinder {
             buf: vec![],
             const_eval: icicle_vm::cpu::exec::const_eval::ConstEval::new(),
             find_cmov: true,
-            find_adds: true,
         }
     }
 
@@ -117,7 +92,6 @@ impl CmpFinder {
             buf: vec![],
             const_eval: icicle_vm::cpu::exec::const_eval::ConstEval::new(),
             find_cmov,
-            find_adds: false,
         }
     }
 
@@ -126,14 +100,10 @@ impl CmpFinder {
 
         if let BlockExit::Branch { cond: pcode::Value::Var(cond), .. } = block.exit {
             find_comparisons(&mut CmpProp {
-                inverted: false,
-                cmp_zero: None,
                 dst: cond,
                 block: &block.pcode,
                 offset: block.pcode.instructions.len(),
                 out: &mut self.buf,
-                bit: 0,
-                find_adds: self.find_adds,
             });
         }
         else if self.find_cmov {
@@ -141,16 +111,7 @@ impl CmpFinder {
                 Some(value) => value,
                 None => return &[],
             };
-            find_comparisons(&mut CmpProp {
-                inverted: false,
-                cmp_zero: Some(CmpAttr::IS_EQUAL),
-                dst,
-                block: &block.pcode,
-                offset,
-                out: &mut self.buf,
-                bit: 0,
-                find_adds: self.find_adds,
-            });
+            find_comparisons(&mut CmpProp { dst, block: &block.pcode, offset, out: &mut self.buf });
         };
         self.buf.sort_by_key(|x| x.offset);
 
@@ -215,12 +176,6 @@ fn find_cmov(block: &Block) -> Option<(pcode::VarNode, usize)> {
 }
 
 struct CmpProp<'a> {
-    /// Set if the comparison is inverted after it was computed.
-    inverted: bool,
-
-    /// Set if the (used for determining whether a subtraction is a comparison op).
-    cmp_zero: Option<CmpAttr>,
-
     /// The destination that we are looking for propagations for.
     dst: pcode::VarNode,
 
@@ -230,290 +185,31 @@ struct CmpProp<'a> {
     /// The instruction offset to search (in reverse) from
     offset: usize,
 
-    /// The offset of the bit that is being checked.
-    bit: u32,
-
-    // Whether to also consider add operations for comparisons
-    find_adds: bool,
-
     /// Any comparison operation that is eventually propagated to the exit condition.
     out: &'a mut Vec<CmpOp>,
-}
-
-impl<'a> CmpProp<'a> {
-    fn prop_both(&mut self, a: pcode::Value, b: pcode::Value, invert_b: bool) -> usize {
-        let mut found = 0;
-
-        let inverted = self.inverted;
-        let cmp_zero = self.cmp_zero;
-        let offset = self.offset;
-
-        if let pcode::Value::Var(var) = a {
-            self.dst = var;
-            if recursive_find_comparisons(self) {
-                found += 1;
-            }
-
-            self.inverted = inverted ^ invert_b;
-            self.cmp_zero = cmp_zero;
-            self.offset = offset;
-        }
-
-        if let pcode::Value::Var(var) = b {
-            self.dst = var;
-            if recursive_find_comparisons(self) {
-                found += 1;
-            }
-
-            self.inverted = inverted;
-            self.offset = offset;
-            self.cmp_zero = cmp_zero;
-        }
-
-        found
-    }
-
-    fn add(&mut self, kind: impl Into<CmpAttr>, arg1: pcode::Value, arg2: pcode::Value) {
-        if arg2.const_eq(0) || arg1.const_eq(0) {
-            return;
-        }
-
-        let kind = kind.into();
-        // eprintln!("add: {:?}, inverted = {}", kind, self.inverted);
-        self.out.push(CmpOp {
-            kind: kind.invert_if(self.inverted),
-            arg1,
-            arg2,
-            offset: self.offset,
-        });
-    }
-}
-
-const USE_DATALOG: bool = true;
-
-fn find_comparisons(prop: &mut CmpProp) -> bool {
-    if USE_DATALOG { datalog_find_comparisons(prop) } else { recursive_find_comparisons(prop) }
-}
-
-// @todo: Improve this code:
-//      - Dependency analysis should be handled by `const_eval::ConstEval`.
-//      - Merge complex constraints (e.g. CF == ZF).
-//      - Introduce proper conditional move operation.
-//      - Support multi-block analysis.
-//      - Support storing comparison results to memory.
-fn recursive_find_comparisons(prop: &mut CmpProp) -> bool {
-    let before = prop.out.len();
-
-    // eprintln!("-----------");
-    for i in (0..prop.offset).rev() {
-        prop.offset = i;
-
-        let stmt = &prop.block.instructions[i];
-        if stmt.output.id != prop.dst.id {
-            // This statement does not involve the current varnode that we are inspecting.
-            continue;
-        }
-
-        let inputs = stmt.inputs.get();
-        match stmt.op {
-            Op::Copy
-            | Op::Subpiece(_)
-            | Op::ZeroExtend
-            | Op::SignExtend
-            | Op::IntToFloat
-            | Op::FloatToFloat
-            | Op::FloatToInt => match inputs[0] {
-                Value::Var(var) => prop.dst = var,
-                _ => break,
-            },
-
-            Op::IntAdd => {
-                if prop.find_adds {
-                    if let Some(cmp) = prop.cmp_zero.take() {
-                        prop.add(cmp, inputs[0], inputs[1]);
-                    }
-                }
-                break;
-            }
-            Op::IntSub => {
-                if let Some(cmp) = prop.cmp_zero.take() {
-                    prop.add(cmp, inputs[0], inputs[1]);
-                }
-                break;
-            }
-            Op::IntXor => {
-                prop.add(CmpAttr::IS_EQUAL, inputs[0], inputs[1]);
-                break;
-            }
-            Op::IntOr => match (inputs[0], inputs[1]) {
-                (Value::Const(..), Value::Var(var)) | (Value::Var(var), Value::Const(..)) => {
-                    prop.dst = var;
-                }
-                (Value::Var(_), Value::Var(_)) => {
-                    prop.prop_both(inputs[0], inputs[1], false);
-                    break;
-                }
-                _ => break,
-            },
-
-            Op::IntAnd => {
-                let (dst, mask) = match (inputs[0], inputs[1]) {
-                    (Value::Var(dst), Value::Const(mask, _)) => (dst, mask),
-                    (Value::Const(mask, _), Value::Var(dst)) => (dst, mask),
-                    (Value::Var(_), Value::Var(_)) => {
-                        // @fixme: The comparisons should be merged here
-                        prop.prop_both(inputs[0], inputs[1], false);
-                        break;
-                    }
-                    (Value::Const(_, _), Value::Const(_, _)) => break,
-                };
-
-                // The mask must not clear the bit we are interested in.
-                if mask & (1 << prop.bit) == 0 {
-                    break;
-                }
-                prop.dst = dst;
-            }
-            Op::IntMul => {
-                // Multiply is sometimes used as a conditional move, so try and determine
-                // whether any operand is used in a boolean expression earlier.
-                //
-                // @todo: ideally this would be resolved by an optimisation path that
-                // converts multiplication with a boolean to a conditional move.
-                prop.prop_both(inputs[0], inputs[1], false);
-                break;
-            }
-
-            Op::IntLeft => match (inputs[0], inputs[1]) {
-                (Value::Var(src), Value::Const(shift, _)) if prop.bit == shift as u32 => {
-                    prop.bit = 0;
-                    prop.dst = src;
-                }
-                _ => break,
-            },
-            Op::IntRight => match (inputs[0], inputs[1]) {
-                (Value::Var(src), Value::Const(shift, _)) if prop.bit == 0 => {
-                    prop.bit = shift as u32;
-                    prop.dst = src;
-                }
-                _ => break,
-            },
-
-            Op::IntDiv | Op::IntSignedDiv | Op::IntRem | Op::IntSignedRem => {
-                if let Value::Var(var) = inputs[1] {
-                    prop.inverted ^= false;
-                    // Try to trigger division by zero
-                    prop.cmp_zero = Some(CmpAttr::IS_EQUAL);
-                    prop.dst = var;
-                }
-                break;
-            }
-
-            Op::BoolAnd | Op::BoolOr | Op::BoolXor => {
-                // For all boolean operations try resolve the inputs of both operands
-                prop.cmp_zero = None;
-                prop.prop_both(inputs[0], inputs[1], false);
-                break;
-            }
-
-            Op::FloatAdd | Op::FloatSub | Op::FloatMul | Op::FloatDiv => {
-                // @todo: better float support
-                break;
-            }
-
-            Op::FloatAbs
-            | Op::FloatSqrt
-            | Op::FloatCeil
-            | Op::FloatFloor
-            | Op::FloatRound
-            | Op::FloatIsNan => {
-                break;
-            }
-
-            Op::FloatNegate | Op::IntNegate | Op::IntNot | Op::BoolNot => match inputs[0] {
-                Value::Var(var) => {
-                    prop.inverted ^= true;
-                    prop.dst = var;
-                }
-                _ => break,
-            },
-
-            op @ (Op::IntEqual
-            | Op::IntNotEqual
-            | Op::IntLess
-            | Op::IntSignedLess
-            | Op::IntLessEqual
-            | Op::IntSignedLessEqual
-            | Op::IntCarry
-            | Op::IntSignedCarry
-            | Op::IntSignedBorrow) => match (inputs[0], inputs[1]) {
-                (Value::Const(0, _), Value::Var(y)) => {
-                    prop.inverted ^= true;
-                    prop.cmp_zero = Some(op.into());
-                    prop.dst = y;
-                }
-                (Value::Var(x), Value::Const(0, _)) => {
-                    prop.cmp_zero = Some(op.into());
-                    prop.dst = x;
-                }
-                (x, y) => {
-                    if x.is_const() || y.is_const() || !matches!(op, Op::IntEqual | Op::IntNotEqual)
-                    {
-                        prop.add(op, x, y);
-                        break;
-                    }
-
-                    // Check whether the inputs are computed from a previous condition. Handles
-                    // cases like CF == OF.
-                    prop.cmp_zero = None;
-                    if prop.prop_both(inputs[0], inputs[1], false) < 2 {
-                        // This was the first time one of the input was involved in a comparision
-                        prop.add(op, x, y);
-                    }
-                    break;
-                }
-            },
-
-            op @ (Op::FloatEqual | Op::FloatNotEqual | Op::FloatLess | Op::FloatLessEqual) => {
-                match (inputs[0], inputs[1]) {
-                    (Value::Var(x), Value::Const(0, _)) | (Value::Const(0, _), Value::Var(x)) => {
-                        prop.cmp_zero = Some(op.into());
-                        prop.dst = x;
-                    }
-                    (x, y) => {
-                        prop.add(op, x, y);
-                        break;
-                    }
-                }
-            }
-
-            Op::Load(_) => {
-                // @todo: add support for propgating though memory
-                break;
-            }
-
-            Op::PcodeOp(_) => {
-                if !inputs[0].is_invalid() && !inputs[1].is_invalid() {
-                    prop.add(CmpAttr::IS_EQUAL, inputs[0], inputs[1]);
-                }
-                break;
-            }
-
-            _ => break,
-        }
-    }
-
-    if let Some(cmp) = prop.cmp_zero.take() {
-        prop.add(cmp, prop.dst.into(), Value::Const(0, prop.dst.size));
-    }
-
-    before != prop.out.len()
 }
 
 fn is_const_mask_for_size(value: Value) -> bool {
     match value {
         Value::Const(u64::MAX, _) => true,
         Value::Const(x, _) if x >= 0xff && (x + 1).count_ones() == 1 => true,
+        _ => false,
+    }
+}
+
+fn is_inverted_mask_for_bit(mask: Value, bit: Value) -> bool {
+    match (mask, bit) {
+        (Value::Const(mask, size), Value::Const(bit, _)) => {
+            let size_mask = pcode::mask(8 * size as u64);
+            mask & size_mask == !(1 << bit) & size_mask
+        }
+        _ => false,
+    }
+}
+
+fn mask_contains_bit(mask: Value, bit: Value) -> bool {
+    match (mask, bit) {
+        (Value::Const(mask, _), Value::Const(bit, _)) => mask & (1 << bit) != 0,
         _ => false,
     }
 }
@@ -613,8 +309,10 @@ crepe! {
 
     struct Alias(Value, Value);
 
-    // There exists a value `x`, if `x` appears as the destination operand of statement.
-    Alias(x, x) <- Statement(_, _, x, _, _);
+    // There exists a value `x`, if `x` appears as the destination or input of a statement.
+    Alias(x, x) <- Statement(_, _, x, _, _), (!x.is_invalid());
+    Alias(x, x) <- Statement(_, _, _, x, _), (!x.is_invalid());
+    Alias(x, x) <- Statement(_, _, _, _, x), (!x.is_invalid());
 
     // `b` is an alias of `a` if it is the destination of a copy-like operation involving `a`.
     Alias(a, b) <- Statement(_, Op::Copy, b, a, _);
@@ -638,10 +336,48 @@ crepe! {
     struct BoolAlias(Value, Value);
 
     BoolAlias(a, b) <- Alias(a, b);
-    // `(a << n) >> n == n`
-    BoolAlias(a, b) <- Statement(_, Op::IntRight, b, x, n), Statement(_, Op::IntLeft, x, a, n);
+    // `(a << n) >> n == a`
+    BoolAlias(a, b) <- Statement(_, Op::IntLeft, x, a, n), Statement(_, Op::IntRight, b, x, n);
     // `!!a == a`
     BoolAlias(a, b) <- Not(a, x), Not(x, b);
+    // a & 1 == a
+    BoolAlias(a, b) <- Statement(_, Op::IntAnd, b, a, mask), (mask.const_eq(1));
+
+
+    // Patterns for bit extract/insertion operations (allows support for bit-packed flags without
+    // bit-level constant propagation)
+    //
+    // @todo: It would be simpler if we supported bit insert/extract operations at the pcode-level
+    //
+    // A (merged value, cond, bit)
+    struct PackedCmp(Value, Value, Value);
+
+    // x = (x & !(1 << n) | (a << n)) >> n;
+    PackedCmp(merged, cond, bit) <-
+        Statement(_, Op::IntLeft, shifted_bit, cond, bit),
+        Statement(_, Op::IntAnd, other_bits, _, mask), (is_inverted_mask_for_bit(mask, bit)),
+        Statement(_, Op::IntOr, merged, other_bits, shifted_bit);
+
+    // x = (x & 0xffff_fffe) | cond
+    PackedCmp(merged, cond, Value::Const(0, mask.size())) <-
+        Statement(_, Op::IntAnd, other_bits, _, mask), (is_inverted_mask_for_bit(mask, Value::Const(0, 8))),
+        Statement(_, Op::IntOr, merged, other_bits, cond);
+
+    PackedCmp(merged, cond, bit) <-
+        PackedCmp(prev, cond, bit),
+        Statement(_, Op::IntAnd, masked_prev, prev, mask), (mask_contains_bit(mask, bit)),
+        Statement(_, Op::IntOr, merged, masked_prev, _);
+
+    BoolAlias(a, b) <-
+        BoolAlias(x, a),
+        PackedCmp(merged, x, bit),
+        Statement(_, Op::IntRight, shifted, merged, bit),
+        Statement(_, Op::IntAnd, b, shifted, mask), (mask.const_eq(1));
+
+    BoolAlias(a, b) <-
+        BoolAlias(x, a),
+        PackedCmp(merged, x, bit), (bit.const_eq(0)),
+        Statement(_, Op::IntAnd, b, merged, mask), (mask.const_eq(1));
 
     struct Cmp(usize, CmpKind, Value, Value, Value);
 
@@ -658,8 +394,12 @@ crepe! {
     Cmp(offset, Lt, cond, a, b) <- Cmp(offset, Slt, cond, a, b);
 
     // Comparing `a` and `b` is the same as comparing their aliases.
-    Cmp(offset, op, cond, a, b) <- Alias(a_, a), Cmp(offset, op, cond, a_, b);
-    Cmp(offset, op, cond, a, b) <- Alias(b_, b), Cmp(offset, op, cond, a, b_);
+    Cmp(offset, op, cond, a, b) <- Alias(a_, a), Alias(b_, b), Cmp(offset, op, cond, a_, b_);
+    Cmp(offset, op, cond, a, b) <- Alias(a, a_), Alias(b, b_), Cmp(offset, op, cond, a_, b_);
+
+    // Allow an alias of a condition to be substitued for a condition.
+    Cmp(offset, op, cond, a, b) <- BoolAlias(cond, cond_), Cmp(offset, op, cond_, a, b);
+    Cmp(offset, op, cond, a, b) <- BoolAlias(cond_, cond), Cmp(offset, op, cond_, a, b);
 
     // (a == b) <=> (b == a)
     Cmp(offset, Eq, cond, a, b) <- Cmp(offset, Eq, cond, b, a);
@@ -686,9 +426,9 @@ crepe! {
         Cmp(offset, op, result, a, b);
     // `x = a [op] b; c = (x == 0) ==> c = a [inv(op)] b`
     Cmp(offset, op.inv(), cond, a, b) <-
-        Cmp(_, Eq, cond, tmp, const_one), (const_one.const_eq(0)),
+        Cmp(offset, op, result, a, b),
         TruncatedAlias(tmp, result),
-        Cmp(offset, op, result, a, b);
+        Cmp(_, Eq, cond, tmp, const_one), (const_one.const_eq(0));
 
     // Define unsigned comparison operations in terms of signed comparisons and borrows.
     Cmp(offset, Lt, cond, a, b) <-
@@ -702,7 +442,9 @@ crepe! {
 
     // `a >= b AND a != b` => `a > b`
     Cmp(offset, Gt, cond, a, b) <-
-        And(cond, not_eq, is_ge),
+        And(cond, tmp_not_eq, tmp_is_ge),
+        Alias(not_eq, tmp_not_eq),
+        Alias(is_ge, tmp_is_ge),
         Cmp(_, Ne, not_eq, a, b),
         Cmp(offset, Ge, is_ge, a, b);
 
@@ -763,15 +505,22 @@ crepe! {
 /// The datalog based comparison finder will output both the individual comparisons and the merged
 /// comparisons. This function defines a ranking that prefers merged comparisons which we use to
 /// filter the output of the datalog finder.
-fn comparison_rank(Output(offset, _, a, b): &Output) -> impl Ord {
+fn comparison_rank(rw: &SSARewriter, Output(offset, kind, a, b): &Output) -> (usize, i16, i16) {
     let value_ordering = |value: &Value| -> i16 {
         match value {
             // Prefer comparisons with operands that have smaller IDs to prefer comparisons to the
             // original value to comparisons with aliases.
-            Value::Var(x) => x.id,
+            Value::Var(x) if !rw.is_temp(*x) => x.id,
+            // Prefer comparisons with registers over temporaries
+            Value::Var(x) => x.id + rw.new_to_old.len() as i16,
             // Always prefer comparisons involving constants to those that involve values.
             Value::Const(_, _) => i16::MIN,
         }
+    };
+
+    let b = match kind {
+        MaskedEq(c) => c,
+        _ => b,
     };
 
     let a = value_ordering(a);
@@ -779,7 +528,7 @@ fn comparison_rank(Output(offset, _, a, b): &Output) -> impl Ord {
     (*offset, a.min(b), a.max(b))
 }
 
-fn datalog_find_comparisons(prop: &mut CmpProp) -> bool {
+fn find_comparisons(prop: &mut CmpProp) -> bool {
     let mut runtime = Crepe::new();
 
     let mut rw = SSARewriter::new();
@@ -803,7 +552,11 @@ fn datalog_find_comparisons(prop: &mut CmpProp) -> bool {
 
     let (output,): (HashSet<Output>,) = runtime.run();
 
-    if let Some(Output(offset, kind, a_, b_)) = output.into_iter().min_by_key(comparison_rank) {
+    if let Some(Output(offset, kind, a_, b_)) =
+        output.into_iter().min_by_key(|out| comparison_rank(&rw, out))
+    {
+        tracing::trace!("[{offset}] {a_:?} {kind:?} {b_:?}");
+
         let (_, a) = rw.get_original(a_);
         let (_, b) = rw.get_original(b_);
 
@@ -849,8 +602,6 @@ mod test {
     use icicle_vm::cpu::lifter::{Context, Settings};
     use pcode::PcodeDisplay;
 
-    use crate::instrumentation::cmp_finder::USE_DATALOG;
-
     fn mipsel_ops(input: &[u8]) -> String {
         ops("mipsel-linux", input)
     }
@@ -871,14 +622,14 @@ mod test {
         use std::fmt::Write;
 
         let target: target_lexicon::Triple = arch_name.parse().unwrap();
-        let (sleigh, context) = icicle_vm::build_sleigh_for(target.architecture).unwrap();
+        let lang = icicle_vm::sleigh_init(&target).unwrap();
 
         let mut lifter = icicle_vm::cpu::lifter::InstructionLifter::new();
-        lifter.set_context(context);
+        lifter.set_context(lang.initial_ctx);
         let mut block_lifter =
             icicle_vm::cpu::lifter::BlockLifter::new(Settings::default(), lifter);
 
-        let mut source = icicle_vm::cpu::utils::BasicInstructionSource::new(sleigh);
+        let mut source = icicle_vm::cpu::utils::BasicInstructionSource::new(lang.sleigh);
         source.set_inst(0x0, input);
 
         let mut code = icicle_vm::cpu::BlockTable::default();
@@ -905,22 +656,18 @@ mod test {
     }
 
     fn test_generic(cond: pcode::VarNode, block: pcode::Block) -> String {
-        use super::{datalog_find_comparisons, CmpProp};
+        use super::{find_comparisons, CmpProp};
         use std::fmt::Write;
 
         let sleigh = sleigh_runtime::SleighData::default();
 
         eprintln!("finding flow to: {}", cond.display(&sleigh));
         let mut out = vec![];
-        datalog_find_comparisons(&mut CmpProp {
-            inverted: false,
-            cmp_zero: None,
+        find_comparisons(&mut CmpProp {
             dst: cond,
             block: &block,
             offset: block.instructions.len(),
             out: &mut out,
-            bit: 0,
-            find_adds: false,
         });
 
         let mut display = String::new();
@@ -1035,18 +782,10 @@ mod test {
             0x81, 0x3b, 0x77, 0x7a, 0x66, 0x63, // CMP dword ptr [RBX], 0x63667a77
             0x75, 0x18, // JNZ RIP+0x18
         ];
-        if USE_DATALOG {
-            assert_eq!(
-                x86_ops(&input),
-                "CmpOp { kind: CmpAttr(NOT_EQUAL), arg1: $U5:4, arg2: 0x63667a77:4, offset: 6 }\n"
-            );
-        }
-        else {
-            assert_eq!(
-                x86_ops(&input),
-                "CmpOp { kind: CmpAttr(NOT_EQUAL), arg1: $U7:4, arg2: 0x63667a77:4, offset: 6 }\n"
-            );
-        }
+        assert_eq!(
+            x86_ops(&input),
+            "CmpOp { kind: CmpAttr(NOT_EQUAL), arg1: $U1:4, arg2: 0x63667a77:4, offset: 4 }\n"
+        );
     }
 
     #[test]
@@ -1057,15 +796,10 @@ mod test {
         ];
 
         let result = x86_ops(&input);
-        if USE_DATALOG {
-            assert_eq!(
-                result,
-                "CmpOp { kind: CmpAttr(IS_LESSER), arg1: EAX, arg2: 0x6c61754f:4, offset: 3 }\n"
-            )
-        }
-        else {
-            // The the manual is unable to merge the constraints properly.
-        }
+        assert_eq!(
+            result,
+            "CmpOp { kind: CmpAttr(IS_LESSER), arg1: EAX, arg2: 0x6c61754f:4, offset: 3 }\n"
+        )
     }
 
     #[test]
@@ -1076,22 +810,10 @@ mod test {
         ];
 
         let result = x86_ops(&input);
-        if USE_DATALOG {
-            assert_eq!(
-                result,
-                "CmpOp { kind: CmpAttr(IS_GREATER), arg1: EAX, arg2: 0x6c61754f:4, offset: 3 }\n"
-            )
-        }
-        else {
-            // @fixme: The datalog implementation can merge these constraints, but the manual
-            // approach currently doesn't do any merging.
-            assert_eq!(
-                result,
-                "CmpOp { kind: CmpAttr(IS_OVERFLOW), arg1: EAX, arg2: 0x6c61754f:4, offset: 2 }\n\
-            CmpOp { kind: CmpAttr(NOT_EQUAL), arg1: EAX, arg2: 0x6c61754f:4, offset: 3 }\n\
-            CmpOp { kind: CmpAttr(IS_LESSER), arg1: EAX, arg2: 0x6c61754f:4, offset: 3 }\n"
-            )
-        }
+        assert_eq!(
+            result,
+            "CmpOp { kind: CmpAttr(IS_GREATER), arg1: EAX, arg2: 0x6c61754f:4, offset: 3 }\n"
+        )
     }
 
     #[test]
@@ -1178,7 +900,7 @@ mod test {
         ];
         assert_eq!(
             x86_ops(&input),
-            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: EAX, arg2: 0xfffffff:4, offset: 6 }\n"
+            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: EAX, arg2: 0xfffffff:8, offset: 6 }\n"
         );
     }
 
@@ -1192,7 +914,7 @@ mod test {
         ];
         assert_eq!(
             x86_ops(&input),
-            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: EAX, arg2: 0xfffffff:4, offset: 5 }\n"
+            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: EDX, arg2: 0xfffffff:8, offset: 5 }\n"
         );
     }
 
@@ -1255,19 +977,10 @@ mod test {
             0x3f, 0x90, 0x16, 0x00, // CMP.W #0x16,R15
             0x07, 0x34, // JGE
         ];
-        if USE_DATALOG {
-            assert_eq!(
-                msp430x_ops(&input),
-                "CmpOp { kind: CmpAttr(IS_EQUAL | IS_GREATER), arg1: R15_16, arg2: 0x16:2, offset: 10 }\n"
-            );
-        }
-        else {
-            assert_eq!(
-                msp430x_ops(&input),
-                "CmpOp { kind: CmpAttr(IS_OVERFLOW), arg1: R15_16, arg2: 0x16:2, offset: 5 }\n\
-                CmpOp { kind: CmpAttr(IS_LESSER), arg1: R15_16, arg2: 0x16:2, offset: 10 }\n"
-            );
-        }
+        assert_eq!(
+            msp430x_ops(&input),
+            "CmpOp { kind: CmpAttr(IS_EQUAL | IS_GREATER), arg1: R15_16, arg2: 0x16:2, offset: 10 }\n"
+        );
     }
 
     #[test]
@@ -1276,19 +989,10 @@ mod test {
             0x82, 0x9c, 0x16, 0x1f, // CMP.W R12,&1f16
             0x07, 0x34, // JGE
         ];
-        if USE_DATALOG {
-            assert_eq!(
-                msp430x_ops(&input),
-                "CmpOp { kind: CmpAttr(IS_EQUAL | IS_GREATER), arg1: $U14:2, arg2: R12_16, offset: 13 }\n"
-            );
-        }
-        else {
-            assert_eq!(
-                msp430x_ops(&input),
-                "CmpOp { kind: CmpAttr(IS_OVERFLOW), arg1: $U15:2, arg2: R12_16, offset: 7 }\n\
-                CmpOp { kind: CmpAttr(IS_LESSER), arg1: $U16:2, arg2: R12_16, offset: 13 }\n"
-            );
-        }
+        assert_eq!(
+            msp430x_ops(&input),
+            "CmpOp { kind: CmpAttr(IS_EQUAL | IS_GREATER), arg1: $U14:2, arg2: R12_16, offset: 13 }\n"
+        );
     }
 
     #[test]
@@ -1309,19 +1013,10 @@ mod test {
             0x0d, 0x9a, // CMP.W R10,R13
             0xf7, 0x34, // JL
         ];
-        if USE_DATALOG {
-            assert_eq!(
-                msp430x_ops(&input),
-                "CmpOp { kind: CmpAttr(IS_EQUAL | IS_GREATER), arg1: R13_16, arg2: R10_16, offset: 10 }\n"
-            );
-        }
-        else {
-            assert_eq!(
-                msp430x_ops(&input),
-                "CmpOp { kind: CmpAttr(IS_OVERFLOW), arg1: R13_16, arg2: R10_16, offset: 5 }\n\
-                CmpOp { kind: CmpAttr(IS_LESSER), arg1: R13_16, arg2: R10_16, offset: 10 }\n"
-            );
-        }
+        assert_eq!(
+            msp430x_ops(&input),
+            "CmpOp { kind: CmpAttr(IS_EQUAL | IS_GREATER), arg1: R13_16, arg2: R10_16, offset: 10 }\n"
+        );
     }
 
     #[test]
@@ -1368,18 +1063,10 @@ mod test {
             0xd2, 0x93, 0x11, 0x02, // CMP.B #0x1,&0x0211
             0x3f, 0x24, // JEQ 0x86
         ];
-        if USE_DATALOG {
-            assert_eq!(
-                msp430x_ops(&input),
-                "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: $U14:1, arg2: 0x1:1, offset: 13 }\n"
-            );
-        }
-        else {
-            assert_eq!(
-                msp430x_ops(&input),
-                "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: $U16:1, arg2: 0x1:1, offset: 13 }\n"
-            );
-        }
+        assert_eq!(
+            msp430x_ops(&input),
+            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: $U14:1, arg2: 0x1:1, offset: 13 }\n"
+        );
     }
 
     #[test]

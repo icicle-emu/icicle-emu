@@ -3,8 +3,6 @@
 // @fixme: avoid excess allocations during syscalls.
 // @fixme: handle non-blocking file handles.
 
-use std::convert::TryInto;
-
 use bstr::ByteSlice;
 
 use icicle_cpu::{
@@ -2468,7 +2466,7 @@ pub fn getrandom<C: LinuxCpu>(ctx: &mut Ctx<C>, buf: u64, buflen: u64, flags: u6
 }
 
 pub fn sigaltstack<C: LinuxCpu>(_ctx: &mut Ctx<C>, _ss: u64, _old_ss: u64) -> LinuxResult {
-    Err(VmExit::Unimplemented.into())
+    Err(errno::ENOSYS.into())
 }
 
 pub fn rt_sigaction<C: LinuxCpu>(

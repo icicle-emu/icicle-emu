@@ -1,10 +1,7 @@
-use std::{
-    collections::{HashMap, HashSet},
-    convert::TryInto,
-};
+use std::collections::{HashMap, HashSet};
 
 use sleigh_parse::ast;
-use sleigh_runtime::semantics::{Export, Local, SemanticAction, Value, ValueSize};
+use sleigh_runtime::semantics::{Export, Local, PcodeTmp, SemanticAction, Value, ValueSize};
 
 use crate::{
     constructor::Scope,
@@ -31,7 +28,7 @@ enum ExprValue {
     /// A reference to a dynamically computed register.
     RegisterRef(Value, ValueSize),
     /// Represents the address of a place (either a memory location, or a register).
-    AddressOf(Value, Value, Option<ValueSize>),
+    AddressOf(Value, Option<ValueSize>),
     /// A reference to a subset of bits in the underlying value.
     BitRange(Value, ast::Range),
 }
@@ -150,8 +147,8 @@ pub struct Semantics {
     /// The value exported by the constructor (or None if there is no export statement)
     pub export: Option<Export>,
 
-    /// The total number of temporaries used in this statement
-    pub temporaries: usize,
+    /// The temporaries temporaries used in this statement.
+    pub temporaries: Vec<PcodeTmp>,
 }
 
 enum Destination {
@@ -213,12 +210,14 @@ impl<'a, 'b> Builder<'a, 'b> {
             | pcode::Op::IntNegate
             | pcode::Op::FloatNegate
             | pcode::Op::FloatAbs
-            | pcode::Op::FloatSqrt => {
+            | pcode::Op::FloatSqrt
+            | pcode::Op::FloatCeil
+            | pcode::Op::FloatFloor
+            | pcode::Op::FloatRound => {
                 self.set_size_of_pair(&mut inputs[0], output.as_mut().unwrap());
             }
 
-            // Input/output sizes are generally unconstrained, but force them to be equal if the
-            // size is unknown after the initial inference pass.
+            // Input/output sizes are unconstrained.
             pcode::Op::Subpiece(_)
             | pcode::Op::ZeroExtend
             | pcode::Op::SignExtend
@@ -226,18 +225,8 @@ impl<'a, 'b> Builder<'a, 'b> {
             | pcode::Op::UintToFloat
             | pcode::Op::FloatToFloat
             | pcode::Op::FloatToInt
-            | pcode::Op::FloatCeil
-            | pcode::Op::FloatFloor
-            | pcode::Op::FloatRound
             | pcode::Op::IntCountOnes
-            | pcode::Op::IntCountLeadingZeroes => {
-                let output = output.as_mut().unwrap();
-                if self.use_fallback_sizes
-                    && (self.size_of(inputs[0]).is_none() || self.size_of(*output).is_none())
-                {
-                    self.set_size_of_pair(&mut inputs[0], output);
-                }
-            }
+            | pcode::Op::IntCountLeadingZeroes => {}
 
             // Unconstrained input/output size.
             pcode::Op::Arg(_)
@@ -248,6 +237,12 @@ impl<'a, 'b> Builder<'a, 'b> {
             // Shift operations: input[0].size == output.size
             pcode::Op::IntLeft | pcode::Op::IntRight | pcode::Op::IntSignedRight => {
                 self.set_size_of_pair(&mut inputs[0], output.as_mut().unwrap());
+
+                // If input[1] is unconstrained, set size to pointer size
+                if self.size_of(inputs[1]).is_none() {
+                    let size = self.size_of(inputs[1]).unwrap_or(self.pointer_size);
+                    self.set_size(&mut inputs[1], size);
+                }
             }
 
             // Rotate operations (Icicle extension): input[0].size == output.size
@@ -334,8 +329,9 @@ impl<'a, 'b> Builder<'a, 'b> {
                 // Though we expected pointer-sized branch destinations, Ghidra doesn't enforce this
                 // in SLEIGH so we allow any size, and zero-extend it at runtime, so we only set the
                 // size here if it is unknown.
-                if inputs[0].size.is_none() {
-                    self.set_size(&mut inputs[1], self.pointer_size);
+                if inputs[1].size.is_none() {
+                    let size = self.size_of(inputs[1]).unwrap_or(self.pointer_size);
+                    self.set_size(&mut inputs[1], size);
                 }
             }
 
@@ -761,14 +757,16 @@ impl<'a, 'b> Builder<'a, 'b> {
         Ok(match expr {
             ast::PcodeExpr::Ident { value } => self.resolve_ident(*value)?,
             ast::PcodeExpr::Integer { value } => ExprValue::Const(*value, None),
-            ast::PcodeExpr::AddressOf { size, value, offset } => {
+            ast::PcodeExpr::AddressOf { size, value } => {
                 let base = self.resolve_ident(*value)?;
-                let offset = self.resolve_expr_value(offset)?;
-                let ExprValue::Local(base) = base else {
+                let ExprValue::Local(base) = base
+                else {
                     // @todo: check whether any other expressions are allowed.
-                    return Err(format!("{base:?} invalid expression used in address-of operation"));
+                    return Err(format!(
+                        "{base:?} invalid expression used in address-of operation"
+                    ));
                 };
-                ExprValue::AddressOf(base, offset, *size)
+                ExprValue::AddressOf(base, *size)
             }
             ast::PcodeExpr::Truncate { value, size } => {
                 let inner = self.resolve_expr(value)?;
@@ -945,8 +943,18 @@ impl<'a, 'b> Builder<'a, 'b> {
             ExprValue::NullaryOp(op) => self.op(op, &[], out),
             ExprValue::UnaryOp(op, x) => self.op(op, &[x], out),
             ExprValue::BinOp(op, (a, b)) => self.op(op, &[a, b], out),
-            ExprValue::AddressOf(value, offset, size) => {
-                self.compute_address_of(value, offset, size, out)?
+            ExprValue::AddressOf(value, size) => {
+                if value.offset != 0 {
+                    return Err(format!(
+                        "{:?} unsupported base expression used in address-of operation",
+                        value
+                    ));
+                }
+                let output = out.unwrap_or_else(|| self.scope.add_tmp(size).into());
+                self.semantics
+                    .actions
+                    .push(SemanticAction::AddressOf { output, base: value.local });
+                output
             }
             ExprValue::RamRef(pointer, size) => self.load(size, pointer, out),
             ExprValue::RegisterRef(pointer, size) => {
@@ -1053,29 +1061,6 @@ impl<'a, 'b> Builder<'a, 'b> {
 
     fn resolve_args(&mut self, args: &[ast::PcodeExpr]) -> Result<Vec<ExprValue>, String> {
         args.iter().map(|x| self.resolve_expr(x)).collect::<Result<Vec<_>, _>>()
-    }
-
-    fn compute_address_of(
-        &mut self,
-        base: Value,
-        offset: Value,
-        size: Option<ast::VarSize>,
-        output: Option<Value>,
-    ) -> Result<Value, String> {
-        if base.offset != 0 {
-            return Err(format!(
-                "{:?} unsupported base expression used address-of operation",
-                offset.local
-            ));
-        }
-
-        let Some(output) = output else {
-            return Err(format!("Result of address-of operator cannot be used in a sub-expression"));
-        };
-
-        let output = output.maybe_set_size(size);
-        self.semantics.actions.push(SemanticAction::AddressOf { output, base: base.local, offset });
-        Ok(output)
     }
 }
 

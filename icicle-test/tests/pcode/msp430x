@@ -37,8 +37,7 @@ SUB.W R14, R15
 	SR = $U5:4 | $U6:4
 	R15_16 = R15_16 - R14_16
 	$U13:2 = R15_16
-	R15 = 0x0:4
-	R15_16 = $U13:2
+	R15 = zext(R15_16)
 	$U7:1 = R15_16 s< 0x0:2
 	$U8:4 = SR & 0xfffffffb:4
 	$U9:4 = zext($U7:1)
@@ -63,8 +62,7 @@ DEC.W R15
 	SR = $U5:4 | $U6:4
 	R15_16 = R15_16 - 0x1:2
 	$U13:2 = R15_16
-	R15 = 0x0:4
-	R15_16 = $U13:2
+	R15 = zext(R15_16)
 	$U7:1 = R15_16 s< 0x0:2
 	$U8:4 = SR & 0xfffffffb:4
 	$U9:4 = zext($U7:1)
@@ -94,8 +92,7 @@ SUBC.W #1, R14
 	$U12:2 = R14_16 - 0x1:2
 	R14_16 = $U12:2 - $U3:2
 	$U19:2 = R14_16
-	R14 = 0x0:4
-	R14_16 = $U19:2
+	R14 = zext(R14_16)
 	$U13:1 = R14_16 s< 0x0:2
 	$U14:4 = SR & 0xfffffffb:4
 	$U15:4 = zext($U13:1)
@@ -123,8 +120,7 @@ SBC.W R14
 	SR = $U8:4 | $U9:4
 	R14_16 = R14_16 - $U3:2
 	$U16:2 = R14_16
-	R14 = 0x0:4
-	R14_16 = $U16:2
+	R14 = zext(R14_16)
 	$U10:1 = R14_16 s< 0x0:2
 	$U11:4 = SR & 0xfffffffb:4
 	$U12:4 = zext($U10:1)
@@ -148,10 +144,10 @@ RETI
 	$U5:4 = zext($U4:2)
 	$U6:4 = $U2:4 & 0xf000:4
 	$U7:4 = $U6:4 << 0x4:4
-	TMP_PC = $U5:4 | $U7:4
+	tmp_pc = $U5:4 | $U7:4
 	SP = SP + 0x2:4
 	check_sr_control_bits_async($U8:4, $U3:4)
-	return TMP_PC
+	return tmp_pc
 
 RRC.B @R12
 <L0> (entry=0x0):
@@ -220,8 +216,7 @@ BIS.W #0xd8, SR
 	$U2:4 = SR
 	SR_16 = 0xd8:2 | SR_16
 	$U1:2 = SR_16
-	SR = 0x0:4
-	SR_16 = $U1:2
+	SR = zext(SR_16)
 	check_sr_control_bits($U2:4, SR)
 
 MOV.W &0x1c00, R12
@@ -232,8 +227,7 @@ JEQ 0x9a98
 	instruction(0x9a88)
 	R12_16 = ram[0x1c00:4]
 	$U1:2 = R12_16
-	R12 = 0x0:4
-	R12_16 = $U1:2
+	R12 = zext(R12_16)
 	instruction(0x9a8c)
 	$U3:4 = 0x0:4
 	$U2:1 = 0x0:1
@@ -244,8 +238,7 @@ JEQ 0x9a98
 	$U1:4 = $U7:4 & 0xffff:4
 	R13_16 = ram[$U1:4]
 	$U8:2 = R13_16
-	R13 = 0x0:4
-	R13_16 = $U8:2
+	R13 = zext(R13_16)
 	instruction(0x9a90)
 	$U1:4 = SR & 0xfffffffe:4
 	SR = $U1:4 | 0x1:4
@@ -263,7 +256,7 @@ JEQ 0x9a98
 	instruction(0x9a92)
 	$U2:4 = SR >> 0x1:4
 	$U2:4 = $U2:4 & 0x1:4
-	$U1:1 = $U8:1
+	$U1:1 = $U2:1
 	if $U1:1 jump 0x9a98:4
 
 AND.B @SP+, PC
@@ -271,8 +264,7 @@ AND.B @SP+, PC
 	$U1:4 = SR & 0xfffffeff:4
 	$U13:1 = ram[SP]
 	$U3:1 = 0x4:1 & $U13:1
-	TMP_PC = 0x0:4
-	TMP_PC:1 = $U3:1
+	tmp_pc = zext($U3:1)
 	$U5:4 = $U1:4 & 0xfffffffb:4
 	$U7:1 = $U3:1 == 0x0:1
 	$U8:4 = $U5:4 & 0xfffffffd:4
@@ -284,15 +276,14 @@ AND.B @SP+, PC
 	$U12:4 = zext($U10:1)
 	SR = $U11:4 | $U12:4
 	SP = SP + 0x2:4
-	return TMP_PC
+	return tmp_pc
 
 AND.B @R15+, R15
 <L0> (entry=0x4000):
 	$U1:4 = SR & 0xfffffeff:4
 	$U13:1 = ram[R15]
 	$U3:1 = R15_lo & $U13:1
-	R15 = 0x0:4
-	R15_lo = $U3:1
+	R15 = zext($U3:1)
 	$U4:1 = $U3:1 s< 0x0:1
 	$U5:4 = $U1:4 & 0xfffffffb:4
 	$U6:4 = zext($U4:1)
@@ -354,14 +345,14 @@ CALLA &0x24ec
 <L0> (entry=0x4000):
 	SP = SP - 0x4:4
 	ram[SP] = 0x4004:4
-	TMP_PC = ram[0x24ec:4]
-	$U2:4 = TMP_PC & 0xfffff:4
+	tmp_pc = ram[0x24ec:4]
+	$U2:4 = tmp_pc & 0xfffff:4
 	call $U2:4
 
 RETA @SP+
 <L0> (entry=0x0):
-	TMP_PC = ram[SP]
-	$U1:4 = TMP_PC & 0xfffff:4
+	tmp_pc = ram[SP]
+	$U1:4 = tmp_pc & 0xfffff:4
 	SP = SP + 0x4:4
 	return $U1:4
 
@@ -608,21 +599,20 @@ TSTA SP
 DADD.B R10, PC
 <L0> (entry=0x12):
 	$U1:4 = SR & 0xfffffffe:4
-	TMP_PC:1 = bcd_add(R10_lo, 0x14:1)
-	$U9:1 = TMP_PC:1
-	TMP_PC = 0x0:4
-	TMP_PC:1 = $U9:1
-	$U3:1 = TMP_PC:1 s< 0x0:1
+	tmp_pc:1 = bcd_add(R10_lo, 0x14:1)
+	$U9:1 = tmp_pc:1
+	tmp_pc = zext(tmp_pc:1)
+	$U3:1 = tmp_pc:1 s< 0x0:1
 	$U4:4 = $U1:4 & 0xfffffffb:4
 	$U5:4 = zext($U3:1)
 	$U5:4 = $U5:4 << 0x2:4
 	SR = $U4:4 | $U5:4
-	$U6:1 = TMP_PC:1 == 0x0:1
+	$U6:1 = tmp_pc:1 == 0x0:1
 	$U7:4 = SR & 0xfffffffd:4
 	$U8:4 = zext($U6:1)
 	$U8:4 = $U8:4 << 0x1:4
 	SR = $U7:4 | $U8:4
-	jump TMP_PC
+	jump tmp_pc
 
 MOV.B -0x1f2b(R12), &0x2063
 <L0> (entry=0x4000):
@@ -705,8 +695,7 @@ MOVX.W &0x15c, R10
 <L0> (entry=0x1000):
 	R10_16 = ram[0x15c:4]
 	$U6:2 = R10_16
-	R10 = 0x0:4
-	R10_16 = $U6:2
+	R10 = zext(R10_16)
 
 MOVX.A 0x47e8(R15), R15
 <L0> (entry=0x0):
@@ -728,8 +717,7 @@ RPT #0x7 { RLAX.W R10
 	SR = $U10:4 | $U11:4
 	R10_16 = R10_16 + R10_16
 	$U12:2 = R10_16
-	R10 = 0x0:4
-	R10_16 = $U12:2
+	R10 = zext(R10_16)
 	$U13:1 = R10_16 s< 0x0:2
 	$U14:4 = SR & 0xfffffffb:4
 	$U15:4 = zext($U13:1)
@@ -750,8 +738,7 @@ RPT #0xf { RRCX.W R13
 <L0> (entry=0x0):
 	CNT = 0xe:1
 	$U27:2 = R13_16
-	R13 = 0x0:4
-	R13_16 = $U27:2
+	R13 = zext(R13_16)
 <L1>:
 	$U6:1 = R13_16 != 0x0:2
 	$U7:4 = SR & 0x1:4
@@ -788,8 +775,7 @@ RPT #0xf { RRUX.W R13
 	$U4:4 = SR & 0xfffffffe:4
 	CNT = 0xe:1
 	$U18:2 = R13_16
-	R13 = 0x0:4
-	R13_16 = $U18:2
+	R13 = zext(R13_16)
 	$U6:4 = $U4:4 & 0xfffffeff:4
 	SR = $U6:4
 <L1>:

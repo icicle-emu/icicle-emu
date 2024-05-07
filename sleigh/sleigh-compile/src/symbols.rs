@@ -30,7 +30,6 @@ pub(crate) struct Symbol {
 pub type SpaceId = u32;
 pub type RegisterId = u32;
 pub type _BitRangeId = u32;
-pub type ContextFieldId = u32;
 pub type TokenId = u32;
 pub type TokenFieldId = u32;
 pub type TableId = u32;

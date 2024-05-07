@@ -74,13 +74,20 @@ impl SSARewriter {
         output
     }
 
-    pub fn get_original(&mut self, new: pcode::Value) -> (usize, pcode::Value) {
+    pub fn get_original(&self, new: pcode::Value) -> (usize, pcode::Value) {
         match new {
             pcode::Value::Var(var) => {
                 let (offset, x) = *self.new_to_old.get(&var.id).unwrap_or(&(0, var));
                 (offset, x.into())
             }
             pcode::Value::Const(_, _) => (0, new),
+        }
+    }
+
+    pub fn is_temp(&self, var: pcode::VarNode) -> bool {
+        match self.get_original(var.into()).1 {
+            pcode::Value::Var(x) => x.is_temp(),
+            pcode::Value::Const(_, _) => true,
         }
     }
 }

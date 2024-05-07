@@ -14,6 +14,15 @@ mod constructor;
 mod matcher;
 mod symbols;
 
+#[cfg(feature = "ldefs")]
+pub mod ldef;
+
+#[cfg(feature = "ldefs")]
+pub fn from_ldef_path(ldef_path: impl AsRef<Path>, id: &str) -> Result<(SleighData, u64), String> {
+    let output = ldef::build(ldef_path.as_ref(), id, None).map_err(|e| e.to_string())?;
+    Ok((output.sleigh, output.initial_ctx))
+}
+
 pub fn from_path(sleigh_spec: impl AsRef<Path>) -> Result<SleighData, String> {
     build_inner(Parser::from_path(sleigh_spec.as_ref())?, false)
 }
@@ -56,9 +65,33 @@ pub fn build_inner(mut parser: Parser, verbose: bool) -> Result<SleighData, Stri
         add_constructor(constructor, &mut ctx, &symbols);
     }
 
+    // Add a dummy constructor used for error values
+    let invalid_str = ctx.add_string("INVALID");
+    ctx.data.constructors.push(Constructor {
+        table: 0,
+        mnemonic: Some(invalid_str),
+        fields: (0, 0),
+        decode_actions: (0, 0),
+        post_decode_actions: (0, 0),
+        subtables: 0,
+        display: (0, 0),
+        semantics: (0, 0),
+        delay_slot: false,
+        export: None,
+        temporaries: (0, 0),
+    });
+    if ctx.capture_debug_info {
+        ctx.data.debug_info.constructors.push(ConstructorDebugInfo { line: "invalid".into() });
+    }
+
     for table in &symbols.tables {
         let matcher = matcher::build_sequential_matcher(&symbols, table, &ctx)?;
         ctx.data.matchers.push(matcher);
+        if ctx.capture_debug_info {
+            let name_str = symbols.parser.get_ident_str(table.name);
+            let name = ctx.add_string(name_str);
+            ctx.data.debug_info.subtable_names.push(name);
+        }
     }
 
     ctx.data.named_registers = vec![NamedRegister::default(); symbols.registers.len()];
@@ -82,31 +115,53 @@ pub fn build_inner(mut parser: Parser, verbose: bool) -> Result<SleighData, Stri
         let mut name = ctx.add_string(name_str);
 
         // Check if there is an existing mapping for this register, if so add it as an alias.
-        if let Some((id, varnode_offset)) = ctx.data.map_sleigh_reg(reg.offset, reg.size as u8) {
-            let alias = RegisterAlias { offset: varnode_offset as u16, size: reg.size, name };
-            ctx.data.registers[id as usize].aliases.push(alias);
+        if let Some((parent_idx, mut local_offset)) = ctx.data.register_mapping.get(&reg.offset) {
+            let parent_reg = &ctx.data.named_registers[*parent_idx as usize];
 
-            ctx.data.named_registers[idx] = NamedRegister {
+            // Fix offsets for big-endian registers.
+            let mut offset = reg.offset;
+            if ctx.data.big_endian {
+                local_offset = parent_reg.var.size - local_offset - reg.size as u8;
+                offset = parent_reg.offset + local_offset as u32;
+            }
+
+            // Map varnodes refering to the current register to the subslice of the parent register
+            // that this register overlaps.
+            let var = parent_reg
+                .get_var(local_offset, reg.size as u8)
+                .ok_or_else(|| format!("Internal error: {name_str} crosses 128-bit boundary"))?;
+            ctx.data.named_registers[idx] = NamedRegister { name, var, offset };
+
+            // Add the current register as an alias in the parent register (used for the display
+            // implementation)
+            ctx.data.registers[var.id as usize].aliases.push(RegisterAlias {
+                offset: var.offset as u16,
+                size: reg.size,
                 name,
-                var: pcode::VarNode::new(id, 16).slice(varnode_offset, reg.size.min(16) as u8),
-                offset: reg.offset,
-            };
+            });
             continue;
         }
 
+        // Note: `reg.size` can be larger than 128 bits which is larger than the emulator supports
+        // we handle this by creating new registers for each 128-bit slice (see below) and fix up
+        // the IDs when extracting subslices (see: NamedRegister::get_var).
         let reg_id = ctx.data.registers.len().try_into().unwrap();
         ctx.data.named_registers[idx] = NamedRegister {
             name,
-            var: pcode::VarNode::new(reg_id, reg.size.min(16) as u8),
+            var: pcode::VarNode::new(reg_id, reg.size as u8),
             offset: reg.offset,
         };
 
+        // Map all the bytes within this range to the register.
+        for byte in 0..reg.size {
+            let varnode_offset = reg.offset + byte as u32;
+            ctx.data.register_mapping.insert(varnode_offset, (idx as u32, byte as u8));
+        }
+
         // We only support operating on registers that are at most 128-bits. This is only an issue
         // when dealing with vector operations (e.g. AVX, NEON). To handle this we need to split the
-        // register into multiple registers.
+        // register into multiple smaller registers.
         for i in (0..reg.size).step_by(16) {
-            let reg_id = ctx.data.registers.len().try_into().unwrap();
-            let offset = reg.offset + i as u32;
             let size = std::cmp::min(reg.size - i, 16) as u8;
 
             if i != 0 {
@@ -116,14 +171,9 @@ pub fn build_inner(mut parser: Parser, verbose: bool) -> Result<SleighData, Stri
             ctx.data.registers.push(sleigh_runtime::RegisterInfo {
                 name,
                 size,
-                offset,
+                offset: reg.offset + i as u32,
                 aliases: vec![],
             });
-
-            for byte in 0..size {
-                let varnode_offset = offset + byte as u32;
-                ctx.data.register_mapping.insert(varnode_offset, (reg_id, byte));
-            }
         }
     }
 
@@ -334,8 +384,7 @@ fn add_constructor(
         let start = ctx.data.context_disasm_expr.len() as u32;
         ctx.data.context_disasm_expr.extend_from_slice(expr);
         let end = ctx.data.context_disasm_expr.len() as u32;
-        let field = symbols.context_fields[*field as usize].field;
-        ctx.data.decode_actions.push(DecodeAction::ModifyContext(field, (start, end)));
+        ctx.data.decode_actions.push(DecodeAction::ModifyContext(*field, (start, end)));
     }
 
     for field in &constructor.disasm_actions.global_set {
@@ -365,6 +414,13 @@ fn add_constructor(
     }
     let semantics_end = ctx.data.semantics.len() as u32;
 
+    let temp_start = ctx.data.temporaries.len() as u32;
+    for temp in &constructor.semantics.temporaries {
+        ctx.data.temporaries.push(temp.clone());
+    }
+    let temp_end = ctx.data.temporaries.len() as u32;
+
+
     ctx.data.constructors.push(Constructor {
         table: constructor.table,
         mnemonic,
@@ -376,7 +432,7 @@ fn add_constructor(
         semantics: (semantics_start, semantics_end),
         delay_slot: constructor.has_delay_slot(),
         export: constructor.semantics.export,
-        temporaries: constructor.semantics.temporaries as u32,
+        temporaries: (temp_start, temp_end),
     });
 
     if ctx.capture_debug_info {
@@ -439,7 +495,12 @@ fn backtrack_with_offset() {
     let sleigh = build_inner(sleigh_parse::Parser::from_str(TEST_SPEC), true).unwrap();
     let mut runtime = sleigh_runtime::Runtime::new(0);
 
-    let inst = runtime.decode(&sleigh, 0x0, &[0x01, 0x01]).expect("failed to decode instruction");
+    let inst = match runtime.decode(&sleigh, 0x0, &[0x01, 0x01]) {
+        Some(inst) => inst,
+        None => {
+            panic!("Error decoding instruction: {:#?}", runtime.get_instruction().root(&sleigh))
+        }
+    };
     assert_eq!(inst.inst_start, 0);
     assert_eq!(inst.inst_next, 2);
 

@@ -2,14 +2,21 @@ use std::{any::Any, cell::UnsafeCell};
 
 use crate::Cpu;
 
+pub const MAX_TRACER_MEM: usize = 64;
+
 #[derive(Default)]
 pub struct Trace {
     /// Functions that can be directly called from pcode.
-    // @fixme: improve the safety of this.
+    ///
+    /// Safety: This field must not be accessed from within a hook.
+    // @fixme: prevent misuses.
     pub(crate) hooks: UnsafeCell<Vec<InstHook>>,
 
     /// Storage locations that can be accessed with pcode operations.
     pub(crate) storage: Vec<Box<dyn TraceStoreAny>>,
+
+    /// Typed data stored in emulator.
+    pub(crate) data: Vec<Box<dyn Any>>,
 }
 
 impl Trace {
@@ -26,6 +33,12 @@ impl Trace {
         let id = hooks.len().try_into().expect("Exceeded maximum number of hooks");
         hooks.push(hook);
         id
+    }
+
+    /// Register arbitary data inside the emulator, returning a handle used to access the data.
+    pub fn register_typed_data<T: 'static>(&mut self, data: T) -> DataHandle<T> {
+        self.data.push(Box::new(data));
+        DataHandle { idx: self.data.len() - 1, type_: std::marker::PhantomData::default() }
     }
 
     /// Returns an iterator to the pointers to the final address of each [TraceStore].
@@ -55,6 +68,24 @@ impl std::ops::IndexMut<StoreRef> for Trace {
     #[inline]
     fn index_mut(&mut self, index: StoreRef) -> &mut Self::Output {
         &mut *self.storage[index.0]
+    }
+}
+
+impl<T: 'static> std::ops::Index<DataHandle<T>> for Trace {
+    type Output = T;
+
+    #[inline]
+    fn index(&self, handle: DataHandle<T>) -> &Self::Output {
+        let data_ref = self.data[handle.idx].as_ref().downcast_ref();
+        data_ref.unwrap()
+    }
+}
+
+impl<T: 'static> std::ops::IndexMut<DataHandle<T>> for Trace {
+    #[inline]
+    fn index_mut(&mut self, handle: DataHandle<T>) -> &mut Self::Output {
+        let data_mut = self.data[handle.idx].as_mut().downcast_mut();
+        data_mut.unwrap()
     }
 }
 
@@ -149,6 +180,34 @@ impl StoreRef {
     #[inline]
     pub fn get_store_id(&self) -> u16 {
         self.0 as u16 + pcode::RESERVED_SPACE_END
+    }
+}
+
+pub struct DataHandle<T> {
+    idx: usize,
+    type_: std::marker::PhantomData<fn(&T)>,
+}
+
+impl<T> Copy for DataHandle<T> {}
+
+impl<T> Clone for DataHandle<T> {
+    fn clone(&self) -> Self {
+        Self { idx: self.idx.clone(), type_: self.type_.clone() }
+    }
+}
+
+pub const MAX_HOOKS: usize = 64;
+
+#[repr(C)]
+pub struct HookData {
+    pub fn_ptr: HookTrampoline,
+    pub data_ptr: *mut (),
+}
+
+impl HookData {
+    pub const fn null() -> Self {
+        extern "C" fn null_hook(_: *mut (), _: *mut Cpu, _: u64) {}
+        Self { fn_ptr: null_hook, data_ptr: std::ptr::null_mut() }
     }
 }
 

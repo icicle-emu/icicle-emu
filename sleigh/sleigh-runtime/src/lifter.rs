@@ -3,13 +3,10 @@ use std::collections::HashMap;
 use crate::{
     decoder::SubtableCtx,
     semantics::{Export, Local, SemanticAction, Value, ValueSize},
-    AttachmentId, ConstructorId, Instruction, SleighData,
+    AttachmentId, ConstructorId, Instruction, SleighData, MAX_REG_SIZE,
 };
 
-/// The size (in bytes) of the largest supported register for the runtime.
-const MAX_REG_SIZE: u8 = 16;
-
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Error {
     WriteToConstant,
     InvalidVarNode,
@@ -87,18 +84,17 @@ impl From<ResolvedValue> for Operand {
 #[derive(Copy, Clone, Debug)]
 struct VarNode {
     offset: u32,
-    base_size: u16,
     size: u16,
     is_tmp: bool,
 }
 
 impl VarNode {
-    fn register(offset: u32, base_size: u16) -> Self {
-        Self { offset, base_size, size: base_size, is_tmp: false }
+    fn register(offset: u32, size: u16) -> Self {
+        Self { offset, size, is_tmp: false }
     }
 
-    fn tmp(offset: u32, base_size: u16) -> Self {
-        Self { offset, base_size, size: base_size, is_tmp: true }
+    fn tmp(offset: u32, size: u16) -> Self {
+        Self { offset, size, is_tmp: true }
     }
 
     fn slice(self, offset: u16, size: u16) -> Self {
@@ -113,10 +109,18 @@ enum ResolvedValue {
 }
 
 impl ResolvedValue {
+    fn const_eq(&self, value: u64) -> bool {
+        match self {
+            Self::Const(x, _) => *x == value,
+            Self::Var(_) => false,
+        }
+    }
+
     fn slice(self, offset: u16, size: u16) -> Self {
         match self {
             Self::Const(value, _) => {
-                Self::Const((value >> offset) & pcode::mask(size as u64 * 8), size)
+                let mask = if size > 8 { u64::MAX } else { pcode::mask(size as u64 * 8) };
+                Self::Const((value >> offset) & mask, size)
             }
             Self::Var(var) => Self::Var(var.slice(offset, size)),
         }
@@ -158,8 +162,14 @@ pub struct Lifter {
     /// The varnodes allocated to temporaries.
     temps: Vec<VarNode>,
 
+    /// The offset to assign to the next temporary.
+    next_sleigh_offset: u32,
+
     /// The default size to use for variables that don't specify a size.
     default_size: u16,
+
+    /// Is an extra label at the end of block for jumps to `inst_next` converted to inner jumps.
+    label_at_end: bool,
 
     /// Keeps track of temporaries that have a constant value during disassembly time.
     disassembly_constants: HashMap<pcode::VarId, u64>,
@@ -173,8 +183,10 @@ impl Lifter {
             tmp_offset: 0,
             tmp_max: 256,
             temps: Vec::new(),
+            next_sleigh_offset: 0,
             default_size: 0,
             disassembly_constants: HashMap::new(),
+            label_at_end: false,
         }
     }
 
@@ -185,12 +197,18 @@ impl Lifter {
 
         self.tmp_offset = 0;
         self.temps.clear();
+        self.next_sleigh_offset = 0;
+        self.label_at_end = false;
         self.disassembly_constants.clear();
 
         self.default_size = sleigh.default_space_size;
 
         self.block.push((pcode::Op::InstructionMarker, (inst.inst_start, inst.num_bytes())));
         self.build_subtable(inst.root(sleigh))?;
+
+        if self.label_at_end {
+            self.block.push(pcode::Op::PcodeLabel(u16::MAX));
+        }
 
         Ok(&self.block)
     }
@@ -203,8 +221,8 @@ impl Lifter {
         if self.temps.len() >= self.tmp_max {
             return Err(Error::TooManyTemporaries);
         }
-        let id: u32 = self.temps.len().try_into().unwrap();
-        let var = VarNode::tmp(MAX_REG_SIZE as u32 * id, size);
+        let var = VarNode::tmp(self.next_sleigh_offset, size);
+        self.next_sleigh_offset += (size as u32).next_power_of_two().max(16);
         self.temps.push(var);
         Ok(var)
     }
@@ -239,8 +257,8 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
         self.lifter.tmp_offset = self.lifter.temps.len();
 
         // Reserve space for temporaries that are named in the original sleigh specification.
-        for _ in 0..self.subtable.constructor_info().temporaries {
-            self.lifter.alloc_tmp(MAX_REG_SIZE as ValueSize)?;
+        for tmp in self.subtable.temporaries() {
+            self.lifter.alloc_tmp(tmp.size.unwrap_or(self.lifter.default_size))?;
         }
 
         for action in semantics {
@@ -267,6 +285,15 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
                         resolved_inputs.push(self.resolve_value(*input)?);
                     }
 
+                    let inst_next = self.subtable.inst_next;
+                    if matches!(op, pcode::Op::Branch(_)) && resolved_inputs[1].const_eq(inst_next)
+                    {
+                        self.lifter.label_at_end = true;
+                        resolved_inputs[1] = ResolvedValue::Const(0, 8);
+                        self.emit(pcode::Op::PcodeBranch(u16::MAX), &resolved_inputs, None)?;
+                        continue;
+                    }
+
                     match resolved_output {
                         Some(Output::Var(dst)) => self.emit(*op, &resolved_inputs, Some(dst))?,
                         Some(Output::Pointer(addr, offset, size)) => {
@@ -277,12 +304,12 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
                         None => self.emit(*op, &resolved_inputs, None)?,
                     }
 
-                    if matches!(op, pcode::Op::PcodeBranch(_) | pcode::Op::PcodeLabel(_)) {
+                    if matches!(op, pcode::Op::PcodeLabel(_)) {
                         self.lifter.disassembly_constants.clear()
                     }
                 }
-                SemanticAction::AddressOf { output, base, offset } => {
-                    let base = match base {
+                SemanticAction::AddressOf { output, base } => {
+                    let offset = match base {
                         Local::Subtable(idx) => {
                             match self.subtable_export(*idx).ok_or(Error::InvalidVarNode)? {
                                 Operand::Value(value) => match value {
@@ -301,18 +328,13 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
                         Local::InstNext => self.subtable.inst_next,
                         _ => return Err(Error::Internal("dynamic address of non subtable")),
                     };
-                    let offset = match self.resolve_value(*offset)? {
-                        ResolvedValue::Const(x, _) => x,
-                        ResolvedValue::Var(_) => return Err(Error::VarNodeOffsetIsNotConstant),
-                    };
 
-                    let address = offset + base;
                     match self.resolve_output(output)? {
                         Output::Var(dst) => {
-                            self.emit_copy(ResolvedValue::Const(address, dst.size), dst)?
+                            self.emit_copy(ResolvedValue::Const(offset, dst.size), dst)?
                         }
                         Output::Pointer(dst, offset, size) => {
-                            self.emit_store(dst, offset, ResolvedValue::Const(address, size))?
+                            self.emit_store(dst, offset, ResolvedValue::Const(offset, size))?
                         }
                     };
                 }
@@ -320,11 +342,10 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
                     let reg_ptr = self.resolve_value(*pointer)?;
                     match self.resolve_output(output)? {
                         Output::Var(dst) => match self.get_runtime_value(reg_ptr)? {
-                            pcode::Value::Const(offset, base_size) => {
+                            pcode::Value::Const(offset, _) => {
                                 // SLEIGH offset for register is known at disassembly time, so
                                 // directly translate it to a varnode.
-                                let var = VarNode::register(offset as u32, base_size as u16)
-                                    .slice(0, *size);
+                                let var = VarNode::register(offset as u32, *size);
                                 self.emit_copy(var.into(), dst)?
                             }
                             reg => {
@@ -343,9 +364,8 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
                     let reg_ptr = self.resolve_value(*pointer)?;
                     let value = self.resolve_value(*value)?;
                     match self.get_runtime_value(reg_ptr)? {
-                        pcode::Value::Const(offset, base_size) => {
-                            let var =
-                                VarNode::register(offset as u32, base_size as u16).slice(0, *size);
+                        pcode::Value::Const(offset, _) => {
+                            let var = VarNode::register(offset as u32, *size);
                             self.emit_copy(value, var.into())?
                         }
                         reg => {
@@ -360,10 +380,15 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
                     // Without it, single stepping will execute both the branch and the delay slot
                     // at -- but having it complicates the emulator design (since the instruction
                     // marker will reference the wrong PC)
-                    let constructor = self.subtable.visit_constructor(
-                        self.subtable.delay_slot.expect("sleigh-runtime: expected delayslot"),
-                    );
-                    self.lifter.build_subtable(constructor)?;
+                    if let Some(delayslot) = self.subtable.delay_slot {
+                        let constructor = self.subtable.visit_constructor(delayslot);
+                        self.lifter.build_subtable(constructor)?;
+                    }
+                    else {
+                        // No instruction found in the delay slot (delay slots could be disabled) so
+                        // inject an invalid instruction exception.
+                        self.emit(pcode::Op::Invalid, &[], None)?;
+                    }
                 }
                 SemanticAction::Build(idx) => {
                     let constructor =
@@ -393,8 +418,10 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
             return Ok(pcode::VarNode::new(id, MAX_REG_SIZE).slice(offset as u8, size));
         }
 
-        match self.subtable.data.map_sleigh_reg(var.offset, var.base_size as u8) {
-            Some((id, offset)) => Ok(pcode::VarNode::new(id, MAX_REG_SIZE).slice(offset, size)),
+        match self.subtable.data.map_sleigh_reg(var.offset, var.size as u8) {
+            Some((reg, offset)) => {
+                reg.get_var(offset, size).ok_or(Error::UnknownVarNode(var.offset, size))
+            }
             None => Err(Error::UnknownVarNode(var.offset, size)),
         }
     }
@@ -421,9 +448,7 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
             Export::RamRef(ptr, size) => Ok(Operand::Pointer(self.resolve_value(ptr)?, 0, size)),
             Export::RegisterRef(offset, size) => match self.resolve_value(offset)? {
                 ResolvedValue::Var(_) => Err(Error::InvalidExport(self.subtable.constructor.id)),
-                ResolvedValue::Const(x, base_size) => {
-                    Ok(VarNode::register(x as u32, base_size).slice(0, size).into())
-                }
+                ResolvedValue::Const(x, _) => Ok(VarNode::register(x as u32, size).into()),
             },
         }
     }
@@ -539,20 +564,7 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
         if let Some(output) = output {
             // Handle special cases to support operating on large varnodes.
             if output.size > MAX_REG_SIZE as ValueSize {
-                return match op {
-                    pcode::Op::Copy => self.emit_copy(inputs[0], output),
-                    pcode::Op::ZeroExtend => {
-                        self.emit_copy(inputs[0], output.slice(0, inputs[0].size()))?;
-                        self.emit_copy(
-                            ResolvedValue::Const(0, 8),
-                            output.slice(inputs[0].size(), output.size - inputs[0].size()),
-                        )
-                    }
-                    pcode::Op::Load(_) => self.emit_load(inputs[0], 0, output),
-
-                    // Varnode size too large for this operation.
-                    _ => Err(Error::UnsupportedVarNodeSize(output.size)),
-                };
+                return self.emit_large_op(op, inputs, output);
             }
 
             // If there were any subpiece operations that were not able to be resolved statically
@@ -580,12 +592,107 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
         match output {
             Some(output) => {
                 let dst = self.get_runtime_var(output)?;
-                self.push((dst, op, inputs))
+                match crate::const_eval::const_eval(dst, op, &inputs) {
+                    Some(value) => {
+                        self.emit_copy(ResolvedValue::Const(value, output.size), output)?
+                    }
+                    None => self.push((dst, op, inputs)),
+                }
             }
             None => self.push((op, inputs)),
         }
 
         Ok(())
+    }
+
+    fn emit_large_op(
+        &mut self,
+        op: pcode::Op,
+        inputs: &[ResolvedValue],
+        output: VarNode,
+    ) -> Result<()> {
+        match op {
+            pcode::Op::Copy => self.emit_copy(inputs[0], output),
+            pcode::Op::ZeroExtend => {
+                self.emit_copy(inputs[0], output.slice(0, inputs[0].size()))?;
+                self.emit_copy(
+                    ResolvedValue::Const(0, 8),
+                    output.slice(inputs[0].size(), output.size - inputs[0].size()),
+                )
+            }
+            // Allow shift operations to be used to extracting high bits of SIMD registers.
+            pcode::Op::IntRight => match self.get_runtime_value(inputs[1])? {
+                pcode::Value::Const(shift, _) if shift % 8 == 0 => {
+                    if shift / 8 > output.size as u64 {
+                        self.emit_copy(ResolvedValue::Const(0, 8), output)?;
+                        return Ok(());
+                    }
+
+                    // If the input register overlaps with the output register create a copy of the
+                    // register before we overwrite it.
+                    let input = match inputs[0] {
+                        ResolvedValue::Var(input) if var_overlap(output, input) => {
+                            let tmp = self.lifter.alloc_tmp(input.size)?;
+                            self.emit_copy(input.into(), tmp)?;
+                            ResolvedValue::Var(tmp)
+                        }
+                        input => input,
+                    };
+
+                    // Zero output register.
+                    self.emit_copy(ResolvedValue::Const(0, 8), output)?;
+                    // Copy high bits of input to output.
+                    let offset: u16 = (shift / 8)
+                        .try_into()
+                        .map_err(|_| Error::UnsupportedVarNodeSize(output.size))?;
+                    let size = output.size - offset;
+                    // @fixme: decompose the op into better copy operations.
+                    for i in 0..size {
+                        self.emit_copy(input.slice(offset + i, 1), output.slice(i, 1))?;
+                    }
+                    Ok(())
+                }
+                _ => Err(Error::UnsupportedVarNodeSize(output.size)),
+            },
+            pcode::Op::IntLeft => match self.get_runtime_value(inputs[1])? {
+                pcode::Value::Const(shift, _) if shift % 8 == 0 => {
+                    if shift / 8 > output.size as u64 {
+                        self.emit_copy(ResolvedValue::Const(0, 8), output)?;
+                        return Ok(());
+                    }
+
+                    // If the input register overlaps with the output register create a copy of the
+                    // register before we overwrite it.
+                    let input = match inputs[0] {
+                        ResolvedValue::Var(input) if var_overlap(output, input) => {
+                            let tmp = self.lifter.alloc_tmp(input.size)?;
+                            self.emit_copy(input.into(), tmp)?;
+                            ResolvedValue::Var(tmp)
+                        }
+                        input => input,
+                    };
+
+                    // Zero output register.
+                    self.emit_copy(ResolvedValue::Const(0, 8), output)?;
+                    // Copy low bits of input to high bits of output.
+                    let offset: u16 = (shift / 8)
+                        .try_into()
+                        .map_err(|_| Error::UnsupportedVarNodeSize(output.size))?;
+                    let size = output.size - offset;
+                    // @fixme: decompose the op into better copy operations.
+                    for i in 0..size {
+                        self.emit_copy(input.slice(i, 1), output.slice(offset + i, 1))?;
+                    }
+                    Ok(())
+                }
+                _ => Err(Error::UnsupportedVarNodeSize(output.size)),
+            },
+            pcode::Op::IntOr => self.emit_or(output, inputs[0], inputs[1]),
+
+            pcode::Op::Load(_) => self.emit_load(inputs[0], 0, output),
+
+            _ => Err(Error::UnsupportedVarNodeSize(output.size)),
+        }
     }
 
     fn get_runtime_inputs(&mut self, inputs: &[ResolvedValue]) -> Result<pcode::Inputs> {
@@ -612,9 +719,19 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
             let src = this.get_runtime_value(src.slice(i, dst.size))?;
             let dst = this.get_runtime_var(dst)?;
             this.push(src.copy_to(dst));
-            if dst.is_temp() && src.is_const() {
+            if dst.is_temp() && dst.offset == 0 && src.is_const() {
                 this.lifter.disassembly_constants.insert(dst.id, src.as_u64());
             }
+            Ok(())
+        })
+    }
+
+    fn emit_or(&mut self, dst: VarNode, a: ResolvedValue, b: ResolvedValue) -> Result<()> {
+        self.split_large_op(dst, |this, i, dst| {
+            let a = this.get_runtime_value(a.slice(i, dst.size))?;
+            let b = this.get_runtime_value(b.slice(i, dst.size))?;
+            let dst = this.get_runtime_var(dst)?;
+            this.push((dst, pcode::Op::IntOr, [a, b]));
             Ok(())
         })
     }
@@ -695,10 +812,16 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
     }
 
     fn resolve_var_size(&self, size: ValueSize) -> Result<pcode::VarSize> {
-        let size: u8 = size.try_into().map_err(|_| Error::UnsupportedVarNodeSize(size))?;
-        if size > MAX_REG_SIZE {
+        if size > MAX_REG_SIZE as ValueSize {
             return Err(Error::UnsupportedVarNodeSize(size as ValueSize));
         }
-        Ok(size)
+        Ok(size as u8)
     }
+}
+
+// Checks if two varnodes overlap in any byte.
+fn var_overlap(a: VarNode, b: VarNode) -> bool {
+    let a_end = a.offset + a.size as u32;
+    let b_end = b.offset + b.size as u32;
+    a.offset < b_end && b.offset < a_end
 }

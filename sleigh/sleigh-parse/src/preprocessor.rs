@@ -135,6 +135,7 @@ pub(crate) fn handle_macro(p: &mut Parser, kind: MacroKind) -> Result<(), Error>
                     let token = p.next();
                     p.get_str(token).into()
                 }
+                TokenKind::Line => "".into(),
                 _ => return Err(token.error_unexpected(&[TokenKind::String, TokenKind::Number])),
             };
             p.expect(TokenKind::Line)?;

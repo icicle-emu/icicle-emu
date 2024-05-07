@@ -1,8 +1,10 @@
 mod debug;
 mod decoder;
 mod disasm;
-pub mod expr;
 mod lifter;
+
+pub mod const_eval;
+pub mod expr;
 pub mod matcher;
 pub mod semantics;
 
@@ -16,7 +18,7 @@ pub use crate::{
 use crate::{
     expr::PatternExprRange,
     matcher::Matcher,
-    semantics::{Export, SemanticAction, ValueSize},
+    semantics::{Export, PcodeTmp, SemanticAction, ValueSize},
 };
 
 pub const DEBUG: bool = false;
@@ -24,8 +26,37 @@ pub const DEBUG: bool = false;
 /// The [TableId] associated with the root-level table.
 pub const ROOT_TABLE_ID: TableId = 0;
 
+/// The size (in bytes) of the largest supported register for the runtime.
+const MAX_REG_SIZE: u8 = 16;
+
+#[derive(Debug, Copy, Clone)]
+pub struct RuntimeConfig {
+    /// The initial value of the context register used for decoding.
+    pub context: u64,
+    /// Controls whether the decoder should attempt to decode any delay slots present in the
+    /// instruction.
+    pub ignore_delay_slots: bool,
+    /// Controls whether backtracking is allowed during constructor matching.
+    pub allow_backtracking: bool,
+    /// Controls whether the runtime context value will be updated as a result of `globalset`
+    /// actions during instruction decoding.
+    pub update_context: bool,
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self {
+            context: 0,
+            ignore_delay_slots: false,
+            allow_backtracking: true,
+            update_context: true,
+        }
+    }
+}
+
 pub struct Runtime {
     pub context: u64,
+    update_context: bool,
     lifter: Lifter,
     state: Decoder,
     disasm: String,
@@ -34,10 +65,19 @@ pub struct Runtime {
 
 impl Runtime {
     pub fn new(context: u64) -> Self {
+        Self::new_with_config(&RuntimeConfig { context, ..Default::default() })
+    }
+
+    pub fn new_with_config(config: &RuntimeConfig) -> Self {
+        let mut decoder = Decoder::new();
+        decoder.allow_backtracking = config.allow_backtracking;
+        decoder.ignore_delay_slots = config.ignore_delay_slots;
+
         Self {
-            context,
+            context: config.context,
             lifter: Lifter::new(),
-            state: Decoder::new(),
+            state: decoder,
+            update_context: config.update_context,
             disasm: String::new(),
             instruction: Instruction::default(),
         }
@@ -52,7 +92,9 @@ impl Runtime {
         self.state.global_context = self.context;
         self.state.set_inst(addr, bytes);
         sleigh.decode_into(&mut self.state, &mut self.instruction)?;
-        self.context = self.state.global_context;
+        if self.update_context {
+            self.context = self.state.global_context;
+        }
         Some(&self.instruction)
     }
 
@@ -62,7 +104,7 @@ impl Runtime {
         Some(&self.disasm)
     }
 
-    pub fn lift(&mut self, sleigh: &'_ SleighData) -> Result<&pcode::Block, lifter::Error> {
+    pub fn lift(&mut self, sleigh: &'_ SleighData) -> Result<&pcode::Block, LifterError> {
         self.lifter.lift(sleigh, &self.instruction)
     }
 
@@ -75,7 +117,7 @@ pub type TableId = u32;
 pub type ConstructorId = u32;
 pub type AttachmentId = u32;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct Token {
     /// Token could overwrite the global endian
     pub big_endian: bool,
@@ -99,7 +141,7 @@ impl Token {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct Field {
     /// The bit offset of the field within the parent value.
     pub offset: u16,
@@ -198,7 +240,7 @@ pub struct Constructor {
     /// Actions to perform as part of the display segment for this constructor.
     pub display: (u32, u32),
 
-    /// The fields defined by the fields of the constructor or disassembly disassembly expressions.
+    /// The fields defined by the fields of the constructor or disassembly action expressions.
     pub fields: (u32, u32),
 
     /// The range of semantics evaluated when the constructor is built.
@@ -213,18 +255,18 @@ pub struct Constructor {
     /// The value exported by the table. Or `None` if the table has no export.
     pub export: Option<Export>,
 
-    /// The number of temporaries defined in the semantic section.
-    pub temporaries: u32,
+    /// The temporaries used in the semantic section.
+    pub temporaries: (u32, u32),
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum EvalKind {
     ContextField(Field),
     TokenField(Token, Field),
 }
 
 /// An action for the decoder to perform.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum DecodeAction {
     /// Modifies the context register.
     ModifyContext(Field, PatternExprRange),
@@ -270,6 +312,35 @@ pub struct NamedRegister {
     pub offset: u32,
 }
 
+impl NamedRegister {
+    /// Get the varnode associated with a slice of the register. Handling cases where the VarId may
+    /// change because of SIMD register splitting.
+    pub fn get_var(
+        &self,
+        offset: pcode::VarOffset,
+        size: pcode::VarSize,
+    ) -> Option<pcode::VarNode> {
+        if offset + size > self.var.size {
+            return None;
+        }
+
+        let (id_offset, var_offset) = (offset / MAX_REG_SIZE, offset % MAX_REG_SIZE);
+        // Ensure that the access doesn't overlap with multiple sub-registers.
+        if var_offset + size > MAX_REG_SIZE {
+            return None;
+        }
+
+        Some(
+            pcode::VarNode::new(
+                self.var.id + id_offset as i16,
+                self.var.size - id_offset * MAX_REG_SIZE,
+            )
+            .slice(var_offset, size),
+        )
+    }
+}
+
+#[derive(Debug)]
 pub struct RegisterAlias {
     /// The offset (in bytes) from the start of the full-register.
     pub offset: u16,
@@ -324,7 +395,17 @@ pub struct ConstructorDebugInfo {
 
 #[derive(Default)]
 pub struct DebugInfo {
+    pub subtable_names: Vec<StrIndex>,
     pub constructors: Vec<ConstructorDebugInfo>,
+}
+
+impl DebugInfo {
+    pub fn constructor_lines<'value: 'iter, 'iter>(
+        &'value self,
+        instruction: &'iter Instruction,
+    ) -> impl Iterator<Item = &'value str> + 'iter {
+        instruction.subtables.iter().map(move |c| self.constructors[c.id as usize].line.as_str())
+    }
 }
 
 #[derive(Default)]
@@ -346,6 +427,7 @@ pub struct SleighData {
     pub disasm_exprs: Vec<PatternExprOp<DisasmConstantValue>>,
     pub display_segments: Vec<DisplaySegment>,
     pub semantics: Vec<SemanticAction>,
+    pub temporaries: Vec<PcodeTmp>,
 
     pub attachments: Vec<AttachmentIndex>,
     pub attached_names: Vec<StrIndex>,
@@ -366,7 +448,7 @@ pub struct SleighData {
     /// Instead of exposing a register_space/unique_space where values are index by an offset like
     /// Ghidra does, we instead map all global space offsets to local offsets within
     /// non-overlapping registers.
-    pub register_mapping: HashMap<u32, (pcode::VarId, pcode::VarOffset)>,
+    pub register_mapping: HashMap<u32, (NamedRegIndex, pcode::VarOffset)>,
 
     /// Varnodes reserved for temporaries that live across internal block boundaries.
     pub saved_tmps: Vec<pcode::VarNode>,
@@ -472,13 +554,14 @@ impl SleighData {
     }
 
     /// Maps a SLEIGH register to an internal VarNode ID and offset.
-    pub fn map_sleigh_reg(&self, offset: u32, size: u8) -> Option<(pcode::VarId, u8)> {
-        let &(id, mut varnode_offset) = self.register_mapping.get(&offset)?;
-        let parent_reg = &self.registers[id as usize];
-        if self.big_endian {
-            varnode_offset = parent_reg.size - varnode_offset - size;
+    pub fn map_sleigh_reg(&self, offset: u32, size: u8) -> Option<(&NamedRegister, u8)> {
+        let &(idx, varnode_offset) = self.register_mapping.get(&offset)?;
+        let parent_reg = &self.named_registers[idx as usize];
+        if varnode_offset + size > parent_reg.var.size {
+            // Attempted to access bytes outside of the register.
+            return None;
         }
-        Some((id, varnode_offset))
+        Some((parent_reg, varnode_offset))
     }
 
     #[inline]
@@ -491,7 +574,7 @@ impl SleighData {
         &self.strings[index.0 as usize..index.1 as usize]
     }
 
-    pub(crate) fn get_attachment(&self, id: AttachmentId) -> AttachmentRef {
+    pub fn get_attachment(&self, id: AttachmentId) -> AttachmentRef {
         match &self.attachments[id as usize] {
             AttachmentIndex::Register((start, end), size) => {
                 let regs = &self.attached_registers[*start as usize..*end as usize];
@@ -518,14 +601,14 @@ impl SleighData {
         self.matchers[matcher_id as usize].match_constructor(state, offset)
     }
 
-    fn get_context_mod_expr(&self, expr: PatternExprRange) -> &[PatternExprOp<ContextModValue>] {
+    pub fn get_context_mod_expr(
+        &self,
+        expr: PatternExprRange,
+    ) -> &[PatternExprOp<ContextModValue>] {
         &self.context_disasm_expr[expr.0 as usize..expr.1 as usize]
     }
 
-    pub(crate) fn get_disasm_expr(
-        &self,
-        expr: PatternExprRange,
-    ) -> &[PatternExprOp<DisasmConstantValue>] {
+    pub fn get_disasm_expr(&self, expr: PatternExprRange) -> &[PatternExprOp<DisasmConstantValue>] {
         &self.disasm_exprs[expr.0 as usize..expr.1 as usize]
     }
 }

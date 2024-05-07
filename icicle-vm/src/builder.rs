@@ -1,4 +1,5 @@
 use icicle_cpu::{cpu::CallCov, exec::helpers, lifter, Arch, Config, Cpu};
+use sleigh_compile::ldef::SleighLanguage;
 
 use crate::Vm;
 
@@ -36,11 +37,62 @@ impl std::fmt::Display for BuildError {
 impl std::error::Error for BuildError {}
 
 pub fn build(config: &Config) -> Result<Vm, BuildError> {
-    let mut spec_config =
-        get_spec_config(config.triple.architecture).ok_or(BuildError::UnsupportedArchitecture)?;
-    let sleigh = build_sleigh(&mut spec_config)?;
+    let mut lang = sleigh_init(&config.triple)?;
 
-    let arch = build_arch(&config.triple, sleigh, &spec_config)?;
+    let reg_next_pc = lang
+        .sleigh
+        .add_custom_reg("NEXT_PC", 8)
+        .ok_or(BuildError::SpecCompileError("failed to add varnode for `NEXT_PC`".into()))?;
+
+    let reg_isa_mode = lang.sleigh.get_reg("ISAModeSwitch").map(|x| x.var);
+
+    // Set initial context values for architectures that support mode switching.
+    //
+    // @todo: Support other architectures.
+    // @todo: Determine resolve using ldef if possible.
+    let isa_mode_context = match config.triple.architecture {
+        target_lexicon::Architecture::Arm(inner) => match inner.is_thumb() {
+            true => vec![lang.initial_ctx],
+            false => vec![arm::ARM_MODE_CTX, arm::THUMB_MODE_CTX],
+        },
+        _ => vec![lang.initial_ctx],
+    };
+
+    let get_reg =
+        |name: &str| lang.sleigh.get_reg(name).ok_or(BuildError::InvalidConfig).map(|reg| reg.var);
+
+    let mut reg_init = vec![];
+    for &(name, value) in get_boot_values(config.triple.architecture) {
+        reg_init.push((get_reg(name)?, value));
+    }
+
+    let temporaries = get_temporary_varnodes(config.triple.architecture)
+        .iter()
+        .map(|name| Ok(get_reg(name)?.id))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let arch = Arch {
+        triple: config.triple.clone(),
+        reg_pc: lang.pc,
+        reg_next_pc,
+        reg_sp: lang.sp,
+        reg_isa_mode,
+        isa_mode_context,
+        reg_init,
+        temporaries,
+        calling_cov: CallCov {
+            integers: lang.default_calling_cov.int_args,
+            stack_align: 4,
+            stack_offset: 0,
+        },
+        on_boot: get_boot_action(config.triple.architecture),
+        sleigh: lang.sleigh,
+    };
+
+    build_vm(config, arch)
+}
+
+fn build_vm(config: &Config, arch: Arch) -> Result<Vm, BuildError> {
     let mut cpu = Cpu::new_boxed(arch);
     cpu.enable_shadow_stack = config.enable_shadow_stack;
     cpu.mem.track_uninitialized = config.track_uninitialized;
@@ -52,10 +104,8 @@ pub fn build(config: &Config) -> Result<Vm, BuildError> {
     };
     let instruction_lifter = lifter::InstructionLifter::new();
     let mut lifter = lifter::BlockLifter::new(settings, instruction_lifter);
-
-    for name in spec_config.temp_registers {
-        let var = cpu.arch.sleigh.get_reg(name).ok_or(BuildError::InvalidConfig)?.var;
-        lifter.mark_as_temporary(var.id);
+    for var in &cpu.arch.temporaries {
+        lifter.mark_as_temporary(*var);
     }
 
     let mut vm = Vm::new(cpu, lifter);
@@ -63,55 +113,6 @@ pub fn build(config: &Config) -> Result<Vm, BuildError> {
     register_helpers_for(&mut vm, config.triple.architecture);
 
     Ok(vm)
-}
-
-fn build_arch(
-    triple: &target_lexicon::Triple,
-    mut sleigh: sleigh_runtime::SleighData,
-    config: &SpecConfig,
-) -> Result<Arch, BuildError> {
-    let get_reg = |sleigh: &sleigh_runtime::SleighData, name: &str| {
-        sleigh.get_reg(name).ok_or(BuildError::InvalidConfig).map(|reg| reg.var)
-    };
-
-    let mut reg_init = vec![];
-    for &(name, value) in &config.init_registers {
-        reg_init.push((get_reg(&sleigh, name)?, value));
-    }
-
-    // NEXT_PC is used to keep track of the address following the current instruction, this is
-    // useful for handling situations such as syscalls that may need to skip the current
-    // instruction, without needing to manually know the length of the current instruction.
-    let reg_next_pc = sleigh
-        .add_custom_reg("NEXT_PC", 8)
-        .ok_or(BuildError::SpecCompileError("failed to add varnode for `NEXT_PC`".into()))?;
-
-    let reg_pc = get_reg(&sleigh, config.reg_pc)?;
-    let reg_sp = get_reg(&sleigh, config.reg_sp)?;
-
-    let calling_cov = CallCov {
-        integers: config
-            .calling_cov
-            .integers
-            .iter()
-            .map(|name| get_reg(&sleigh, name))
-            .collect::<Result<_, _>>()?,
-        stack_align: config.calling_cov.stack_align,
-        stack_offset: config.calling_cov.stack_offset,
-    };
-
-    Ok(Arch {
-        triple: triple.clone(),
-        reg_pc,
-        reg_sp,
-        reg_next_pc,
-        reg_isa_mode: sleigh.get_reg("ISAModeSwitch").map(|x| x.var),
-        reg_init,
-        on_boot: config.on_boot,
-        isa_mode_context: config.context.clone(),
-        calling_cov,
-        sleigh,
-    })
 }
 
 pub fn register_helpers(vm: &mut Vm, helpers: &[(&str, helpers::PcodeOpHelper)]) {
@@ -124,6 +125,13 @@ pub fn register_helpers(vm: &mut Vm, helpers: &[(&str, helpers::PcodeOpHelper)])
     }
 }
 
+fn patch_instruction_pointer_access(vm: &mut Vm, use_next_pc: bool) {
+    let pc = vm.cpu.arch.reg_pc;
+    let tmp_pc = vm.cpu.arch.sleigh.add_custom_reg("tmp_pc", pc.size).unwrap();
+    vm.lifter.mark_as_temporary(tmp_pc.id);
+    vm.lifter.patchers.push(icicle_cpu::lifter::read_pc_patcher(pc, tmp_pc, use_next_pc));
+}
+
 fn register_helpers_for(vm: &mut Vm, arch: target_lexicon::Architecture) {
     use target_lexicon::Architecture;
 
@@ -134,341 +142,193 @@ fn register_helpers_for(vm: &mut Vm, arch: target_lexicon::Architecture) {
         Architecture::Arm(_) => {
             register_helpers(vm, helpers::arm::HELPERS);
             // Fixes `pop {..., pc}`
-            let pc = vm.cpu.arch.sleigh.get_reg("pc").unwrap().var;
-            let tmp_pc = vm.cpu.arch.sleigh.add_custom_reg("tmp_pc", pc.size).unwrap();
-            icicle_cpu::lifter::register_read_pc_patcher(&mut vm.lifter, pc, tmp_pc, false);
+            patch_instruction_pointer_access(vm, false);
         }
         Architecture::Aarch64(_) => register_helpers(vm, helpers::aarch64::HELPERS),
         Architecture::X86_32(_) | Architecture::X86_64 => {
-            register_helpers(vm, helpers::x86::HELPERS)
+            register_helpers(vm, helpers::x86::HELPERS);
+            patch_instruction_pointer_access(vm, false);
         }
         Architecture::Msp430 => {
+            // If the SLEIGH specification is configured to use individual registers instead of the
+            // status register, handle reads and writes from the emulator here.
+            if vm.cpu.arch.sleigh.get_reg("CF").is_some() {
+                let reg_handler = crate::msp430::StatusRegHandler::new(&vm.cpu.arch.sleigh);
+                vm.cpu.add_reg_handler(reg_handler.sr.id, Box::new(reg_handler))
+            }
+
             lifter::msp430::status_register_control_patch(&mut vm.cpu, &mut vm.lifter);
             // Fixes RETI, RETA, CALLA
-            let pc = vm.cpu.arch.sleigh.get_reg("PC").unwrap().var;
-            let tmp_pc = vm.cpu.arch.sleigh.add_custom_reg("TMP_PC", pc.size).unwrap();
-            icicle_cpu::lifter::register_read_pc_patcher(&mut vm.lifter, pc, tmp_pc, true);
+            patch_instruction_pointer_access(vm, true);
         }
         _ => {}
     }
 }
 
-// @todo: load this from Ghidra's compiler spec?
-struct CallingCovSpec {
-    /// Represents registers used for passing integers to functions, these will be chosen before
-    /// parameters on the stack
-    integers: Vec<&'static str>,
-    /// The alignment of parameters passed on the stack,
-    stack_align: u64,
-    /// The offset (relative to the stack pointer) of the parameters on the stack.
-    stack_offset: u64,
+fn get_temporary_varnodes(arch: target_lexicon::Architecture) -> &'static [&'static str] {
+    use target_lexicon::Architecture;
+    match arch {
+        Architecture::Arm(_) => &[
+            "tmpCY",
+            "tmpOV",
+            "tmpNG",
+            "tmpZR",
+            "shift_carry",
+            "mult_addr",
+            "mult_dat8",
+            "mult_dat16",
+        ],
+        Architecture::Aarch64(_) => &["tmpCY", "tmpOV", "tmpNG", "tmpZR", "shift_carry"],
+        Architecture::X86_32(_) | Architecture::X86_64 | Architecture::X86_64h => {
+            &["xmmTmp1", "xmmTmp2"]
+        }
+        _ => &[],
+    }
 }
 
-struct SpecConfig {
-    /// The path to the root level sleigh specification for this architecture.
-    path: &'static str,
-    /// Path to processor specification file (pspec). If `None` some defaults will be inferred.
-    processor_spec_path: Option<&'static str>,
-    /// The name of the varnode this architecture uses as the program counter.
-    reg_pc: &'static str,
-    /// The name of the varnode this architecture uses as the stack pointer.
-    reg_sp: &'static str,
-    /// Values to use for context register in different ISA modes.
-    context: Vec<u64>,
-    /// Values to set for registers on reset.
-    init_registers: Vec<(&'static str, u128)>,
-    /// Extra registers to mark as temporaries (used to improve the optimizer).
-    ///
-    /// @fixme: It would be nice if there are a standardized way of doing this as part of the
-    /// sleigh specification.
-    temp_registers: Vec<&'static str>,
-    /// A specification of the default calling convention for this architecture.
-    // @fixme: This can differ even for the same CPU architecture (e.g. for different compilers).
-    calling_cov: CallingCovSpec,
-    /// Boot function for the VM to use.
-    on_boot: fn(&mut Cpu, u64),
+fn get_boot_values(arch: target_lexicon::Architecture) -> &'static [(&'static str, u128)] {
+    use target_lexicon::Architecture;
+    match arch {
+        Architecture::Aarch64(_) => &[("dczid_el0", 0x10)], // disable DC ZVA instructions
+        _ => &[],
+    }
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct Set {
-    pub name: String,
-    pub val: u64,
+fn get_boot_action(arch: target_lexicon::Architecture) -> fn(&mut Cpu, u64) {
+    use target_lexicon::Architecture;
+    match arch {
+        Architecture::Arm(_) => arm::on_boot,
+        _ => generic::on_boot,
+    }
 }
 
-#[allow(unused)]
-#[derive(Debug, serde::Deserialize)]
-struct ProgramCounter {
-    register: String,
-}
+pub fn sleigh_init(target: &target_lexicon::Triple) -> Result<SleighLanguage, BuildError> {
+    use target_lexicon::{
+        Aarch64Architecture, Architecture, ArmArchitecture, Mips32Architecture,
+        Riscv32Architecture, Riscv64Architecture,
+    };
 
-#[allow(unused)]
-#[derive(Debug, serde::Deserialize)]
-struct ContextSet {
-    pub space: String,
-    #[serde(rename = "$value")]
-    pub set: Vec<Set>,
-}
-
-#[allow(unused)]
-#[derive(Debug, serde::Deserialize)]
-struct ContextData {
-    context_set: ContextSet,
-    #[serde(skip)]
-    tracked_set: Vec<()>,
-}
-
-/// A SLEIGH processor specification file
-#[derive(Debug, serde::Deserialize)]
-struct PSpec {
-    #[allow(unused)]
-    #[serde(skip)]
-    properties: Vec<()>,
-    #[allow(unused)]
-    programcounter: ProgramCounter,
-    context_data: ContextData,
-    #[allow(unused)]
-    #[serde(skip)]
-    register_data: Vec<()>,
-}
-
-// @todo: load more information from pspec/ldef files.
-fn get_spec_config(arch: target_lexicon::Architecture) -> Option<SpecConfig> {
-    use target_lexicon::{Aarch64Architecture, Architecture, ArmArchitecture, Mips32Architecture};
-
-    Some(match arch {
+    let (ldef, id) = match target.architecture {
         Architecture::Arm(variant) => {
-            let path = match variant {
+            let ldef = "ARM/data/languages/ARM.ldefs";
+            let id = match variant {
+                ArmArchitecture::Arm => "ARM:LE:32:v8",
+                ArmArchitecture::Armeb => "ARM:BE:32:v8",
+
+                ArmArchitecture::Armv4 => "ARM:LE:32:v4",
+                ArmArchitecture::Armv4t => "ARM:LE:32:v4t",
+                ArmArchitecture::Armv5t | ArmArchitecture::Armv5te | ArmArchitecture::Armv5tej => {
+                    "ARM:LE:32:v5t"
+                }
+                ArmArchitecture::Armv6
+                | ArmArchitecture::Armv6j
+                | ArmArchitecture::Armv6k
+                | ArmArchitecture::Armv6z
+                | ArmArchitecture::Armv6kz
+                | ArmArchitecture::Armv6t2
+                | ArmArchitecture::Armv6m => "ARM:LE:32:v6",
+
                 ArmArchitecture::Armv7
-                | ArmArchitecture::Thumbv7m
-                | ArmArchitecture::Thumbv7a
-                | ArmArchitecture::Thumbv7em
-                | ArmArchitecture::Thumbv7neon => "ARM/data/languages/ARM7_le.slaspec",
+                | ArmArchitecture::Armv7a
+                | ArmArchitecture::Armv7k
+                | ArmArchitecture::Armv7ve
+                | ArmArchitecture::Armv7m
+                | ArmArchitecture::Armv7r
+                | ArmArchitecture::Armv7s => "ARM:LE:32:v7",
+
+                ArmArchitecture::Armebv7r => "ARM:BE:32:v7",
+
                 ArmArchitecture::Armv8
-                | ArmArchitecture::Arm
-                | ArmArchitecture::Thumbv8mBase
-                | ArmArchitecture::Thumbv8mMain => "ARM/data/languages/ARM8_le.slaspec",
-                _ => return None,
+                | ArmArchitecture::Armv8a
+                | ArmArchitecture::Armv8_1a
+                | ArmArchitecture::Armv8_2a
+                | ArmArchitecture::Armv8_3a
+                | ArmArchitecture::Armv8_4a
+                | ArmArchitecture::Armv8_5a
+                | ArmArchitecture::Armv8mBase
+                | ArmArchitecture::Armv8mMain
+                | ArmArchitecture::Armv8r => "ARM:LE:32:v8",
+
+                ArmArchitecture::Thumbv4t => "ARM:LE:32:v8T",
+                ArmArchitecture::Thumbv5te => "ARM:LE:32:v8T",
+                ArmArchitecture::Thumbv6m => "ARM:LE:32:v8T",
+
+                // No specific v7 thumb target
+                ArmArchitecture::Thumbv7a
+                | ArmArchitecture::Thumbv7em
+                | ArmArchitecture::Thumbv7m
+                | ArmArchitecture::Thumbv7neon => "ARM:LE:32:v8T",
+
+                ArmArchitecture::Thumbv8mBase | ArmArchitecture::Thumbv8mMain => "ARM:LE:32:v8T",
+
+                ArmArchitecture::Thumbeb => "ARM:BE:32:v8T",
+                _ => return Err(BuildError::UnsupportedArchitecture),
             };
-            let context = match variant.is_thumb() {
-                false => vec![arm::ARM_MODE_CTX, arm::THUMB_MODE_CTX],
-                true => vec![arm::THUMB_MODE_CTX, arm::THUMB_MODE_CTX],
-            };
-            SpecConfig {
-                path,
-                processor_spec_path: None,
-                reg_pc: "pc",
-                reg_sp: "sp",
-                context,
-                init_registers: vec![],
-                temp_registers: vec![
-                    "tmpCY",
-                    "tmpOV",
-                    "tmpNG",
-                    "tmpZR",
-                    "shift_carry",
-                    "mult_addr",
-                    "mult_dat8",
-                    "mult_dat16",
-                ],
-                calling_cov: CallingCovSpec {
-                    integers: vec!["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7"],
-                    stack_align: 4,
-                    stack_offset: 0,
-                },
-                on_boot: arm::on_boot,
-            }
+            (ldef, id)
         }
-        Architecture::Aarch64(Aarch64Architecture::Aarch64) => SpecConfig {
-            path: "AARCH64/data/languages/AARCH64.slaspec",
-            processor_spec_path: None,
-            reg_pc: "pc",
-            reg_sp: "sp",
-            context: vec![generic::CTX],
-            init_registers: vec![
-                ("dczid_el0", 0x10), // disable DC ZVA instructions
-            ],
-            temp_registers: vec!["tmpCY", "tmpOV", "tmpNG", "tmpZR", "shift_carry"],
-            calling_cov: CallingCovSpec {
-                integers: vec!["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"],
-                stack_align: 8,
-                stack_offset: 0,
-            },
-            on_boot: generic::on_boot,
-        },
+        Architecture::Aarch64(variant) => {
+            let ldef = "AARCH64/data/languages/AARCH64.ldefs";
+            let id = match variant {
+                Aarch64Architecture::Aarch64 => "AARCH64:LE:64:v8A",
+                Aarch64Architecture::Aarch64be => "AARCH64:BE:64:v8A",
+                _ => return Err(BuildError::UnsupportedArchitecture),
+            };
+            (ldef, id)
+        }
+        Architecture::M68k => ("68000/data/languages/68000.ldefs", "68000:BE:32:Coldfire"),
         Architecture::Mips32(variant) => {
-            let path = match variant {
-                Mips32Architecture::Mips => "MIPS/data/languages/mips32be.slaspec",
-                Mips32Architecture::Mipsel => "MIPS/data/languages/mips32le.slaspec",
-                Mips32Architecture::Mipsisa32r6 => "MIPS/data/languages/mips32R6be.slaspec",
-                Mips32Architecture::Mipsisa32r6el => "MIPS/data/languages/mips32R6le.slaspec",
-                _ => return None,
+            let ldef = "MIPS/data/languages/mips.ldefs";
+            let id = match variant {
+                Mips32Architecture::Mips => "MIPS:BE:32:default",
+                Mips32Architecture::Mipsel => "MIPS:LE:32:default",
+                Mips32Architecture::Mipsisa32r6 => "MIPS:BE:32:R6",
+                Mips32Architecture::Mipsisa32r6el => "MIPS:LE:32:R6",
+                _ => return Err(BuildError::UnsupportedArchitecture),
             };
-            SpecConfig {
-                path,
-                processor_spec_path: None,
-                reg_pc: "pc",
-                reg_sp: "sp",
-                context: vec![generic::CTX],
-                init_registers: vec![],
-                temp_registers: vec![],
-                calling_cov: CallingCovSpec {
-                    integers: vec!["a0", "a1", "a2", "a3"],
-                    stack_align: 4,
-                    stack_offset: 0,
-                },
-                on_boot: generic::on_boot,
-            }
+            (ldef, id)
         }
-        Architecture::Msp430 => SpecConfig {
-            path: "TI_MSP430/data/languages/TI_MSP430X.slaspec",
-            processor_spec_path: None,
-            reg_pc: "PC",
-            reg_sp: "SP",
-            context: vec![generic::CTX],
-            init_registers: vec![],
-            temp_registers: vec![],
-            calling_cov: CallingCovSpec {
-                integers: vec!["R12", "R13", "R14", "R15"],
-                stack_align: 2,
-                stack_offset: 0,
-            },
-            on_boot: generic::on_boot,
-        },
-        Architecture::Powerpc => SpecConfig {
-            path: "PowerPC/data/languages/ppc_32_be.slaspec",
-            processor_spec_path: None,
-            reg_pc: "pc",
-            reg_sp: "r1",
-            context: vec![generic::CTX],
-            init_registers: vec![],
-            temp_registers: vec![],
-            calling_cov: CallingCovSpec {
-                integers: vec!["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7"],
-                stack_align: 4,
-                stack_offset: 0,
-            },
-            on_boot: generic::on_boot,
-        },
-        Architecture::Riscv32(_) => SpecConfig {
-            path: "RISCV/data/languages/riscv.ilp32d.slaspec",
-            processor_spec_path: None,
-            reg_pc: "pc",
-            reg_sp: "sp",
-            context: vec![generic::CTX],
-            init_registers: vec![],
-            temp_registers: vec![],
-            calling_cov: CallingCovSpec {
-                integers: vec!["a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7"],
-                stack_align: 4,
-                stack_offset: 0,
-            },
-            on_boot: generic::on_boot,
-        },
-        Architecture::Riscv64(_) => SpecConfig {
-            path: "RISCV/data/languages/riscv.lp64d.slaspec",
-            processor_spec_path: None,
-            reg_pc: "pc",
-            reg_sp: "sp",
-            context: vec![generic::CTX],
-            init_registers: vec![],
-            temp_registers: vec![],
-            calling_cov: CallingCovSpec {
-                integers: vec!["a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7"],
-                stack_align: 8,
-                stack_offset: 0,
-            },
-            on_boot: generic::on_boot,
-        },
-        Architecture::X86_32(_) => SpecConfig {
-            path: "x86/data/languages/x86-64.slaspec",
-            processor_spec_path: Some("x86/data/languages/x86.pspec"),
-            reg_pc: "EIP",
-            reg_sp: "ESP",
-            context: vec![],
-            init_registers: vec![],
-            temp_registers: vec![],
-            calling_cov: CallingCovSpec { integers: vec![], stack_align: 4, stack_offset: 0 },
-            on_boot: generic::on_boot,
-        },
-        Architecture::X86_64 => SpecConfig {
-            path: "x86/data/languages/x86-64.slaspec",
-            processor_spec_path: Some("x86/data/languages/x86-64.pspec"),
-            reg_pc: "RIP",
-            reg_sp: "RSP",
-            context: vec![],
-            init_registers: vec![],
-            temp_registers: vec![],
-            calling_cov: CallingCovSpec {
-                integers: vec!["RDI", "RSI", "RDX", "RCX", "R8", "R9"],
-                stack_align: 8,
-                stack_offset: 0,
-            },
-            on_boot: generic::on_boot,
-        },
-        Architecture::XTensa => SpecConfig {
-            path: "xtensa/data/languages/xtensa.slaspec",
-            processor_spec_path: None,
-            reg_pc: "pc",
-            reg_sp: "a1",
-            context: vec![generic::CTX],
-            init_registers: vec![],
-            temp_registers: vec![],
-            calling_cov: CallingCovSpec {
-                integers: vec!["a2", "a3", "a4", "a5", "a6", "a7"],
-                stack_align: 4,
-                stack_offset: 0,
-            },
-            on_boot: generic::on_boot,
-        },
-        Architecture::M68k => SpecConfig {
-            path: "68000/data/languages/coldfire.slaspec",
-            processor_spec_path: None,
-            reg_pc: "PC",
-            reg_sp: "SP",
-            context: vec![generic::CTX],
-            init_registers: vec![],
-            temp_registers: vec![],
-            calling_cov: CallingCovSpec { integers: vec![], stack_align: 4, stack_offset: 0 },
-            on_boot: generic::on_boot,
-        },
-        _ => return None,
-    })
-}
-
-pub fn build_sleigh_for(
-    arch: target_lexicon::Architecture,
-) -> Result<(sleigh_runtime::SleighData, u64), BuildError> {
-    let mut config = get_spec_config(arch).ok_or(BuildError::UnsupportedArchitecture)?;
-    let sleigh = build_sleigh(&mut config)?;
-    Ok((sleigh, config.context[0]))
-}
-
-fn build_sleigh(config: &mut SpecConfig) -> Result<sleigh_runtime::SleighData, BuildError> {
-    let path = get_path_to_ghidra_file(config.path);
-    if !path.exists() {
-        return Err(BuildError::SpecNotFound(path));
-    }
-    let sleigh = sleigh_compile::from_path(&path).map_err(BuildError::SpecCompileError)?;
-
-    let ctx = &mut config.context;
-    if let Some(pspec_path) = config.processor_spec_path {
-        let path = get_path_to_ghidra_file(pspec_path);
-        let pspec: PSpec = serde_xml_rs::from_reader(
-            std::fs::read(&path).map_err(|_| BuildError::SpecNotFound(path))?.as_slice(),
-        )
-        .map_err(|e| BuildError::FailedToParsePspec(e.to_string()))?;
-
-        let mut initial_ctx = 0_u64;
-        for entry in &pspec.context_data.context_set.set {
-            let field = sleigh
-                .get_context_field(&entry.name)
-                .ok_or_else(|| BuildError::UnknownContextField(entry.name.clone()))?;
-            field.field.set(&mut initial_ctx, entry.val as i64);
+        Architecture::Msp430 => {
+            ("TI_MSP430/data/languages/TI_MSP430.ldefs", "TI_MSP430X:LE:32:default")
         }
-        ctx.push(initial_ctx);
+        Architecture::Powerpc => ("PowerPC/data/languages/ppc.ldefs", "PowerPC:BE:32:default"),
+        Architecture::Powerpc64 => ("PowerPC/data/languages/ppc.ldefs", "PowerPC:BE:64:default"),
+        Architecture::Powerpc64le => ("PowerPC/data/languages/ppc.ldefs", "PowerPC:LE:64:default"),
+        Architecture::Riscv32(variant) => {
+            let ldef = "RISCV/data/languages/riscv.ldefs";
+            let id = match variant {
+                Riscv32Architecture::Riscv32 => "RISCV:LE:32:default",
+                Riscv32Architecture::Riscv32gc => "RISCV:LE:32:RV32GC",
+                Riscv32Architecture::Riscv32i => "RISCV:LE:32:RV32I",
+                Riscv32Architecture::Riscv32imc => "RISCV:LE:32:RV32IMC",
+                _ => return Err(BuildError::UnsupportedArchitecture),
+            };
+            (ldef, id)
+        }
+        Architecture::Riscv64(variant) => {
+            let ldef = "RISCV/data/languages/riscv.ldefs";
+            let id = match variant {
+                Riscv64Architecture::Riscv64 => "RISCV:LE:64:default",
+                Riscv64Architecture::Riscv64gc => "RISCV:LE:64:RV64GC",
+                _ => return Err(BuildError::UnsupportedArchitecture),
+            };
+            (ldef, id)
+        }
+        Architecture::X86_32(_) => ("x86/data/languages/x86.ldefs", "x86:LE:32:default"),
+        Architecture::X86_64h | Architecture::X86_64 => {
+            ("x86/data/languages/x86.ldefs", "x86:LE:64:default")
+        }
+        Architecture::XTensa => ("xtensa/data/languages/xtensa.ldefs", "Xtensa:LE:32:default"),
+        _ => return Err(BuildError::UnsupportedArchitecture),
+    };
+
+    let ldef_path = get_path_to_ghidra_file(ldef);
+    if !ldef_path.exists() {
+        return Err(BuildError::SpecNotFound(ldef_path));
     }
 
-    Ok(sleigh)
+    // @todo: use compiler specific variants for cspec when available.
+    sleigh_compile::ldef::build(&ldef_path, id, None)
+        .map_err(|e| BuildError::SpecCompileError(e.to_string()))
 }
 
 fn get_path_to_ghidra_file(file: &str) -> std::path::PathBuf {
@@ -488,8 +348,6 @@ mod generic {
         cpu.reset();
         cpu.regs.write_trunc(cpu.arch.reg_pc, entry);
     }
-
-    pub const CTX: u64 = 0;
 }
 
 pub mod x86 {

@@ -4,13 +4,14 @@ pub mod elf_dump;
 pub mod env;
 pub mod hw;
 pub mod injector;
+mod msp430;
 
 pub use icicle_cpu as cpu;
 pub use icicle_cpu::VmExit;
 pub use icicle_linux as linux;
 
 pub use crate::{
-    builder::{build, build_sleigh_for, x86, BuildError},
+    builder::{build, sleigh_init, x86, BuildError},
     injector::{CodeInjector, InjectorRef},
 };
 pub use icicle_cpu::BlockTable;
@@ -55,9 +56,6 @@ pub struct Vm {
     /// The offset to recompile from for block chaining.
     recompile_offset: usize,
 
-    /// Cached pointers that are used inside of the JIT
-    jit_ctx: icicle_jit::VmCtx,
-
     /// Snapshots at different icounts for reverse execution.
     snapshots: BTreeMap<u64, Rc<Snapshot>>,
 }
@@ -89,7 +87,6 @@ impl Vm {
             compiled_blocks: 0,
             last_recompile: std::time::Instant::now(),
             recompile_offset: 0,
-            jit_ctx: icicle_jit::VmCtx::new(),
             snapshots: BTreeMap::new(),
         }
     }
@@ -309,20 +306,25 @@ impl Vm {
         }
     }
 
-    /// Handles the case where we encounter an unhandled user-defined pcode operation during
-    /// execution.
+    /// Handles the case where we encounter an unhandled user-defined pcode operation or unsupported
+    /// pcode operation during execution.
     ///
     /// Note: Handlers for many of the commonly used operations are mapped in
     /// icicle-cpu/src/exec/helpers.rs.
     #[cold]
     fn handle_unimplemented_op(&mut self) -> VmExit {
-        let block = &self.code.blocks[self.cpu.block_id as usize];
-        let stmt = block.pcode.instructions[self.cpu.block_offset as usize];
-        tracing::error!(
-            "[{:#0x}] unknown pcode operation: {}",
-            self.cpu.read_pc(),
-            stmt.display(&self.cpu.arch.sleigh)
-        );
+        if let Some(stmt) = self
+            .code
+            .blocks
+            .get(self.cpu.block_id as usize)
+            .and_then(|block| block.pcode.instructions.get(self.cpu.block_offset as usize))
+        {
+            tracing::error!(
+                "[{:#0x}] unknown pcode operation: {}",
+                self.cpu.read_pc(),
+                stmt.display(&self.cpu.arch.sleigh)
+            );
+        }
         VmExit::UnhandledException((ExceptionCode::UnimplementedOp, self.cpu.exception.value))
     }
 
@@ -468,16 +470,7 @@ impl Vm {
 
         self.cpu.exception.clear();
 
-        // Update pointers stored in the JIT.
-        // @todo: optimize: this doesn't need to be done every time we enter the JIT.
-        self.jit_ctx.tlb_ptr = self.cpu.mem.tlb.as_mut();
-        for (dst, src) in self.jit_ctx.tracer_mem.iter_mut().zip(self.cpu.trace.storage_ptr()) {
-            *dst = src;
-        }
-
-        for (dst, hook) in self.jit_ctx.hooks.iter_mut().zip(self.cpu.get_hooks()) {
-            (dst.fn_ptr, dst.data_ptr) = hook.get_ptr();
-        }
+        self.cpu.update_jit_context();
 
         let mut next_addr = self.cpu.read_pc();
         if TRACE_EXEC {
@@ -494,7 +487,7 @@ impl Vm {
 
             // Safety: the JIT must generate code that is safe to execute.
             unsafe {
-                next_addr = jit_func(self.cpu.as_mut(), &mut self.jit_ctx, next_addr);
+                next_addr = jit_func(self.cpu.as_mut(), next_addr);
             }
         }
 
@@ -639,7 +632,7 @@ impl Vm {
         let key = self.get_block_key(addr);
         let group = match self.code.map.get(&key) {
             Some(group) => group,
-            None => return icicle_jit::runtime::call_address_not_translated(),
+            None => return icicle_jit::runtime::address_not_translated,
         };
 
         if self.prev_isa_mode != key.isa_mode as u8 {
@@ -655,7 +648,7 @@ impl Vm {
         // Check if there is a breakpoint set on any of the blocks in the group.
         for block in &self.code.blocks[group.range()] {
             if block.breakpoints > 0 {
-                return icicle_jit::runtime::call_block_contains_breakpoint();
+                return icicle_jit::runtime::block_contains_breakpoint;
             }
         }
 
@@ -672,7 +665,7 @@ impl Vm {
         let target = icicle_jit::CompilationTarget::new(&self.code.blocks, &blocks);
         if let Err(e) = self.jit.compile(&target) {
             tracing::error!("JIT compilation failed: {:?}", e);
-            return icicle_jit::runtime::call_jit_compilation_error();
+            return icicle_jit::runtime::jit_compilation_error;
         }
 
         let fn_ptr = self.jit.entry_points[&addr];

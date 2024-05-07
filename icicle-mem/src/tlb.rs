@@ -1,9 +1,9 @@
 //! A software address translation cache that acts similar to a translation lookaside buffer (TLB)
 
-use std::convert::TryInto;
+use std::ptr::NonNull;
 
 use crate::{
-    physical::{PageRef, OFFSET_BITS, PAGE_SIZE},
+    physical::{PageData, PageRef, OFFSET_BITS, PAGE_MASK, PAGE_SIZE},
     MemError, MemResult,
 };
 
@@ -56,7 +56,7 @@ fn fmt_tlb_entry(
         true => write!(f, "\ttag=<INVALID_TAG>, ")?,
         false => write!(f, "\ttag={:#013x}, ", entry.tag & ((1 << TLB_TAG_BITS) - 1))?,
     }
-    match entry.page {
+    match entry.get_page(0) {
         Some(page) => writeln!(f, "index={index:#05x}, page={:p}", page.ptr),
         _ => writeln!(f, "index={index:#05x}, page=null"),
     }
@@ -179,34 +179,39 @@ impl TranslationCache {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct TLBEntry {
-    pub tag: u64,
-    pub page: Option<PageRef>,
+    tag: u64,
+    guest_to_host_offset: u64,
 }
 
 impl Default for TLBEntry {
     fn default() -> Self {
-        Self { tag: u64::MAX, page: None }
+        Self { tag: u64::MAX, guest_to_host_offset: 0 }
     }
 }
 
 impl TLBEntry {
+    pub const fn tag_mask() -> u64 {
+        ((1_u64 << TLB_TAG_BITS) - 1) << (OFFSET_BITS + TLB_INDEX_BITS)
+    }
+
     #[inline(always)]
     pub fn tag(addr: u64) -> u64 {
-        (addr >> (OFFSET_BITS + TLB_INDEX_BITS)) & ((1 << TLB_TAG_BITS) - 1)
+        addr & Self::tag_mask()
     }
 
     #[inline(always)]
     fn clear(&mut self, addr: u64) {
         if Self::tag(addr) == self.tag {
             self.tag = u64::MAX;
-            self.page = None;
+            self.guest_to_host_offset = 0;
         }
     }
 
     #[inline(always)]
     fn set(&mut self, addr: u64, page: PageRef) {
         self.tag = Self::tag(addr);
-        self.page = Some(page);
+        let base = addr & !PAGE_MASK;
+        self.guest_to_host_offset = (page.ptr.as_ptr() as u64).wrapping_sub(base);
     }
 
     /// Get the page data associated the address at this TLB entry, returning `None` if the entry is
@@ -214,7 +219,11 @@ impl TLBEntry {
     #[inline(always)]
     fn get_page(&self, addr: u64) -> Option<PageRef> {
         if Self::tag(addr) == self.tag {
-            return self.page;
+            let base = addr & !PAGE_MASK;
+            let page = PageRef::new(NonNull::new(
+                base.wrapping_add(self.guest_to_host_offset) as *mut PageData
+            )?);
+            return Some(page);
         }
         None
     }
@@ -224,6 +233,6 @@ impl TLBEntry {
 fn debug_tlb_lookup(addr: u64) {
     let tag = TLBEntry::tag(addr);
     let index = TranslationCache::index(addr);
-    let offset = addr & ((1 << OFFSET_BITS) - 1);
+    let offset = addr & PAGE_MASK;
     eprintln!("tag={tag:#0x}, index={index:#0x}, offset={offset:#0x}");
 }

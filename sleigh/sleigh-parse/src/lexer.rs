@@ -1,5 +1,3 @@
-use std::convert::TryInto;
-
 use crate::{error::Error, Span};
 
 pub type SourceId = u32;

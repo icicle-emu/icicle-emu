@@ -23,7 +23,7 @@ pub use crate::{
     exit::VmExit,
     lifter::BlockGroup,
     regs::{RegValue, Regs, ValueSource, VarSource},
-    trace::{HookHandler, HookTrampoline, InstHook, StoreRef, TraceStore},
+    trace::{HookData, HookHandler, HookTrampoline, InstHook, StoreRef, TraceStore},
 };
 pub use icicle_mem as mem;
 pub use icicle_mem::Mmu;
@@ -175,7 +175,7 @@ pub enum ExceptionCode {
 
     Syscall = 0x0101,
     CpuStateChanged = 0x0102,
-    DivideByZero = 0x0103,
+    DivisionException = 0x0103,
 
     ReadUnmapped = 0x0201,
     ReadPerm = 0x0202,
@@ -211,6 +211,7 @@ pub enum ExceptionCode {
 
     JitError = 0x3001,
     InternalError = 0x3002,
+    UnmappedRegister = 0x3003,
 
     UnknownError,
 }
@@ -227,7 +228,7 @@ impl ExceptionCode {
 
             0x0101 => Self::Syscall,
             0x0102 => Self::CpuStateChanged,
-            0x0103 => Self::DivideByZero,
+            0x0103 => Self::DivisionException,
 
             0x0201 => Self::ReadUnmapped,
             0x0202 => Self::ReadPerm,
@@ -263,6 +264,7 @@ impl ExceptionCode {
 
             0x3001 => Self::JitError,
             0x3002 => Self::InternalError,
+            0x3003 => Self::UnmappedRegister,
 
             _ => {
                 if cfg!(debug_assertions) {
@@ -332,6 +334,7 @@ impl From<icicle_mem::MemError> for ExceptionCode {
             MemError::OutOfMemory => Self::OutOfMemory,
             MemError::SelfModifyingCode => Self::SelfModifyingCode,
             MemError::AddressOverflow => Self::AddressOverflow,
+            MemError::UnmappedRegister => Self::UnmappedRegister,
 
             // These are errors that should be handled by the memory subsystem.
             MemError::Unallocated | MemError::Unknown => Self::UnknownError,
@@ -342,11 +345,19 @@ impl From<icicle_mem::MemError> for ExceptionCode {
 impl From<DecodeError> for ExceptionCode {
     fn from(err: DecodeError) -> Self {
         match err {
-            DecodeError::InvalidInstruction => ExceptionCode::InvalidInstruction,
+            // Convert unsupported varnode ops into unimplemented op exceptions to better indicate
+            // that the error is a consequence of Icicle's execution engine not necessarily the
+            // SLEIGH runtime. This typically only occurs in incomplete AVX instructions.
+            DecodeError::LifterError(sleigh_runtime::LifterError::UnsupportedVarNodeSize(_)) => {
+                Self::UnimplementedOp
+            }
+            DecodeError::InvalidInstruction | DecodeError::LifterError(_) => {
+                ExceptionCode::InvalidInstruction
+            }
             DecodeError::NonExecutableMemory => ExceptionCode::ExecViolation,
             DecodeError::BadAlignment => ExceptionCode::ExecUnaligned,
             DecodeError::DisassemblyChanged => ExceptionCode::SelfModifyingCode,
-            DecodeError::OptimizationError => ExceptionCode::UnknownError,
+            DecodeError::UnimplementedOp => ExceptionCode::UnimplementedOp,
         }
     }
 }

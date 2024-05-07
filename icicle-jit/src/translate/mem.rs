@@ -1,12 +1,10 @@
 //! Module for interacting with memory inside of the JIT.
 
-use std::convert::TryInto;
-
 use cranelift::prelude::{
     types, Block, InstBuilder, IntCC, MemFlags, StackSlotData, StackSlotKind::ExplicitSlot, Type,
     Value,
 };
-use cranelift_codegen::ir::Endianness;
+use cranelift_codegen::ir::{AliasRegion, Endianness};
 use icicle_cpu::mem::{
     self, perm,
     physical::{PageData, OFFSET_BITS},
@@ -41,11 +39,31 @@ impl AccessKind {
 /// Generate code for checking that `addr` is aligned to at least `bytes`
 fn check_alignment(trans: &mut Translator, addr: Value, bytes: u8, unaligned_block: Block) {
     if bytes == 1 {
-        // We know statically that the address is aligned.
+        // Single byte loads are always fully aligned
         return;
     }
 
     let cond = trans.builder.ins().band_imm(addr, (bytes - 1) as i64);
+    trans.branch_non_zero(cond, unaligned_block);
+}
+
+/// Generate code for checking whether an access of `size` bytes at `addr` lies within a single page
+/// of size and alignment `page_size`.
+fn check_same_page(
+    trans: &mut Translator,
+    addr: Value,
+    size: u8,
+    page_size: u64,
+    unaligned_block: Block,
+) {
+    if size == 1 {
+        // Single byte loads always lie within a single page
+        return;
+    }
+
+    let masked = trans.builder.ins().band_imm(addr, (page_size - 1) as i64);
+    let next = trans.builder.ins().iadd_imm(masked, (size - 1) as i64);
+    let cond = trans.builder.ins().band_imm(next, -(page_size as i64));
     trans.branch_non_zero(cond, unaligned_block);
 }
 
@@ -65,7 +83,7 @@ fn lshift_and_mask(trans: &mut Translator, value: Value, shift: i64, mask: i64) 
 /// Generate code for looking up an entry in the TLB and comparing the tag.
 fn tlb_lookup(trans: &mut Translator, addr: Value, kind: AccessKind, not_found: Block) -> Value {
     // TLB reads do not alias with loads to actual memory.
-    let mem_flags = MemFlags::trusted().with_vmctx();
+    let mem_flags = MemFlags::trusted().with_alias_region(Some(AliasRegion::Vmctx));
 
     // Find the host address that contains the TLB entry for this address.
     let tlb_entry_size: i64 = std::mem::size_of::<TLBEntry>().try_into().unwrap();
@@ -82,16 +100,13 @@ fn tlb_lookup(trans: &mut Translator, addr: Value, kind: AccessKind, not_found: 
     let kind_offset = kind.tlb_offset();
     let expected_tag = trans.builder.ins().load(types::I64, mem_flags, tlb_addr, kind_offset);
 
-    // Check that the tag matches. Note we can avoid the mask here, since all non-tag bits are
-    // already zeroed.
-    let tag_shift = (OFFSET_BITS + TLB_INDEX_BITS) as i64;
-    // let tag_mask = ((1_u64 << mem::tlb::TLB_TAG_BITS) - 1) as i64;
-    // let tag = rshift_and_mask(trans, addr, tag_shift, tag_mask);
-    let tag = trans.builder.ins().ushr_imm(addr, tag_shift);
+    // Check that the tag matches.
+    let tag_mask = TLBEntry::tag_mask();
+    let tag = trans.builder.ins().band_imm(addr, tag_mask as i64);
     let cond = trans.builder.ins().icmp(IntCC::Equal, tag, expected_tag);
     trans.branch_zero(cond, not_found);
 
-    // Found matching entry in TLB, so load the pointer
+    // Found matching entry in TLB, so load the guest->host offset.
     trans.builder.ins().load(types::I64, mem_flags, tlb_addr, kind_offset + 8)
 }
 
@@ -104,7 +119,7 @@ fn tlb_lookup_const(
     not_found: Block,
 ) -> Value {
     // TLB reads do not alias with loads to actual memory.
-    let mem_flags = MemFlags::trusted().with_vmctx();
+    let mem_flags = MemFlags::trusted().with_alias_region(Some(AliasRegion::Vmctx));
 
     // Find the host address that contains the TLB entry for this address.
     let tlb_entry_size: i64 = std::mem::size_of::<TLBEntry>().try_into().unwrap();
@@ -119,8 +134,7 @@ fn tlb_lookup_const(
     let expected_tag = trans.builder.ins().load(types::I64, mem_flags, tlb_addr, kind_offset);
 
     // Check that the tag matches
-    let tag =
-        trans.builder.ins().iconst(types::I64, icicle_cpu::mem::tlb::TLBEntry::tag(addr) as i64);
+    let tag = trans.builder.ins().iconst(types::I64, TLBEntry::tag(addr) as i64);
     let cond = trans.builder.ins().icmp(IntCC::Equal, tag, expected_tag);
     trans.branch_zero(cond, not_found);
 
@@ -134,8 +148,12 @@ fn check_perm(trans: &mut Translator, host_addr: Value, size: u8, perm: u8, inva
     let perm_offset: i32 = offset_of!(PageData, perm).try_into().unwrap();
 
     let ty = sized_int(size);
-    let value =
-        trans.builder.ins().load(ty, MemFlags::trusted().with_heap(), host_addr, perm_offset);
+    let value = trans.builder.ins().load(
+        ty,
+        MemFlags::trusted().with_alias_region(Some(AliasRegion::Heap)),
+        host_addr,
+        perm_offset,
+    );
 
     // Duplicate `perm` to cover all bytes that we need to check
     let perm = splat_const(trans, perm, ty);
@@ -180,7 +198,7 @@ fn splat_const(trans: &mut Translator, value: u8, ty: Type) -> Value {
 fn load_host(trans: &mut Translator, addr: Value, size: u8) -> Value {
     let ty = sized_int(size);
 
-    let mut flags = MemFlags::new().with_notrap().with_heap();
+    let mut flags = MemFlags::new().with_notrap().with_alias_region(Some(AliasRegion::Heap));
     flags.set_endianness(trans.ctx.endianness);
     let mut result = trans.builder.ins().load(ty, flags, addr, 0);
 
@@ -209,14 +227,6 @@ pub(super) fn load_ram(trans: &mut Translator, guest_addr: pcode::Value, output:
 
     let guest_addr_val = trans.read_zxt(guest_addr, 8);
 
-    if let pcode::Value::Const(addr, _) = guest_addr {
-        if !is_aligned(addr, size) {
-            let value = load_fallback(trans, output, guest_addr_val);
-            trans.write(output, value);
-            return;
-        }
-    }
-
     let success_block = trans.builder.create_block();
     trans.builder.append_block_param(success_block, sized_int(size));
 
@@ -233,7 +243,7 @@ pub(super) fn load_ram(trans: &mut Translator, guest_addr: pcode::Value, output:
     );
 
     // inline access (fallthrough):
-    {
+    if let Some(host_addr) = host_addr {
         let value = load_host(trans, host_addr, size);
         trans.builder.ins().jump(success_block, &[value]);
     }
@@ -281,8 +291,8 @@ fn load_fallback(trans: &mut Translator, output: pcode::VarNode, guest_addr: Val
     value
 }
 
-fn store_host(trans: &mut Translator, addr: Value, mut value: Value, size: u8) {
-    let mut flags = MemFlags::new().with_notrap().with_heap();
+pub(super) fn store_host(trans: &mut Translator, addr: Value, mut value: Value, size: u8) {
+    let mut flags = MemFlags::new().with_notrap().with_alias_region(Some(AliasRegion::Heap));
     flags.set_endianness(trans.ctx.endianness);
     // Setting the endianness doesn't actually do anything in x86_64 backend for cranelift
     // currently, so we manually perform a byte swap operation.
@@ -309,13 +319,6 @@ pub(super) fn store_ram(trans: &mut Translator, guest_addr: pcode::Value, value:
     let store_size = value.size();
     let value = trans.read_int(value);
 
-    if let pcode::Value::Const(addr, _) = guest_addr {
-        if !is_aligned(addr, size) {
-            store_fallback(trans, size, guest_addr_val, value);
-            return;
-        }
-    }
-
     let success_block = trans.builder.create_block();
     let fallback_block = trans.builder.create_block();
     trans.builder.set_cold_block(fallback_block);
@@ -330,7 +333,7 @@ pub(super) fn store_ram(trans: &mut Translator, guest_addr: pcode::Value, value:
     );
 
     // inline access (fallthrough):
-    {
+    if let Some(host_addr) = host_addr {
         store_host(trans, host_addr, value, store_size);
         trans.builder.ins().jump(success_block, &[]);
     }
@@ -380,27 +383,25 @@ fn try_inline_access(
     size: u8,
     kind: AccessKind,
     fallback_block: Block,
-) -> Value {
+) -> Option<Value> {
     if let pcode::Value::Const(guest_addr, _) = guest_addr {
         return try_inline_access_const(trans, guest_addr, size, kind, fallback_block);
     }
-
-    if size != 1 {
-        // The JIT currently only supports fully aligned loads/stores, so check that here. This also
-        // ensures that any loads/stores will not cross page boundaries.
-        //
-        // @todo: consider supporting unaligned loads/stores that do not cross page boundaries.
+    const ALLOW_UNALIGNED_SAME_PAGE_LOADS: bool = true;
+    if ALLOW_UNALIGNED_SAME_PAGE_LOADS {
+        check_same_page(trans, guest_addr_val, size, trans.ctx.page_size, fallback_block);
+    }
+    else {
         check_alignment(trans, guest_addr_val, size, fallback_block);
     }
 
     // Translate the guest address to a host address.
-    let page_ptr = tlb_lookup(trans, guest_addr_val, kind, fallback_block);
-    let offset = trans.builder.ins().band_imm(guest_addr_val, ((1_u64 << OFFSET_BITS) - 1) as i64);
-    let host_addr = trans.builder.ins().iadd(page_ptr, offset);
+    let guest_to_host_offset = tlb_lookup(trans, guest_addr_val, kind, fallback_block);
+    let host_addr = trans.builder.ins().iadd(guest_addr_val, guest_to_host_offset);
 
     check_perm(trans, host_addr, size, kind.perm(), fallback_block);
 
-    host_addr
+    Some(host_addr)
 }
 
 fn try_inline_access_const(
@@ -409,15 +410,19 @@ fn try_inline_access_const(
     size: u8,
     kind: AccessKind,
     fallback_block: Block,
-) -> Value {
-    let page_ptr = tlb_lookup_const(trans, guest_addr, kind, fallback_block);
-    let offset =
-        trans.builder.ins().iconst(types::I64, (guest_addr & ((1_u64 << OFFSET_BITS) - 1)) as i64);
-    let host_addr = trans.builder.ins().iadd(page_ptr, offset);
+) -> Option<Value> {
+    if !same_page(guest_addr, size, trans.ctx.page_size) {
+        // The access will cross a page boundary, so handle using a fallback.
+        trans.builder.ins().jump(fallback_block, &[]);
+        return None;
+    }
+
+    let guest_to_host_offset = tlb_lookup_const(trans, guest_addr, kind, fallback_block);
+    let host_addr = trans.builder.ins().iadd_imm(guest_to_host_offset, guest_addr as i64);
 
     check_perm(trans, host_addr, size, kind.perm(), fallback_block);
 
-    host_addr
+    Some(host_addr)
 }
 
 /// Swaps the byteorder of `input`
@@ -465,6 +470,6 @@ fn bswap(trans: &mut Translator, input: Value, ty: types::Type) -> Value {
     }
 }
 
-fn is_aligned(value: u64, size: u8) -> bool {
-    value & (size as u64 - 1) == 0
+fn same_page(value: u64, size: u8, page_size: u64) -> bool {
+    (value & page_size) == ((value + (size as u64 - 1)) & page_size)
 }

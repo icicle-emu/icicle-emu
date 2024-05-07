@@ -1,13 +1,11 @@
 use std::mem::size_of;
 
+use cranelift::codegen::ir::AliasRegion;
 use cranelift::prelude::*;
-use icicle_cpu::{Cpu, ExceptionCode};
+use icicle_cpu::{cpu::JitContext, Cpu, ExceptionCode, HookData};
 use memoffset::offset_of;
 
-use crate::{
-    translate::{is_jit_supported_size, sized_float, sized_int, Translator},
-    HookData, TracerMemEntry, VmCtx,
-};
+use crate::translate::{is_jit_supported_size, sized_float, sized_int, Translator, VmPtr};
 
 pub enum Overflow {
     True,
@@ -22,13 +20,14 @@ pub(super) struct Ctx<'a, 'b> {
 
 impl<'a, 'b> Ctx<'a, 'b> {
     fn load_tracer_mem_ptr(&mut self, id: u16) -> Value {
-        let ptr_type = Type::int_with_byte_size(size_of::<*mut TracerMemEntry>() as u16).unwrap();
-        let offset: i32 =
-            offset_of!(VmCtx, tracer_mem) as i32 + id as i32 * ptr_type.bytes() as i32;
+        let ptr_type = Type::int_with_byte_size(size_of::<*mut *mut u8>() as u16).unwrap();
+        let offset: i32 = VmPtr::jit_ctx_offset()
+            + offset_of!(JitContext, tracer_mem) as i32
+            + id as i32 * ptr_type.bytes() as i32;
         self.trans.builder.ins().load(
             ptr_type,
-            MemFlags::trusted().with_vmctx(),
-            self.trans.jit_ctx,
+            MemFlags::trusted().with_alias_region(Some(AliasRegion::Vmctx)),
+            self.trans.vm_ptr.0,
             offset,
         )
     }
@@ -43,20 +42,21 @@ impl<'a, 'b> Ctx<'a, 'b> {
     }
 
     pub fn get_hook(&mut self, id: u16) -> (Value, Value) {
-        let base: i32 =
-            (offset_of!(VmCtx, hooks) + id as usize * size_of::<HookData>()).try_into().unwrap();
+        let base: i32 = VmPtr::jit_ctx_offset()
+            + offset_of!(JitContext, hooks) as i32
+            + (id as usize * size_of::<HookData>()) as i32;
 
         let fn_ptr = self.trans.builder.ins().load(
             Type::int_with_byte_size(size_of::<fn(*mut Cpu, u64, *mut ())>() as u16).unwrap(),
-            MemFlags::trusted().with_vmctx(),
-            self.trans.jit_ctx,
+            MemFlags::trusted().with_alias_region(Some(AliasRegion::Vmctx)),
+            self.trans.vm_ptr.0,
             base + offset_of!(HookData, fn_ptr) as i32,
         );
 
         let data_ptr = self.trans.builder.ins().load(
             Type::int_with_byte_size(size_of::<fn(*mut ())>() as u16).unwrap(),
-            MemFlags::trusted().with_vmctx(),
-            self.trans.jit_ctx,
+            MemFlags::trusted().with_alias_region(Some(AliasRegion::Vmctx)),
+            self.trans.vm_ptr.0,
             base + offset_of!(HookData, data_ptr) as i32,
         );
 
@@ -75,6 +75,16 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let pc_sized = self.trans.resize_int(current_pc, 8, reg_pc.size);
         self.trans.vm_ptr.store_var(&mut self.trans.builder, reg_pc, pc_sized);
 
+        let (fn_ptr, data_ptr) = self.get_hook(id);
+        let args = [data_ptr, self.trans.vm_ptr.0, current_pc];
+        self.trans.builder.ins().call_indirect(self.trans.hook_sig, fn_ptr, &args);
+    }
+
+    /// Calls a hook function with lower overhead, but with potentially stale state (register
+    /// flushing is skipped).
+    #[allow(unused)] // @todo: expose this to pcode ops.
+    pub fn call_thin_hook(&mut self, id: pcode::HookId) {
+        let current_pc = self.trans.builder.ins().iconst(types::I64, self.trans.last_addr as i64);
         let (fn_ptr, data_ptr) = self.get_hook(id);
         let args = [data_ptr, self.trans.vm_ptr.0, current_pc];
         self.trans.builder.ins().call_indirect(self.trans.hook_sig, fn_ptr, &args);
@@ -158,7 +168,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
         self.trans.write(self.instruction.output, result);
     }
 
-    pub fn emit_div_op(&mut self, op: fn(&mut Translator, Value, Value) -> Value) {
+    pub fn emit_div_op(&mut self, op: fn(&mut Translator, Value, Value) -> Value, signed: bool) {
         if self.instruction.output.size > 8 {
             // 128-bit division is not currently supported in cranelift
             self.trans.interpret(self.instruction);
@@ -175,13 +185,32 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let err_block = self.trans.builder.create_block();
         self.trans.builder.set_cold_block(err_block);
 
+        if signed {
+            // Overflow only occurs when `a = -2^{bits-1} and b = -1`
+            let overflow = {
+                let a_val: u64 = 1 << ((self.instruction.output.size as u32 * 8) - 1);
+                let a_cond = self.trans.builder.ins().icmp_imm(IntCC::Equal, a, a_val as i64);
+                let b_val = u64::MAX >> (u64::BITS - self.instruction.output.size as u32 * 8);
+                let b_cond = self.trans.builder.ins().icmp_imm(IntCC::Equal, b, b_val as i64);
+                self.trans.builder.ins().band(a_cond, b_cond)
+            };
+
+            let next_block = self.trans.builder.create_block();
+
+            self.trans.builder.ins().brif(overflow, err_block, &[], next_block, &[]);
+
+            // next:
+            self.trans.builder.switch_to_block(next_block);
+            self.trans.builder.seal_block(next_block);
+        }
+
         self.trans.builder.ins().brif(b, ok_block, &[], err_block, &[]);
 
         // err:
         {
             self.trans.builder.switch_to_block(err_block);
             self.trans.builder.seal_block(err_block);
-            self.trans.exit_with_exception(ExceptionCode::DivideByZero, 0);
+            self.trans.exit_with_exception(ExceptionCode::DivisionException, 0);
         }
 
         // ok:
@@ -209,7 +238,6 @@ impl<'a, 'b> Ctx<'a, 'b> {
         };
 
         let raw_shift = self.trans.read_int(inputs[1]);
-        let shift = self.trans.resize_int(raw_shift, inputs[1].size(), 2);
 
         // Oversized shifts are not masked in p-code, so check whether this shift will overflow, and
         // correct the result.
@@ -219,7 +247,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let overflow = match inputs[1] {
             pcode::Value::Var(_) => {
                 let max_shift =
-                    self.trans.builder.ins().iconst(sized_int(inputs[1].size()), max_shift as i64);
+                    self.trans.load_const(sized_int(inputs[1].size()), max_shift as u64);
                 let overflow =
                     self.trans.builder.ins().icmp(IntCC::UnsignedGreaterThan, raw_shift, max_shift);
                 Overflow::Unknown(overflow)
@@ -230,7 +258,11 @@ impl<'a, 'b> Ctx<'a, 'b> {
             },
         };
 
-        let result = op(self.trans, ty, x, shift, overflow);
+        // Some backends may not like oversized shift operands and we never use this value if the
+        // upper bits are set so it is safe to truncate here.
+        let truncated_shift = self.trans.resize_int(raw_shift, inputs[1].size(), 2);
+
+        let result = op(self.trans, ty, x, truncated_shift, overflow);
         self.trans.write(output, result);
     }
 
@@ -253,15 +285,15 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let a = self.trans.read_float(inputs[0]);
         let b = self.trans.read_float(inputs[1]);
         let result = op(self.trans, a, b);
+        let result = self.trans.bitcast(sized_int(self.instruction.output.size), result);
         self.trans.write(self.instruction.output, result);
-        self.trans.invalidate_var(self.instruction.output);
     }
 
     pub fn emit_float_unary_op(&mut self, op: fn(&mut Translator, Value) -> Value) {
         let x = self.trans.read_float(self.instruction.inputs.first());
         let result = op(self.trans, x);
+        let result = self.trans.bitcast(sized_int(self.instruction.output.size), result);
         self.trans.write(self.instruction.output, result);
-        self.trans.invalidate_var(self.instruction.output);
     }
 
     pub fn emit_float_is_nan(&mut self) {
@@ -300,6 +332,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
             true => self.trans.builder.ins().fpromote(sized_float(output.size), x),
             false => self.trans.builder.ins().fdemote(sized_float(output.size), x),
         };
+        let result = self.trans.bitcast(sized_int(output.size), result);
         self.trans.write(output, result);
     }
 
@@ -307,7 +340,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let input = self.instruction.inputs.first();
         let output = self.instruction.output;
 
-        if ![4, 8].contains(&output.size) {
+        if ![4, 8].contains(&output.size) || ![4, 8].contains(&input.size()) {
             // Should be unreachable, currently we rewrite these operations to use f32/f64 then
             // perform a float-to-float cast to get the final value, but we might want to support
             // direct conversions in the future.
@@ -315,6 +348,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
         }
         let x = self.trans.read_int(input);
         let result = self.trans.builder.ins().fcvt_from_sint(sized_float(output.size), x);
+        let result = self.trans.bitcast(sized_int(output.size), result);
         self.trans.write(output, result);
     }
 
@@ -322,12 +356,13 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let input = self.instruction.inputs.first();
         let output = self.instruction.output;
 
-        if ![4, 8].contains(&output.size) {
+        if ![4, 8].contains(&output.size) || ![4, 8].contains(&input.size()) {
             // Should be unreachable (see above).
             return self.trans.interpret(self.instruction);
         }
         let x = self.trans.read_int(input);
         let result = self.trans.builder.ins().fcvt_from_uint(sized_float(output.size), x);
+        let result = self.trans.bitcast(sized_int(output.size), result);
         self.trans.write(output, result);
     }
 
@@ -447,11 +482,11 @@ pub(super) fn int_left(
     of: Overflow,
 ) -> Value {
     match of {
-        Overflow::True => trans.builder.ins().iconst(ty, 0),
+        Overflow::True => trans.load_const(ty, 0),
         Overflow::False => trans.builder.ins().ishl(x, shift),
         Overflow::Unknown(overflow) => {
             let x = trans.builder.ins().ishl(x, shift);
-            let zero = trans.builder.ins().iconst(ty, 0);
+            let zero = trans.load_const(ty, 0);
             trans.builder.ins().select(overflow, zero, x)
         }
     }
@@ -471,11 +506,11 @@ pub(super) fn int_right(
     of: Overflow,
 ) -> Value {
     match of {
-        Overflow::True => trans.builder.ins().iconst(ty, 0),
+        Overflow::True => trans.load_const(ty, 0),
         Overflow::False => trans.builder.ins().ushr(x, shift),
         Overflow::Unknown(overflow) => {
             let x = trans.builder.ins().ushr(x, shift);
-            let zero = trans.builder.ins().iconst(ty, 0);
+            let zero = trans.load_const(ty, 0);
             trans.builder.ins().select(overflow, zero, x)
         }
     }
@@ -651,7 +686,6 @@ mod test {
 
     struct Checker {
         cpu: RefCell<Box<Cpu>>,
-        jit_ctx: RefCell<crate::VmCtx>,
         jit: crate::JIT,
         inst: pcode::Instruction,
         a: pcode::VarNode,
@@ -678,16 +712,7 @@ mod test {
             let inst = pcode::Instruction::from((out, op, (a, b)));
             let jit_fn = compile_instruction(&mut jit, inst);
 
-            Self {
-                cpu: RefCell::new(cpu),
-                jit_ctx: RefCell::new(crate::VmCtx::new()),
-                jit,
-                inst,
-                a,
-                b,
-                out,
-                jit_fn,
-            }
+            Self { cpu: RefCell::new(cpu), jit, inst, a, b, out, jit_fn }
         }
 
         fn eval_binop(&self, a: u32, b: u32) -> (u32, u32) {
@@ -703,10 +728,9 @@ mod test {
             cpu.write_var(self.b, b);
             cpu.write_trunc(self.out, 0xaaaa_aaaa_u32);
 
-            let mut jit_ctx = self.jit_ctx.borrow_mut();
-            jit_ctx.tlb_ptr = cpu.mem.tlb.as_mut();
+            cpu.jit_ctx.tlb_ptr = cpu.mem.tlb.as_mut();
             unsafe {
-                (self.jit_fn)((*cpu).as_mut() as *mut Cpu, &mut jit_ctx, 0x0);
+                (self.jit_fn)((*cpu).as_mut() as *mut Cpu, 0x0);
             }
             let jit_out = cpu.read_dynamic(self.out.into()).zxt();
             (interpreter_out, jit_out)

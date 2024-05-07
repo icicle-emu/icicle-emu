@@ -24,6 +24,7 @@ fn main() {
 
 enum TestMode {
     All,
+    AllNoOpt,
     Debug,
     One(String, String),
     Trace(String, String),
@@ -36,6 +37,7 @@ fn run() -> anyhow::Result<()> {
     let mode_str = std::env::args().nth(1);
     let mode = match mode_str.as_deref() {
         Some("all") => TestMode::All,
+        Some("all-no-opt") => TestMode::AllNoOpt,
         Some("debug") => TestMode::Debug,
         Some("bench") => TestMode::Bench,
         Some("fib") => TestMode::Fib,
@@ -84,7 +86,12 @@ fn run() -> anyhow::Result<()> {
         }
         vm.cpu.mem.detect_self_modifying_code = false;
 
-        let result = run_test_and_print(&mut vm, &config);
+        let result = match std::panic::catch_unwind::<_, anyhow::Result<_>>(
+            std::panic::AssertUnwindSafe(|| run_test_and_print(&mut vm, &config)),
+        ) {
+            Ok(result) => result,
+            Err(e) => Err(anyhow::format_err!("Internal emulator panic: {:?}", e)),
+        };
 
         if let Some(il_dump) = &vm.jit.il_dump {
             std::fs::write("translated.clif", il_dump).unwrap();
@@ -93,19 +100,33 @@ fn run() -> anyhow::Result<()> {
         result
     };
 
+    const ALL_TESTS: &[(&str, &str)] = &[
+        ("x86_64", "x64"),
+        ("i386", "x86"),
+        ("mipsel", "mipsel"),
+        ("mips", "mips"),
+        ("riscv64", "riscv64gc"),
+        ("riscv32", "riscv32gc"),
+        ("msp430", "msp430x"),
+        ("arm", "arm"),
+        ("aarch64", "aarch64"),
+        ("powerpc", "powerpc"),
+        ("m68k", "m68k"),
+    ];
+
     match mode {
         TestMode::All => {
-            test_icicle_cpu("x86_64", TestConfig::default("x64"))?;
-            test_icicle_cpu("i386", TestConfig::default("x86"))?;
-            test_icicle_cpu("mipsel", TestConfig::default("mipsel"))?;
-            test_icicle_cpu("mips", TestConfig::default("mips"))?;
-            test_icicle_cpu("riscv64", TestConfig::default("riscv64gc"))?;
-            test_icicle_cpu("riscv32", TestConfig::default("riscv32gc"))?;
-            test_icicle_cpu("msp430", TestConfig::default("msp430x"))?;
-            test_icicle_cpu("arm", TestConfig::default("arm"))?;
-            test_icicle_cpu("aarch64", TestConfig::default("aarch64"))?;
-            test_icicle_cpu("powerpc", TestConfig::default("powerpc"))?;
-            test_icicle_cpu("m68k", TestConfig::default("m68k"))?;
+            for (target, test) in ALL_TESTS {
+                test_icicle_cpu(target, TestConfig::default(test))?;
+            }
+        }
+        TestMode::AllNoOpt => {
+            for (target, test) in ALL_TESTS {
+                test_icicle_cpu(target, TestConfig {
+                    optimize: false,
+                    ..TestConfig::default(test)
+                })?;
+            }
         }
         TestMode::Debug => {
             test_icicle_cpu("x86_64", TestConfig {
@@ -163,10 +184,10 @@ fn run_bench(triple: &str, config: &TestConfig) -> anyhow::Result<()> {
     let triple: target_lexicon::Triple =
         triple.parse().map_err(|_| anyhow::format_err!("Unknown target: {}", triple))?;
 
-    let (sleigh, context) = icicle_vm::build_sleigh_for(triple.architecture)?;
-    let mut source = icicle_vm::cpu::utils::BasicInstructionSource::new(sleigh);
+    let lang = icicle_vm::sleigh_init(&triple)?;
+    let mut source = icicle_vm::cpu::utils::BasicInstructionSource::new(lang.sleigh);
     let mut lifter = icicle_vm::cpu::lifter::InstructionLifter::new();
-    lifter.set_context(context);
+    lifter.set_context(lang.initial_ctx);
 
     let mut cases = vec![];
     while let Some(Ok(test)) = parser.parse_next() {

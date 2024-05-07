@@ -1,9 +1,6 @@
 #[inline]
 pub fn mask(bits: u64) -> u64 {
-    if bits == 64 {
-        return u64::MAX;
-    }
-    1_u64.wrapping_shl(bits as u32).wrapping_sub(1)
+    u64::MAX >> (u64::BITS - bits as u32)
 }
 
 /// Sign-extend a value with `num_bits` to a 64-bit value

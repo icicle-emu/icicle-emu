@@ -458,7 +458,7 @@ CMOVZ EAX,EBX
 	$U2:1 = !ZF
 	if $U2:1 jump 0x3:8
 <L1>:
-	EAX = EBX
+	RAX = zext(EBX)
 
 CMOVZ ECX,dword ptr [RSI + -0x61b9d73e]
 <L0> (entry=0x8a):
@@ -468,7 +468,7 @@ CMOVZ ECX,dword ptr [RSI + -0x61b9d73e]
 	$U2:1 = !ZF
 	if $U2:1 jump 0x91:8
 <L1>:
-	ECX = $tmp0:4
+	RCX = zext($tmp0:4)
 
 SHL EAX,0x1
 <L0> (entry=0x12000):
@@ -806,15 +806,15 @@ LAR ECX,EDX
 
 PFMIN MM0, qword ptr [RAX]
 <L0> (entry=0x0):
-	$U1:8 = ram[RAX]
-	MM0 = PackedFloatingMIN(MM0, $U1:8)
+	$U3:8 = ram[RAX]
+	MM0 = PackedFloatingMIN(MM0, $U3:8)
 
 
 PUNPCKHDQ MM1, qword ptr [RSI]
 <L0> (entry=0x0):
 	MM1_Da = MM1_Db
-	$U1:8 = RSI + 0x4:8
-	MM1_Db = ram[$U1:8]
+	$U2:8 = RSI + 0x4:8
+	MM1_Db = ram[$U2:8]
 
 BSF EAX,EDX
 <L0> (entry=0x1000):
@@ -939,8 +939,8 @@ MOVZX EBX,word ptr [0x8277b0]
 
 MOVZX EAX,byte ptr [RSI]
 <L0> (entry=0x4003de):
-	$U1:1 = ram[RSI]
-	EAX = zext($U1:1)
+	$U2:1 = ram[RSI]
+	EAX = zext($U2:1)
 	RAX = zext(EAX)
 
 LEA RAX,[RAX + 0x10]
@@ -962,19 +962,19 @@ ADD R9,R8
 
 ADD byte ptr [RAX],AL
 <L0> (entry=0x0):
-	$U4:1 = ram[RAX]
-	CF = $U4:1 carry AL
 	$U5:1 = ram[RAX]
-	OF = $U5:1 scarry AL
+	CF = $U5:1 carry AL
 	$U6:1 = ram[RAX]
-	$U7:1 = $U6:1 + AL
-	ram[RAX] = $U7:1
-	$U8:1 = ram[RAX]
-	SF = $U8:1 s< 0x0:1
+	OF = $U6:1 scarry AL
+	$U7:1 = ram[RAX]
+	$U8:1 = $U7:1 + AL
+	ram[RAX] = $U8:1
 	$U9:1 = ram[RAX]
-	ZF = $U9:1 == 0x0:1
+	SF = $U9:1 s< 0x0:1
 	$U10:1 = ram[RAX]
-	$U2:1 = popcount($U10:1)
+	ZF = $U10:1 == 0x0:1
+	$U11:1 = ram[RAX]
+	$U2:1 = popcount($U11:1)
 	$U3:1 = $U2:1 & 0x1:1
 	PF = $U3:1 == 0x0:1
 
@@ -1652,6 +1652,7 @@ LODSD RSI
 	$U4:8 = 0x8:8 * $U3:8
 	RSI = $U2:8 - $U4:8
 	EAX = ram[$U1:8]
+	RAX = zext(EAX)
 
 LODSD.REP RSI
 <L0> (entry=0x83):
@@ -1664,6 +1665,7 @@ LODSD.REP RSI
 	$U5:8 = 0x8:8 * $U4:8
 	RSI = $U3:8 - $U5:8
 	EAX = ram[$U2:8]
+	RAX = zext(EAX)
 	RCX = RCX - 0x1:8
 	jump 0x83:8
 
@@ -1678,6 +1680,7 @@ LODSD.REPNE RSI
 	$U5:8 = 0x8:8 * $U4:8
 	RSI = $U3:8 - $U5:8
 	EAX = ram[$U2:8]
+	RAX = zext(EAX)
 	RCX = RCX - 0x1:8
 	jump 0x85:8
 
@@ -1784,7 +1787,7 @@ FILD qword ptr [RBP + -0x10]
 
 FLD qword ptr [ESP]
 <L0> (entry=0x0):
-	$U2:8 = sext(ESP)
+	$U2:8 = zext(ESP)
 	ST7 = ST6
 	ST6 = ST5
 	ST5 = ST4
@@ -1792,8 +1795,8 @@ FLD qword ptr [ESP]
 	ST3 = ST2
 	ST2 = ST1
 	ST1 = ST0
-	$U3:8 = ram[$U2:8]
-	ST0 = float2float($U3:8)
+	$U4:8 = ram[$U2:8]
+	ST0 = float2float($U4:8)
 
 FLD tword ptr [RBP + -0x80]
 <L0> (entry=0x0):
@@ -1822,9 +1825,9 @@ FLDZ
 
 FISTTP word ptr [RAX]
 <L0> (entry=0x0):
-	$U2:8 = float2float(ST0)
-	$U1:2 = float2int($U2:8)
-	ram[RAX] = $U1:2
+	$U3:8 = float2float(ST0)
+	$U2:2 = float2int($U3:8)
+	ram[RAX] = $U2:2
 	ST0 = ST1
 	ST1 = ST2
 	ST2 = ST3
@@ -1982,7 +1985,9 @@ CMPXCHG8B qword ptr [RDX + -0x3ea0fba4]
 	if ZF jump <L2>
 <L1>:
 	EDX = $tmp0[4]:4
+	RDX = zext($tmp0[4]:4)
 	EAX = $tmp0:4
+	RAX = zext(EAX)
 	jump 0x1202d:8
 <L2>:
 	$U7:8 = zext(ECX)
@@ -1993,6 +1998,7 @@ CMPXCHG8B qword ptr [RDX + -0x3ea0fba4]
 
 CMPXCHG8B qword ptr [RAX]
 <L0> (entry=0x65):
+	$tmp1:8 = RAX
 	$tmp0:8 = ram[RAX]
 	$U2:8 = zext(EDX)
 	$U3:8 = $U2:8 << 0x20:8
@@ -2002,14 +2008,16 @@ CMPXCHG8B qword ptr [RAX]
 	if ZF jump <L2>
 <L1>:
 	EDX = $tmp0[4]:4
+	RDX = zext($tmp0[4]:4)
 	EAX = $tmp0:4
+	RAX = zext(EAX)
 	jump 0x68:8
 <L2>:
 	$U7:8 = zext(ECX)
 	$U8:8 = $U7:8 << 0x20:8
 	$U9:8 = zext(EBX)
-	$U10:8 = $U8:8 | $U9:8
-	ram[RAX] = $U10:8
+	$U11:8 = $U8:8 | $U9:8
+	ram[$tmp1:8] = $U11:8
 
 CMPXCHG dword ptr [0x1010],ESI
 <L0> (entry=0x0):
@@ -2032,21 +2040,18 @@ CMPXCHG dword ptr [0x1010],ESI
 
 XADD dword ptr [0x1000],ECX
 <L0> (entry=0x0):
-	$U5:4 = ram[0x1000:8]
-	CF = $U5:4 carry ECX
-	$U6:4 = ram[0x1000:8]
-	OF = $U6:4 scarry ECX
-	$U7:4 = ram[0x1000:8]
-	$U1:4 = $U7:4 + ECX
-	ECX = ram[0x1000:8]
-	RCX = zext(ECX)
-	ram[0x1000:8] = $U1:4
-	SF = $U1:4 s< 0x0:4
-	ZF = $U1:4 == 0x0:4
-	$U2:4 = $U1:4 & 0xff:4
-	$U3:1 = popcount($U2:4)
-	$U4:1 = $U3:1 & 0x1:1
-	PF = $U4:1 == 0x0:1
+	$U1:4 = ram[0x1000:8]
+	CF = $U1:4 carry ECX
+	OF = $U1:4 scarry ECX
+	$U2:4 = $U1:4 + ECX
+	ram[0x1000:8] = $U2:4
+	SF = $U2:4 s< 0x0:4
+	ZF = $U2:4 == 0x0:4
+	$U3:4 = $U2:4 & 0xff:4
+	$U4:1 = popcount($U3:4)
+	$U5:1 = $U4:1 & 0x1:1
+	PF = $U5:1 == 0x0:1
+	RCX = zext($U1:4)
 
 POP RSP
 <L0> (entry=0x0):
@@ -2240,9 +2245,6 @@ MOV byte ptr [R11],0x0
 <L0> (entry=0x0):
 	ram[R11] = 0x0:1
 
-NOP dword ptr CS:[RAX + RAX*0x1]
-<L0> (entry=0x0):
-
 VPUNPCKLDQ XMM10, XMM7, xmmword ptr [RCX + -0x40]
 <L0> (entry=0x68):
 	$U2:8 = RCX + 0xffffffffffffffc0:8
@@ -2263,7 +2265,7 @@ TEST byte ptr [RSI],0x0
 <L0> (entry=0x11000):
 	CF = 0x0:1
 	OF = 0x0:1
-	$U5:1 = ram[RSI]
+	$U6:1 = ram[RSI]
 	SF = 0x0:1
 	ZF = 0x1:1
 	PF = 0x1:1

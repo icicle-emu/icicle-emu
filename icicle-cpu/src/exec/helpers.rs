@@ -16,6 +16,7 @@ pub const HELPERS: &[(&str, PcodeOpHelper)] = &[
     ("countLeadingOnes", count_leading_ones),
     ("bcd_add", bcd_add),
     ("UnsignedSaturate", unsigned_saturate),
+    ("UnsignedDoesSaturate", unsigned_does_saturate),
     ("SignedSaturate", signed_saturate),
     ("SignedDoesSaturate", signed_does_saturate),
 ];
@@ -127,24 +128,21 @@ fn bcd_add_digit(a: u8, b: u8, carry: u8) -> (u8, u8) {
 }
 
 fn unsigned_saturate(cpu: &mut Cpu, dst: pcode::VarNode, args: [Value; 2]) {
-    if args[1].size() != 2 {
-        cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
-        cpu.exception.value = args[1].size() as u64;
-        return;
-    }
-    let bits = cpu.read::<u16>(args[1]);
+    let bits: u32 = cpu.read_dynamic(args[1]).zxt();
     let max = (1 << bits) - 1;
     let value: u64 = cpu.read_dynamic(args[0]).zxt();
-    cpu.write_trunc(dst, value.min(max));
+    cpu.write_trunc(dst, u64::min(value, max));
+}
+
+fn unsigned_does_saturate(cpu: &mut Cpu, dst: pcode::VarNode, args: [Value; 2]) {
+    let bits: u32 = cpu.read_dynamic(args[1]).zxt();
+    let max = (1 << bits) - 1;
+    let value: u64 = cpu.read_dynamic(args[0]).zxt();
+    cpu.write_var::<u8>(dst, (value > max) as u8);
 }
 
 fn signed_saturate(cpu: &mut Cpu, dst: pcode::VarNode, args: [Value; 2]) {
-    if args[1].size() != 2 {
-        cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
-        cpu.exception.value = args[1].size() as u64;
-        return;
-    }
-    let bits = cpu.read::<u16>(args[1]);
+    let bits: u32 = cpu.read_dynamic(args[1]).zxt();
     let max = (1 << (bits - 1)) - 1;
     let min = -(1 << (bits - 1));
     let value: i64 = cpu.read_dynamic(args[0]).sxt();
@@ -152,17 +150,10 @@ fn signed_saturate(cpu: &mut Cpu, dst: pcode::VarNode, args: [Value; 2]) {
 }
 
 fn signed_does_saturate(cpu: &mut Cpu, dst: pcode::VarNode, args: [Value; 2]) {
-    if args[1].size() != 2 {
-        cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
-        cpu.exception.value = args[1].size() as u64;
-        return;
-    }
-    let bits = cpu.read::<u16>(args[1]);
+    let bits: u32 = cpu.read_dynamic(args[1]).zxt();
     let max = (1 << (bits - 1)) - 1;
     let min = -(1 << (bits - 1));
     let value: i64 = cpu.read_dynamic(args[0]).sxt();
-    // Note: This seems to be impossible to implement correctly because the `SignedSaturate` is
-    // applied before this step.
     cpu.write_var::<u8>(dst, (value < min || value > max) as u8);
 }
 
@@ -381,6 +372,10 @@ pub mod x86 {
             let value = (src >> shift) & 0xffff;
             cpu.write_var(dst.slice(offset * 2, 2), value as u16);
         }
+
+        // Copy high bits
+        let src_hi = cpu.read::<u64>(args[1].slice(8, 8));
+        cpu.write_var(dst.slice(8, 8), src_hi)
     }
 
     // Packed interleave shuffle
@@ -525,6 +520,12 @@ pub mod aarch64 {
 
     fn neon_cmeq(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
         let size = cpu.args[0] as u8;
+        if size == 0 {
+            // This only occurs as a result of a SLEIGH bug.
+            cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
+            cpu.exception.value = 0;
+            return;
+        }
 
         let a = args[0];
         let b = args[1];

@@ -36,11 +36,17 @@ pub const REGISTER_SPACE: MemId = 1;
 pub const RESERVED_SPACE_END: MemId = 2;
 
 /// Represents a reference to a slice of a P-code variable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct VarNode {
     pub id: VarId,
     pub offset: VarOffset,
     pub size: VarSize,
+}
+
+impl std::fmt::Debug for VarNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&self.display(&()), f)
+    }
 }
 
 impl VarNode {
@@ -88,8 +94,17 @@ impl VarNode {
     }
 
     #[inline]
+    pub fn zext_from(self, src: impl Into<Value>) -> Instruction {
+        match src.into() {
+            Value::Const(x, _) => (self, Op::Copy, Inputs::from(Value::Const(x, self.size))).into(),
+            Value::Var(x) => (self, Op::ZeroExtend, Inputs::from(x)).into(),
+        }
+    }
+
+    #[inline]
     pub fn extract_from_const(self, value: u64) -> u64 {
-        (value >> self.offset) & crate::mask(self.size as u64 * 8)
+        let value = value >> self.offset;
+        if self.size < 8 { value & crate::mask(self.size as u64 * 8) } else { value }
     }
 }
 
@@ -100,7 +115,7 @@ impl Default for VarNode {
 }
 
 /// A value that can be used as an input to a P-code operand.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Value {
     Var(VarNode),
     Const(u64, u8),
@@ -435,7 +450,7 @@ impl<'a> From<&'a [Value]> for Inputs {
 }
 
 /// Represents a full P-code instruction.
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Instruction {
     pub op: Op,
     pub inputs: Inputs,

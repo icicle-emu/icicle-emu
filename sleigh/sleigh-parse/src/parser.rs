@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashMap, VecDeque},
-    convert::TryInto,
-};
+use std::collections::{HashMap, VecDeque};
 
 use crate::{
     ast::{self, ExprTable, VarSize},
@@ -100,8 +97,8 @@ pub struct Parser {
 }
 
 impl Parser {
-    fn new<I: Input + 'static>(input: I) -> Self {
-        Self {
+    fn new<I: Input + 'static>(input: I, defines: &[impl AsRef<str>]) -> Self {
+        let mut parser = Self {
             input: Box::new(input),
             sources: vec![],
             exprs: ExprTable::default(),
@@ -112,27 +109,29 @@ impl Parser {
             state: preprocessor::State::default(),
             error: None,
             interner: Interner::default(),
+        };
+
+        for define in defines {
+            let icicle_ident = ast::Ident(parser.interner.intern(define.as_ref()));
+            preprocessor::define(&mut parser, icicle_ident, "");
         }
+
+        parser
     }
 
     pub fn from_str(content: &str) -> Self {
         let mut input_source = HashMap::default();
         input_source.insert("input".into(), content.into());
 
-        let mut preprocessor = Parser::new(input_source);
+        let mut preprocessor = Parser::new(input_source, &["ICICLE"]);
         preprocessor.include_file("input").unwrap();
 
         preprocessor
     }
 
     pub fn from_input<I: Input + 'static>(root: &str, input: I) -> Result<Self, String> {
-        let mut parser = Self::new(input);
-
-        // Define a custom symbol before we parse the Sleigh specification to allow using `ifdef`
-        // for Icicle specific changes.
-        let icicle_ident = ast::Ident(parser.interner.intern("ICICLE"));
-        preprocessor::define(&mut parser, icicle_ident, "");
-
+        // `ifdef ICICLE` is used in our patched specifications for Icicle specific changes.
+        let mut parser = Self::new(input, &["ICICLE"]);
         match parser.include_file(root) {
             Ok(_) => Ok(parser),
             Err(e) => Err(format!("{}", parser.error_formatter(e))),
@@ -397,14 +396,21 @@ impl Parser {
     }
 
     pub fn parse<T: Parse>(&mut self) -> Result<T, Error> {
+        match self.try_parse::<T>() {
+            Ok(Some(inner)) => Ok(inner),
+            Ok(None) => Err(self.error(format!("Expected: {}", T::NAME))),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub fn try_parse<T: Parse>(&mut self) -> Result<Option<T>, Error> {
         if let Some(e) = self.error.take() {
             return Err(e);
         }
 
         let span_start = self.peek().span;
         match T::try_parse(self) {
-            Ok(Some(inner)) => Ok(inner),
-            Ok(None) => Err(self.error(format!("Expected: {}", T::NAME))),
+            Ok(inner) => Ok(inner),
             Err(err) => {
                 let span = match err.cause.is_some() {
                     true => err.span,
@@ -868,7 +874,7 @@ impl Parse for ast::WithDef {
         p.expect(TokenKind::Colon)?;
         let constraint = p.parse()?;
 
-        let disasm_actions = p.parse::<BrackedList<_>>().map_or(vec![], |x| x.0);
+        let disasm_actions = p.try_parse::<BrackedList<_>>()?.map_or(vec![], |x| x.0);
         p.expect(TokenKind::LeftBrace)?;
         let items = parse_sequence_until_v2(p, TokenKind::RightBrace)?;
         p.expect(TokenKind::RightBrace)?;
@@ -941,7 +947,7 @@ impl Parse for ast::Constructor {
         p.lexer_mode = lexer::Mode::Normal;
 
         let constraint = p.parse()?;
-        let disasm_actions = p.parse::<BrackedList<_>>().map_or(vec![], |x| x.0);
+        let disasm_actions = p.try_parse::<BrackedList<_>>()?.map_or(vec![], |x| x.0);
 
         let token = p.peek();
         let semantics = match token.kind {
@@ -1385,11 +1391,7 @@ fn parse_pcode_term(p: &mut Parser) -> Result<ast::PcodeExpr, Error> {
             p.expect(TokenKind::Ampersand)?;
             let size = parse_optional_size(p)?;
             let value = p.parse().context("required because of `&`", token.span)?;
-            let offset = match p.bump_if(TokenKind::Plus)?.is_some() {
-                true => p.parse()?,
-                false => ast::PcodeExpr::Integer { value: 0 },
-            };
-            return Ok(ast::PcodeExpr::AddressOf { size, value, offset: Box::new(offset) });
+            return Ok(ast::PcodeExpr::AddressOf { size, value });
         }
         TokenKind::Star => {
             let (space, size, pointer) = parse_deref(p)?;
@@ -1712,17 +1714,6 @@ impl<T: Parse> Parse for ItemOrList<T> {
         })
     }
 }
-
-impl Parse for IdentList {
-    const NAME: &'static str = "Identifier list";
-
-    fn try_parse(p: &mut Parser) -> Result<Option<Self>, Error> {
-        let ItemOrList(x) = p.parse()?;
-        Ok(Some(Self(x)))
-    }
-}
-
-struct IdentList(Vec<ast::Ident>);
 
 fn parse_ident_list(p: &mut Parser) -> Result<Vec<ast::Ident>, Error> {
     parse_item_or_list(p, Parser::parse)

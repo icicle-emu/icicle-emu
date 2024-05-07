@@ -11,10 +11,14 @@ impl std::fmt::Debug for SubtableCtx<'_, '_> {
             .get(constructor_id as usize)
             .map_or("unknown", |x| x.line.as_str());
 
+        let name =
+            self.data.debug_info.subtable_names.get(constructor.table as usize).unwrap_or(&(0, 0));
         f.debug_struct("Subtable")
-            .field("id", &constructor.table)
-            .field("constructor", &constructor_id)
-            .field("constructor_line", &constructor_line)
+            .field("id", &format_args!("{} (\"{}\")", constructor.table, &self.data.get_str(*name)))
+            .field("constructor_id", &constructor_id)
+            .field("offset", &self.constructor.offset)
+            .field("len", &self.constructor.len)
+            .field("line", &constructor_line)
             .field("locals", &LocalsDebug { ctx: self, locals: self.locals() })
             .field("subtables", &SubtableListDebug { ctx: self, list: self.subtables() })
             .finish()
@@ -42,6 +46,10 @@ struct LocalsDebug<'a, 'b> {
 
 impl std::fmt::Debug for LocalsDebug<'_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_list().entries(self.locals.iter()).finish()
+        let mut list = f.debug_list();
+        for entry in self.locals {
+            list.entry(&format_args!("{entry:#x}"));
+        }
+        list.finish()
     }
 }
