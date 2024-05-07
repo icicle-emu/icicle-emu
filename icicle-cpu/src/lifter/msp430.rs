@@ -1,21 +1,21 @@
 //! A workaround for missing functionality in the SLEIGH spec for MSP430X.
 
-use crate::{exec::const_eval, lifter::BlockLifter, Cpu, Exception, ExceptionCode, ValueSource};
+use crate::{
+    exec::const_eval, lifter::BlockLifter, Arch, Cpu, Exception, ExceptionCode, ValueSource,
+};
 
-use super::{BlockState, InstructionSource};
+use super::BlockState;
 
 pub fn status_register_control_patch(cpu: &mut Cpu, lifter: &mut BlockLifter) {
     let check = cpu.arch.sleigh.register_user_op(Some("check_sr_control_bits"));
     cpu.set_helper(check, check_sr_control_bits);
     lifter.op_injectors.insert(
         check,
-        Box::new(
-            |_: &dyn InstructionSource, op, inputs, dst: pcode::VarNode, state: &mut BlockState| {
-                state.pcode.push((dst, pcode::Op::PcodeOp(op), inputs));
-                // Ensure that the block is terminated when the status register is checked.
-                true
-            },
-        ),
+        Box::new(|_: &Arch, op, inputs, dst: pcode::VarNode, state: &mut BlockState| {
+            state.pcode.push((dst, pcode::Op::PcodeOp(op), inputs));
+            // Ensure that the block is terminated when the status register is checked.
+            true
+        }),
     );
 
     let check_async = cpu.arch.sleigh.register_user_op(Some("check_sr_control_bits_async"));
@@ -29,9 +29,7 @@ pub fn status_register_control_patch(cpu: &mut Cpu, lifter: &mut BlockLifter) {
 
         let old = const_prop.get_value(status_reg.into());
         for stmt in &block.instructions {
-            if const_prop.eval(*stmt).is_err() {
-                return;
-            }
+            const_prop.eval(*stmt);
         }
         let new = const_prop.get_value(status_reg.into());
 

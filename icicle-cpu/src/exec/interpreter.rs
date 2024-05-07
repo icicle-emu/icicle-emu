@@ -90,7 +90,18 @@ where
             let a: $ty = exec.read(a);
             let b: $ty = exec.read(b);
             if b == 0 {
-                exec.exception(ExceptionCode::DivideByZero, 0);
+                exec.exception(ExceptionCode::DivisionException, 0);
+                return;
+            }
+            exec.write_var(output, <$op>::eval(a, b));
+        }};
+    }
+    macro_rules! sdiv_op {
+        ($op:ty, $ty:ty) => {{
+            let a: $ty = exec.read(a);
+            let b: $ty = exec.read(b);
+            if b == 0 || (a == (1 << (<$ty>::BITS - 1)) && b == <$ty>::MAX){
+                exec.exception(ExceptionCode::DivisionException, 0);
                 return;
             }
             exec.write_var(output, <$op>::eval(a, b));
@@ -252,11 +263,11 @@ where
         (Op::IntDiv, 16, (16, 16)) => div_op!(IntDiv, u128),
         (Op::IntDiv, ..) => exec.invalid_op_size(0),
 
-        (Op::IntSignedDiv, 1, (1, 1)) => div_op!(IntSignedDiv, u8),
-        (Op::IntSignedDiv, 2, (2, 2)) => div_op!(IntSignedDiv, u16),
-        (Op::IntSignedDiv, 4, (4, 4)) => div_op!(IntSignedDiv, u32),
-        (Op::IntSignedDiv, 8, (8, 8)) => div_op!(IntSignedDiv, u64),
-        (Op::IntSignedDiv, 16, (16, 16)) => div_op!(IntSignedDiv, u128),
+        (Op::IntSignedDiv, 1, (1, 1)) => sdiv_op!(IntSignedDiv, u8),
+        (Op::IntSignedDiv, 2, (2, 2)) => sdiv_op!(IntSignedDiv, u16),
+        (Op::IntSignedDiv, 4, (4, 4)) => sdiv_op!(IntSignedDiv, u32),
+        (Op::IntSignedDiv, 8, (8, 8)) => sdiv_op!(IntSignedDiv, u64),
+        (Op::IntSignedDiv, 16, (16, 16)) => sdiv_op!(IntSignedDiv, u128),
         (Op::IntSignedDiv, ..) => exec.invalid_op_size(0),
 
         (Op::IntRem, 1, (1, 1)) => div_op!(IntRem, u8),
@@ -266,11 +277,11 @@ where
         (Op::IntRem, 16, (16, 16)) => div_op!(IntRem, u128),
         (Op::IntRem, ..) => exec.invalid_op_size(0),
 
-        (Op::IntSignedRem, 1, (1, 1)) => div_op!(IntSignedRem, u8),
-        (Op::IntSignedRem, 2, (2, 2)) => div_op!(IntSignedRem, u16),
-        (Op::IntSignedRem, 4, (4, 4)) => div_op!(IntSignedRem, u32),
-        (Op::IntSignedRem, 8, (8, 8)) => div_op!(IntSignedRem, u64),
-        (Op::IntSignedRem, 16, (16, 16)) => div_op!(IntSignedRem, u128),
+        (Op::IntSignedRem, 1, (1, 1)) => sdiv_op!(IntSignedRem, u8),
+        (Op::IntSignedRem, 2, (2, 2)) => sdiv_op!(IntSignedRem, u16),
+        (Op::IntSignedRem, 4, (4, 4)) => sdiv_op!(IntSignedRem, u32),
+        (Op::IntSignedRem, 8, (8, 8)) => sdiv_op!(IntSignedRem, u64),
+        (Op::IntSignedRem, 16, (16, 16)) => sdiv_op!(IntSignedRem, u128),
         (Op::IntSignedRem, ..) => exec.invalid_op_size(0),
 
         (Op::IntLeft, ..) => {
@@ -774,7 +785,7 @@ impl_eval_int_op! { IntRotateLeft,  (a, b, a.rotate_left(b as u32)) }
 impl_eval_int_op! { IntRotateRight, (a, b, a.rotate_right(b as u32)) }
 
 impl_eval_int_op! { IntDiv,         (a, b, a / b) }
-impl_eval_int_op! { IntSignedDiv,   (a, b, a.to_signed().wrapping_div(b.to_signed()).to_unsigned()) }
+impl_eval_int_op! { IntSignedDiv,   (a, b, (a.to_signed() / b.to_signed()).to_unsigned()) }
 impl_eval_int_op! { IntRem,         (a, b, a % b) }
 impl_eval_int_op! { IntSignedRem,   (a, b, a.to_signed().wrapping_rem(b.to_signed()).to_unsigned()) }
 

@@ -141,12 +141,13 @@ impl<T: DynamicTarget> SingleThreadBase for VmState<T> {
         &mut self,
         start_addr: <Self::Arch as Arch>::Usize,
         data: &mut [u8],
-    ) -> TargetResult<(), Self> {
+    ) -> TargetResult<usize, Self> {
         let start: u64 = num_traits::cast(start_addr).unwrap();
         if !self.vm.cpu.mem.is_regular_region(start, data.len() as u64) {
             return Err(TargetError::NonFatal);
         }
-        self.vm.cpu.mem.read_bytes(start, data, perm::NONE).map_err(|_| TargetError::NonFatal)
+        self.vm.cpu.mem.read_bytes(start, data, perm::NONE).map_err(|_| TargetError::NonFatal)?;
+        Ok(data.len())
     }
 
     fn write_addrs(

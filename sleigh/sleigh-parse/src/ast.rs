@@ -321,7 +321,7 @@ impl ParserDisplay for ConstraintExpr {
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum ConstraintCmp {
     Equal,
     NotEqual,
@@ -431,7 +431,7 @@ impl ParserDisplay for PatternExpr {
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum PatternOp {
     Add,
     Sub,
@@ -556,7 +556,7 @@ impl ParserDisplay for JumpLabel {
 pub enum PcodeExpr {
     Ident { value: Ident },
     Integer { value: u64 },
-    AddressOf { size: Option<VarSize>, value: Ident, offset: Box<PcodeExpr> },
+    AddressOf { size: Option<VarSize>, value: Ident },
     Truncate { value: Box<PcodeExpr>, size: VarSize },
     SliceBits { value: Box<PcodeExpr>, range: Range },
     Op { a: Box<PcodeExpr>, op: PcodeOp, b: Box<PcodeExpr> },
@@ -570,9 +570,9 @@ impl ParserDisplay for PcodeExpr {
         match self {
             Self::Ident { value } => value.fmt(f, p),
             Self::Integer { value } => write!(f, "{:#0x}", value),
-            Self::AddressOf { size, value, offset } => {
+            Self::AddressOf { size, value } => {
                 let size = size.map_or(String::new(), |size| format!(":{} ", size));
-                write!(f, "&{}{} + {}", size, value.display(p), offset.display(p))
+                write!(f, "&{}{}", size, value.display(p))
             }
             Self::Truncate { value, size } => write!(f, "{}:{}", value.display(p), size),
             Self::SliceBits { value, range } => {

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use sleigh_parse::ast;
 use sleigh_runtime::{
     matcher::Constraint,
-    semantics::{Local, SemanticAction, ValueSize},
+    semantics::{Local, PcodeTmp, SemanticAction, ValueSize},
     DecodeAction, Field, PatternExprOp, Token,
 };
 
@@ -83,7 +83,7 @@ pub(crate) fn build(
 
     let disasm_actions = disasm_actions::resolve(&mut scope, &constructor.disasm_actions)?;
     let mut semantics = semantics::resolve(&mut scope, &constructor.semantics)?;
-    semantics.temporaries = scope.temporaries.len();
+    semantics.temporaries = scope.temporaries.clone();
 
     Ok(Constructor {
         table,
@@ -97,13 +97,6 @@ pub(crate) fn build(
         semantics,
         span: constructor.span,
     })
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct PcodeTmp {
-    #[allow(unused)] // Previously this was used for codegen.
-    pub name: Option<ast::Ident>,
-    pub size: Option<ValueSize>,
 }
 
 pub(crate) type FieldIndex = u32;

@@ -154,15 +154,22 @@ impl Tester for icicle_vm::Vm {
 
                 let mapping = mem::Mapping { perm: *perm, value: 0x0 };
                 anyhow::ensure!(
-                    self.cpu.mem.map_memory_len(start, len, mapping),
+                    self.cpu.mem.map_memory_len(*addr, value.len() as u64, mapping),
                     "failed to map memory"
                 );
 
                 self.cpu.mem.write_bytes(*addr, value, perm::NONE)?;
+                let _ = self.cpu.mem.read_u8(*addr, perm::NONE)?;
             }
             &Assignment::Register { name, value } => {
                 let varnode = self.cpu.arch.sleigh.get_reg(name).unwrap().var;
-                self.cpu.write_trunc(varnode, value);
+                // @fixme: make write_trunc work with reg handlers?
+                if varnode.size <= 8 {
+                    self.cpu.write_reg(varnode, value as u64)
+                }
+                else {
+                    self.cpu.write_trunc(varnode, value);
+                }
             }
         }
         Ok(())
@@ -181,7 +188,13 @@ impl Tester for icicle_vm::Vm {
             }
             &Assignment::Register { name, value } => {
                 let varnode = self.cpu.arch.sleigh.get_reg(name).unwrap().var;
-                let tmp: u128 = self.cpu.read_dynamic(varnode.into()).zxt();
+
+                let tmp = if varnode.size <= 8 {
+                    self.cpu.read_reg(varnode) as u128
+                }
+                else {
+                    self.cpu.read_dynamic(varnode.into()).zxt()
+                };
                 let value =
                     if varnode.size < 16 { value & ((1 << (varnode.size * 8)) - 1) } else { value };
                 anyhow::ensure!(tmp == value, "expected: {} (got {:#0x})", assignment, tmp);

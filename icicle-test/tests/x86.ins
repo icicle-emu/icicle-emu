@@ -15,12 +15,12 @@
 0x000020 [5e]                    "POP ESI";
 0x000021 [5d]                    "POP EBP";
 0x000022 [c3]                    "RET";
-0x000023 [81 04 24 a2 ee bf ff]  "ADD dword ptr [ESP],0xffbfeea2";
+0x000023 [81 04 24 a2 ee bf ff]  "ADD dword ptr [ESP],-0x40115e";
 0x00002a [e8 00 00 00 00]        "CALL 0x2f";
 0x00002f [69 c0 01 01 01 01]     "IMUL EAX,EAX,0x1010101";
 0x000035 [ab]                    "STOSD ES:EDI";
 0x000036 [f3 ab]                 "STOSD.REP ES:EDI";
-0x000038 [3b 9d f8 ff ff ff]     "CMP EBX,dword ptr [EBP + 0xfffffff8]";
+0x000038 [3b 9d f8 ff ff ff]     "CMP EBX,dword ptr [EBP + -0x8]";
 0x00003e [ff 75 00]              "PUSH dword ptr [EBP]";
 0x000041 [f3 a5]                 "MOVSD.REP ES:EDI,ESI";
 0x000043 [65 ff 15 10 00 00 00]  "CALL dword ptr GS:[0x10]";

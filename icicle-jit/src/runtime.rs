@@ -1,45 +1,27 @@
 use icicle_cpu::{mem::perm, Cpu, ExceptionCode};
 
-use crate::{JitFunction, VmCtx};
-
-pub fn call_jit_compilation_error() -> JitFunction {
-    unsafe extern "C" fn jit_compilation_error_fn(cpu: *mut Cpu, _: &mut VmCtx, addr: u64) -> u64 {
-        (*cpu).exception.code = ExceptionCode::JitError as u32;
-        addr
-    }
-    jit_compilation_error_fn
+pub unsafe extern "C" fn jit_compilation_error(cpu: *mut Cpu, addr: u64) -> u64 {
+    (*cpu).exception.code = ExceptionCode::JitError as u32;
+    addr
 }
 
-pub fn call_bad_lookup_error() -> JitFunction {
-    unsafe extern "C" fn bad_lookup_error_fn(cpu: *mut Cpu, _: &mut VmCtx, addr: u64) -> u64 {
-        (*cpu).exception.code = ExceptionCode::JitError as u32;
-        (*cpu).exception.value = 0x1;
-        addr
-    }
-    bad_lookup_error_fn
+pub unsafe extern "C" fn bad_lookup_error(cpu: *mut Cpu, addr: u64) -> u64 {
+    (*cpu).exception.code = ExceptionCode::JitError as u32;
+    (*cpu).exception.value = 0x1;
+    addr
 }
 
-pub fn call_address_not_translated() -> JitFunction {
-    unsafe extern "C" fn address_not_translated_fn(cpu: *mut Cpu, _: &mut VmCtx, addr: u64) -> u64 {
-        (*cpu).exception.code = ExceptionCode::CodeNotTranslated as u32;
-        (*cpu).exception.value = addr;
-        addr
-    }
-    address_not_translated_fn
+pub unsafe extern "C" fn address_not_translated(cpu: *mut Cpu, addr: u64) -> u64 {
+    (*cpu).exception.code = ExceptionCode::CodeNotTranslated as u32;
+    (*cpu).exception.value = addr;
+    addr
 }
 
-pub fn call_block_contains_breakpoint() -> JitFunction {
-    unsafe extern "C" fn block_contains_breakpoint_fn(
-        cpu: *mut Cpu,
-        _: &mut VmCtx,
-        addr: u64,
-    ) -> u64 {
-        // Exit with the `InstructionLimit` exit code this results in us exiting to the interpreter
-        // which will single step the CPU until the correct instruction.
-        (*cpu).exception.code = ExceptionCode::InstructionLimit as u32;
-        addr
-    }
-    block_contains_breakpoint_fn
+pub unsafe extern "C" fn block_contains_breakpoint(cpu: *mut Cpu, addr: u64) -> u64 {
+    // Exit with the `InstructionLimit` exit code this results in us exiting to the interpreter
+    // which will single step the CPU until the correct instruction.
+    (*cpu).exception.code = ExceptionCode::InstructionLimit as u32;
+    addr
 }
 
 #[inline(always)]

@@ -9,36 +9,11 @@ use cranelift::{codegen::Context as CodeContext, prelude::*};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module, ModuleResult};
 
-use icicle_cpu::{lifter::Block as IcicleBlock, Cpu, HookTrampoline};
+use icicle_cpu::{lifter::Block as IcicleBlock, Cpu};
 
 use crate::translate::TranslatorCtx;
 
-#[repr(C)]
-pub struct VmCtx {
-    pub tlb_ptr: *mut icicle_cpu::mem::tlb::TranslationCache,
-    pub tracer_mem: [*mut u8; MAX_TRACER_MEM],
-    pub hooks: [HookData; MAX_HOOKS],
-}
-
-impl Default for VmCtx {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl VmCtx {
-    pub fn new() -> Self {
-        const NULL_HOOK: HookData = HookData::null();
-
-        Self {
-            tlb_ptr: std::ptr::null_mut(),
-            tracer_mem: [std::ptr::null_mut(); MAX_TRACER_MEM],
-            hooks: [NULL_HOOK; MAX_HOOKS],
-        }
-    }
-}
-
-pub type JitFunction = unsafe extern "C" fn(*mut Cpu, &mut VmCtx, u64) -> u64;
+pub type JitFunction = unsafe extern "C" fn(*mut Cpu, u64) -> u64;
 
 pub(crate) struct MemHandler<T> {
     pub load8: T,
@@ -62,25 +37,6 @@ pub(crate) struct RuntimeFunctions {
 
     pub run_interpreter: FuncId,
     pub hook_signature: Signature,
-}
-
-const MAX_TRACER_MEM: usize = 64;
-type TracerMemEntry = *mut u8;
-
-const MAX_HOOKS: usize = 64;
-
-extern "C" fn null_hook(_: *mut (), _: *mut Cpu, _: u64) {}
-
-#[repr(C)]
-pub struct HookData {
-    pub fn_ptr: HookTrampoline,
-    pub data_ptr: *mut (),
-}
-
-impl HookData {
-    pub const fn null() -> Self {
-        Self { fn_ptr: null_hook, data_ptr: std::ptr::null_mut() }
-    }
 }
 
 pub struct CompilationTarget<'a> {
@@ -148,9 +104,16 @@ pub struct JIT {
     /// Number of dead compilation units.
     pub dead: usize,
 
-    /// A list of declared functions (used for debugging).
-    declared_functions: Vec<(FuncId, u64)>,
+    /// A list of declared functions (id, size, guest addrs) used for debugging.
+    declared_functions: Vec<(FuncId, u32, Vec<u64>)>,
 }
+
+/// Default address to fill the fast lookup table with which does not match any valid address (this
+/// will normally be in a `hole' in memory). The bottom bits are randomized to catch bugs.
+const INVALID_JUMP_TARGET: u64 = 0x8fff_ffff_45a3_6277;
+
+const INITIAL_LOOKUP_TABLE_VALUE: (u64, JitFunction) =
+    (INVALID_JUMP_TARGET, runtime::bad_lookup_error);
 
 impl JIT {
     pub fn new(cpu: &icicle_cpu::Cpu) -> Self {
@@ -175,7 +138,7 @@ impl JIT {
             jit_hit: 0,
             jit_miss: 0,
             // Exploit the fact that `vec![]` has a specialized implementation using `#[rustc_box]`
-            active: vec![(u64::MAX, runtime::call_bad_lookup_error()); FAST_LOOKUP_TABLE_SIZE]
+            active: vec![INITIAL_LOOKUP_TABLE_VALUE; FAST_LOOKUP_TABLE_SIZE]
                 .into_boxed_slice()
                 .try_into()
                 .ok()
@@ -192,7 +155,7 @@ impl JIT {
         tracing::debug!("clearing JIT");
 
         self.code_ctx.clear();
-        self.active.fill((u64::MAX, runtime::call_bad_lookup_error()));
+        self.active.fill(INITIAL_LOOKUP_TABLE_VALUE);
         self.compiled.clear();
         self.entry_points.clear();
         self.block_mapping.clear();
@@ -229,7 +192,7 @@ impl JIT {
     pub fn invalidate(&mut self, block_id: usize) {
         if let Some(&id) = self.block_mapping.get(&block_id) {
             for &addr in &self.compiled[id] {
-                self.active[Self::lookup_key(addr)] = (u64::MAX, runtime::call_bad_lookup_error());
+                self.active[Self::lookup_key(addr)] = INITIAL_LOOKUP_TABLE_VALUE;
                 self.entry_points.remove(&addr);
                 self.dead += 1;
             }
@@ -252,11 +215,11 @@ impl JIT {
     }
 
     pub fn remove_fast_lookup(&mut self, addr: u64) {
-        self.active[Self::lookup_key(addr)] = (u64::MAX, runtime::call_bad_lookup_error());
+        self.active[Self::lookup_key(addr)] = INITIAL_LOOKUP_TABLE_VALUE;
     }
 
     pub fn clear_fast_lookup(&mut self) {
-        self.active.fill((u64::MAX, runtime::call_bad_lookup_error()));
+        self.active.fill(INITIAL_LOOKUP_TABLE_VALUE);
     }
 
     pub fn compile(&mut self, target: &CompilationTarget) -> ModuleResult<()> {
@@ -295,7 +258,7 @@ impl JIT {
         Ok((jit_fn, size, self.il_dump.take().unwrap(), disasm))
     }
 
-    fn get_jit_func(&mut self, func: FuncId) -> JitFunction {
+    fn get_jit_func(&self, func: FuncId) -> JitFunction {
         let fn_ptr = self.module.get_finalized_function(func);
         // Safety: the finalized function is expected to be generated correctly.
         unsafe { std::mem::transmute(fn_ptr) }
@@ -343,19 +306,56 @@ impl JIT {
         })?;
         let size = self.code_ctx.compiled_code().unwrap().code_info().total_size;
 
-        for address in target.entry_points() {
-            self.declared_functions.push((func, address));
-        }
+        let entry_points = target.entry_points().collect();
+        self.declared_functions.push((func, size, entry_points));
 
         Ok((func, size))
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn dump_jit_mapping(&self, path: &std::path::Path) -> std::io::Result<()> {
+        use std::io::Write;
+
+        let jitdump_filename = format!("./jit-{}.dump", std::process::id());
+
+        const EM_X86_64: u32 = 62;
+        let mut jitdump_file =
+            wasmtime_jit_debug::perf_jitdump::JitDumpFile::new(jitdump_filename, EM_X86_64)?;
+
+        let mut writer = std::io::BufWriter::new(std::fs::File::create(path)?);
+        for (func_id, size, guest_addresses) in &self.declared_functions {
+            let host_addr = self.get_jit_func(*func_id);
+            for guest_addr in guest_addresses {
+                writeln!(writer, "{func_id},{host_addr:#p},{guest_addr:#x}")?;
+            }
+
+            let name = format!("{:x?}", guest_addresses);
+            let timestamp = jitdump_file.get_time_stamp();
+            let pid = std::process::id();
+            let tid = 0;
+            jitdump_file.dump_code_load_record(
+                &name,
+                host_addr as *mut u8,
+                *size as usize,
+                timestamp,
+                pid,
+                tid,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "linux"))]
     pub fn dump_jit_mapping(&self, path: &std::path::Path) -> std::io::Result<()> {
         use std::io::Write;
 
         let mut writer = std::io::BufWriter::new(std::fs::File::create(path)?);
-        for (func_id, addr) in &self.declared_functions {
-            writeln!(writer, "{func_id},{addr:#x}")?;
+        for (func_id, _size, guest_addresses) in &self.declared_functions {
+            let host_addr = self.get_jit_func(*func_id);
+            for guest_addr in guest_addresses {
+                writeln!(writer, "{func_id},{host_addr:#p},{guest_addr:#x}")?;
+            }
         }
 
         Ok(())

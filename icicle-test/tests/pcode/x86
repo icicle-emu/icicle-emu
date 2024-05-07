@@ -1,7 +1,7 @@
 PUSH EBP
 <L0> (entry=0x0):
-	RSP = RSP - 0x4:8
-	ram[RSP] = EBP
+	ESP = ESP - 0x4:4
+	ram[ESP] = EBP
 
 XOR EDX,EDX
 <L0> (entry=0x1):
@@ -18,25 +18,23 @@ MOV EBP,ESP
 
 MOV EAX,dword ptr [EBP + 0x8]
 <L0> (entry=0x5):
-	$U2:4 = EBP + 0x8:4
-	$U1:8 = zext($U2:4)
-	EAX = ram[$U1:8]
+	$U1:4 = EBP + 0x8:4
+	EAX = ram[$U1:4]
 
 PUSH ESI
 <L0> (entry=0x8):
-	RSP = RSP - 0x4:8
-	ram[RSP] = ESI
+	ESP = ESP - 0x4:4
+	ram[ESP] = ESI
 
 MOV ESI,dword ptr [EBP + 0xc]
 <L0> (entry=0x9):
-	$U2:4 = EBP + 0xc:4
-	$U1:8 = zext($U2:4)
-	ESI = ram[$U1:8]
+	$U1:4 = EBP + 0xc:4
+	ESI = ram[$U1:4]
 
 PUSH EBX
 <L0> (entry=0xc):
-	RSP = RSP - 0x4:8
-	ram[RSP] = EBX
+	ESP = ESP - 0x4:4
+	ram[ESP] = EBX
 
 LEA EBX,[EAX + -0x1]
 <L0> (entry=0xd):
@@ -45,17 +43,15 @@ LEA EBX,[EAX + -0x1]
 
 MOVZX ECX,byte ptr [ESI + EDX*0x1]
 <L0> (entry=0x10):
-	$U2:4 = ESI + EDX
-	$U1:8 = zext($U2:4)
-	$U4:1 = ram[$U1:8]
-	ECX = zext($U4:1)
+	$U1:4 = ESI + EDX
+	$U3:1 = ram[$U1:4]
+	ECX = zext($U3:1)
 
 MOV byte ptr [EBX + EDX*0x1 + 0x1],CL
 <L0> (entry=0x14):
-	$U3:4 = 0x1:4 + EBX
-	$U2:4 = $U3:4 + EDX
-	$U1:8 = zext($U2:4)
-	ram[$U1:8] = CL
+	$U2:4 = 0x1:4 + EBX
+	$U1:4 = $U2:4 + EDX
+	ram[$U1:4] = CL
 
 ADD EDX,0x1
 <L0> (entry=0x18):
@@ -82,48 +78,46 @@ TEST CL,CL
 JNZ 0x10
 <L0> (entry=0x1d):
 	$U1:1 = !ZF
-	if $U1:1 jump 0x10:8
+	if $U1:1 jump 0x10:4
 
 POP EBX
 <L0> (entry=0x1f):
-	$U1:4 = ram[RSP]
+	$U1:4 = ram[ESP]
 	ESP = ESP + 0x4:4
 	EBX = $U1:4
 
 POP ESI
 <L0> (entry=0x20):
-	$U1:4 = ram[RSP]
+	$U1:4 = ram[ESP]
 	ESP = ESP + 0x4:4
 	ESI = $U1:4
 
 POP EBP
 <L0> (entry=0x21):
-	$U1:4 = ram[RSP]
+	$U1:4 = ram[ESP]
 	ESP = ESP + 0x4:4
 	EBP = $U1:4
 
 RET
 <L0> (entry=0x22):
-	$U1:4 = ram[RSP]
+	$U1:4 = ram[ESP]
 	ESP = ESP + 0x4:4
-	EIP = $U1:4
 	return $U1:4
 
-ADD dword ptr [ESP],0xffbfeea2
+ADD dword ptr [ESP],-0x40115e
 <L0> (entry=0x23):
-	$U4:8 = zext(ESP)
-	$U5:4 = ram[$U4:8]
+	$U5:4 = ram[ESP]
 	CF = $U5:4 carry 0xffbfeea2:4
-	$U6:4 = ram[$U4:8]
+	$U6:4 = ram[ESP]
 	OF = $U6:4 scarry 0xffbfeea2:4
-	$U7:4 = ram[$U4:8]
+	$U7:4 = ram[ESP]
 	$U8:4 = $U7:4 + 0xffbfeea2:4
-	ram[$U4:8] = $U8:4
-	$U9:4 = ram[$U4:8]
+	ram[ESP] = $U8:4
+	$U9:4 = ram[ESP]
 	SF = $U9:4 s< 0x0:4
-	$U10:4 = ram[$U4:8]
+	$U10:4 = ram[ESP]
 	ZF = $U10:4 == 0x0:4
-	$U11:4 = ram[$U4:8]
+	$U11:4 = ram[ESP]
 	$U1:4 = $U11:4 & 0xff:4
 	$U2:1 = popcount($U1:4)
 	$U3:1 = $U2:1 & 0x1:1
@@ -131,8 +125,8 @@ ADD dword ptr [ESP],0xffbfeea2
 
 CALL 0x2f
 <L0> (entry=0x2a):
-	RSP = RSP - 0x4:8
-	ram[RSP] = 0x2f:4
+	ESP = ESP - 0x4:4
+	ram[ESP] = 0x2f:4
 
 IMUL EAX,EAX,0x1010101
 <L0> (entry=0x2f):
@@ -164,13 +158,12 @@ STOSD.REP ES:EDI
 	EDI = $U3:4 - $U5:4
 	ram[$U2:4] = EAX
 	ECX = ECX - 0x1:4
-	jump 0x36:8
+	jump 0x36:4
 
-CMP EBX,dword ptr [EBP + 0xfffffff8]
+CMP EBX,dword ptr [EBP + -0x8]
 <L0> (entry=0x38):
-	$U7:4 = EBP + 0xfffffff8:4
-	$U6:8 = zext($U7:4)
-	$U1:4 = ram[$U6:8]
+	$U6:4 = EBP + 0xfffffff8:4
+	$U1:4 = ram[$U6:4]
 	CF = EBX < $U1:4
 	OF = EBX sborrow $U1:4
 	$U2:4 = EBX - $U1:4
@@ -183,10 +176,9 @@ CMP EBX,dword ptr [EBP + 0xfffffff8]
 
 PUSH dword ptr [EBP]
 <L0> (entry=0x3e):
-	$U2:8 = zext(EBP)
-	$U1:4 = ram[$U2:8]
-	RSP = RSP - 0x4:8
-	ram[RSP] = $U1:4
+	$U1:4 = ram[EBP]
+	ESP = ESP - 0x4:4
+	ram[ESP] = $U1:4
 
 MOVSD.REP ES:EDI,ESI
 <L0> (entry=0x41):
@@ -204,14 +196,14 @@ MOVSD.REP ES:EDI,ESI
 	$U10:4 = ram[$U6:4]
 	ram[$U2:4] = $U10:4
 	ECX = ECX - 0x1:4
-	jump 0x41:8
+	jump 0x41:4
 
 CALL dword ptr GS:[0x10]
 <L0> (entry=0x43):
-	$U4:8 = GS_OFFSET + 0x10:8
-	$U1:4 = ram[$U4:8]
-	RSP = RSP - 0x4:8
-	ram[RSP] = 0x4a:4
+	$U4:4 = GS_OFFSET + 0x10:4
+	$U1:4 = ram[$U4:4]
+	ESP = ESP - 0x4:4
+	ram[ESP] = 0x4a:4
 	call $U1:4
 
 MOV GS,DX
@@ -238,15 +230,14 @@ BOUND EBX,dword ptr [EAX + EAX*0x4]
 
 ARPL word ptr [EAX],DX
 <L0> (entry=0x0):
-	$U6:8 = zext(EAX)
-	$U7:2 = ram[$U6:8]
+	$U7:2 = ram[EAX]
 	$U1:2 = $U7:2 & 0x3:2
 	$U2:2 = DX & 0x3:2
 	$U3:2 = $U2:2 - $U1:2
 	ZF = 0x0:2 s< $U3:2
 	$U4:2 = zext(CF)
 	$U5:2 = $U4:2 * $U3:2
-	$U8:2 = ram[$U6:8]
+	$U8:2 = ram[EAX]
 	$U9:2 = $U8:2 + $U5:2
-	ram[$U6:8] = $U9:2
+	ram[EAX] = $U9:2
 

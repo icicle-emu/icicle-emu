@@ -307,6 +307,17 @@ fn complex_constructors() {
 }
 
 #[test]
+fn constructor_export() {
+    let result = parse::<ast::Sleigh>(
+        r#"fcvt_vmnemonic: "fcvtas" is b_29=0 & b_23=0 & b_1314=0b10 & b_12=0 { export 0:1; }"#,
+    );
+    assert_eq!(
+        result.ast.items[0].display(&result.parser).to_string(),
+        "fcvt_vmnemonic: fcvtas is ((b_29=0x0 & b_23=0x0) & b_1314=0x2) & b_12=0x0 { export 0x0:1; }"
+    );
+}
+
+#[test]
 fn symbols_in_display_segment() {
     let result = parse::<ast::Sleigh>(r#"test: {0+-*:,()[]"hello"!~=} is a=0 {}"#);
     assert_eq!(
@@ -322,7 +333,7 @@ fn atsign_in_display_section() {
 }
 
 #[test]
-fn key_word_in_display_section() {
+fn keyword_in_display_section() {
     let result = parse::<ast::Sleigh>(r#"test:call call is a=0 {}"#);
     assert_eq!(
         result.ast.items[0].display(&result.parser).to_string(),
@@ -427,6 +438,18 @@ fn disasm_action() {
 }
 
 #[test]
+fn disasm_action_with_missing_semicolon() {
+    let result = parse::<ast::Constructor>(r"test: is a=0 [a = 1;] {}");
+    assert_eq!(result.ast.display(&result.parser).to_string(), "test:  is a=0x0 [ a = 0x1;] { }");
+
+    let result = Parser::from_str("a = 1").parse::<ast::DisasmAction>();
+    assert!(result.is_err());
+
+    let result = Parser::from_str(r"test: is a=0 [a = 1] {}").parse::<ast::Constructor>();
+    assert!(result.is_err());
+}
+
+#[test]
 fn pcode_expr() {
     let expr = parse::<ast::PcodeExpr>("push22(0x10)");
     assert_eq!(
@@ -443,8 +466,7 @@ fn pcode_address_of() {
     let expr = parse::<ast::PcodeExpr>("&:2 inst_next");
     assert_eq!(expr.ast, ast::PcodeExpr::AddressOf {
         size: Some(2),
-        value: expr.ident("inst_next"),
-        offset: Box::new(ast::PcodeExpr::Integer { value: 0 })
+        value: expr.ident("inst_next")
     });
 
     let expr = parse::<ast::PcodeExpr>("&r1 + 4");

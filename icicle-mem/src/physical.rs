@@ -1,4 +1,4 @@
-use std::{cell::UnsafeCell, convert::TryInto, ptr::NonNull, rc::Rc};
+use std::{cell::UnsafeCell, ptr::NonNull, rc::Rc};
 
 use crate::{perm, MemError, MemResult};
 
@@ -10,6 +10,8 @@ pub const OFFSET_BITS: usize = 12;
 // future this may not be the case, so limit the use of this constant where possible to ease future
 // refactoring (use the `page_size` and `page_aligned` methods on PhysicalMemory instead).
 pub const PAGE_SIZE: usize = 1 << OFFSET_BITS;
+
+pub const PAGE_MASK: u64 = (PAGE_SIZE - 1) as u64;
 
 /// For testing it is useful to have a limit on the maximum number of pages that we allow, to catch
 /// memory leaks during development (we may want to make this configurable in the future)

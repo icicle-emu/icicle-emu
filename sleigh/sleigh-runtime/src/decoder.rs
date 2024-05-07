@@ -1,6 +1,7 @@
 use crate::{
-    semantics::SemanticAction, Constructor, DecodeAction, DisplaySegment, EvalKind, LocalIndex,
-    SleighData, DEBUG, ROOT_TABLE_ID,
+    semantics::{PcodeTmp, SemanticAction},
+    Constructor, DecodeAction, DisplaySegment, EvalKind, LocalIndex, SleighData, DEBUG,
+    ROOT_TABLE_ID,
 };
 
 use crate::{
@@ -26,7 +27,17 @@ pub struct Decoder {
     /// specifications, however results in a performance penalty in some cases.
     ///
     /// @todo: Currently there is no way of disabling this from the external API.
-    allow_backtracking: bool,
+    pub(crate) allow_backtracking: bool,
+
+    /// Controls whether to ignore delayslots.
+    pub(crate) ignore_delay_slots: bool,
+
+    /// Controls the maximum number of subtables the decoder will attempt to resolve before
+    /// bailing. Catches unbounded recursion in SLEIGH specifications.
+    max_subtables: usize,
+
+    /// Keeps track of whether the current instruction is valid.
+    is_valid: bool,
 
     /// The base address of the instruction stream.
     base_addr: u64,
@@ -38,7 +49,7 @@ pub struct Decoder {
     next_offset: usize,
 
     /// The stack of token offsets for storing parent token positions.
-    token_stack: Vec<usize>,
+    token_stack: Vec<(usize, usize)>,
 
     /// A stack for storing intermediate values used for evaluating expressions.
     eval_stack: Vec<i64>,
@@ -52,6 +63,9 @@ impl Decoder {
             bytes: Vec::new(),
             big_endian: false,
             allow_backtracking: true,
+            ignore_delay_slots: false,
+            max_subtables: 64,
+            is_valid: false,
             base_addr: 0,
             offset: 0,
             next_offset: 0,
@@ -59,7 +73,6 @@ impl Decoder {
             eval_stack: Vec::new(),
         }
     }
-
     pub fn set_inst(&mut self, base_addr: u64, bytes: &[u8]) {
         self.context = self.global_context;
         self.base_addr = base_addr;
@@ -71,6 +84,8 @@ impl Decoder {
 
     /// Decode the current instruction storing the result in `inst`.
     pub fn decode_into(&mut self, sleigh: &SleighData, inst: &mut Instruction) -> Option<()> {
+        self.is_valid = true;
+
         // Clear any noflow fields from `global_context`
         for entry in sleigh.context_fields.iter().filter(|entry| !entry.flow) {
             entry.field.set(&mut self.global_context, 0);
@@ -79,7 +94,7 @@ impl Decoder {
         self.big_endian = sleigh.big_endian;
         let root = inst.init();
 
-        let constructor = self.decode_subtable(sleigh, inst, ROOT_TABLE_ID)?;
+        let constructor = self.decode_subtable(sleigh, inst, ROOT_TABLE_ID);
         inst.subtables[root as usize] = constructor;
 
         inst.root_mut(sleigh).eval_disasm_expr(self);
@@ -91,11 +106,22 @@ impl Decoder {
         // refers to the address immediately after the first instruction.
         if let Some(_) = inst.delay_slot {
             self.offset = self.next_offset;
-            inst.delay_slot = Some(self.decode_subtable(sleigh, inst, ROOT_TABLE_ID)?);
+            if !self.ignore_delay_slots {
+                inst.delay_slot = Some(self.decode_subtable(sleigh, inst, ROOT_TABLE_ID));
+            }
+            else {
+                // Assume the size of the delay slot is the same as the root instruction.
+                self.next_offset *= 2;
+                inst.delay_slot = Some(invalid_constructor(sleigh));
+            }
         }
 
         inst.inst_start = self.base_addr;
         inst.inst_next = self.base_addr + self.next_offset as u64;
+
+        if !self.is_valid {
+            return None;
+        }
 
         Some(())
     }
@@ -105,7 +131,12 @@ impl Decoder {
         sleigh: &SleighData,
         inst: &mut Instruction,
         table: TableId,
-    ) -> Option<DecodedConstructor> {
+    ) -> DecodedConstructor {
+        if inst.subtables.len() > self.max_subtables {
+            self.is_valid = false;
+            return invalid_constructor(sleigh);
+        }
+
         // The offset next constructor to match, used to resume the search at the correct position
         // after backtracking.
         let mut match_offset = 0;
@@ -122,13 +153,16 @@ impl Decoder {
             sleigh.match_constructor_with(self, table, match_offset)
         {
             if let Some(constructor) = self.try_decode_constructor(sleigh, inst, constructor_id) {
-                return Some(constructor);
+                if self.is_valid || !self.allow_backtracking {
+                    return constructor;
+                }
             }
 
             // Failed to decode current constructor, backtrack and try again.
             if !self.allow_backtracking {
                 break;
             }
+            self.is_valid = true;
             match_offset = next_match_offset;
             self.offset = initial_offset;
             self.next_offset = initial_next_offset;
@@ -139,7 +173,8 @@ impl Decoder {
 
         // Failed to find any matching constructor. Record last subtable searched to aid debugging.
         inst.last_subtable = table;
-        None
+        self.is_valid = false;
+        invalid_constructor(sleigh)
     }
 
     fn try_decode_constructor(
@@ -149,6 +184,8 @@ impl Decoder {
         constructor_id: ConstructorId,
     ) -> Option<DecodedConstructor> {
         let mut ctx = inst.alloc_constructor(sleigh, constructor_id).ok()?;
+        ctx.constructor.offset = self.offset as u8;
+
         let mut next = self.next_offset;
 
         if DEBUG {
@@ -178,7 +215,7 @@ impl Decoder {
                     };
                 }
                 DecodeAction::Subtable(idx, id) => {
-                    let constructor = self.decode_subtable(sleigh, ctx.inst, *id)?;
+                    let constructor = self.decode_subtable(sleigh, ctx.inst, *id);
                     ctx.subtables_mut()[*idx as usize] = constructor;
                 }
                 DecodeAction::NextToken(size) => {
@@ -186,20 +223,29 @@ impl Decoder {
                     // handle the case where a previous token expands to a longer token, however the
                     // MSP430X spec seems not to do this (e.g. `MOVX.W &0, R10`).
                     //
-                    // To work around this we always perform an implicit `ExpandStart` on every
-                    // token.
+                    // To work around this we always perform an implicit `...` on every token.
                     //
                     //@todo: check this behaviour.
                     next = next.max(self.next_offset);
-                    self.next_offset = self.offset + *size as usize;
+                    self.next_offset = self.next_offset.max(self.offset + *size as usize);
                 }
-                DecodeAction::GroupStart => self.group_start(),
-                DecodeAction::GroupEnd => self.group_end(),
-                DecodeAction::ExpandStart => next = next.max(self.next_offset),
-                DecodeAction::ExpandEnd => self.next_offset = self.next_offset.max(next),
+                DecodeAction::GroupStart => {
+                    // Save current token position and step to next offset.
+                    self.token_stack.push((self.offset, self.next_offset));
+                    self.offset = self.next_offset;
+                }
+                DecodeAction::GroupEnd => {
+                    // Implicit `...` (see `NextToken` above).
+                    next = next.max(self.next_offset);
+                    // Restore previous token position.
+                    (self.offset, self.next_offset) = self.token_stack.pop().unwrap();
+                }
+                DecodeAction::ExpandStart => {}
+                DecodeAction::ExpandEnd => {}
             }
         }
         self.next_offset = next.max(self.next_offset);
+        ctx.constructor.len = (self.next_offset - ctx.constructor.offset as usize) as u8;
 
         Some(ctx.constructor)
     }
@@ -267,14 +313,15 @@ impl Decoder {
             _ => panic!("invalid token size: {}", token.size),
         }
     }
+}
 
-    fn group_start(&mut self) {
-        self.token_stack.push(self.offset);
-        self.offset = self.next_offset;
-    }
-
-    fn group_end(&mut self) {
-        self.offset = self.token_stack.pop().unwrap();
+fn invalid_constructor(sleigh: &SleighData) -> DecodedConstructor {
+    DecodedConstructor {
+        id: (sleigh.constructors.len() - 1) as u32,
+        locals: (0, 0),
+        subtables: (0, 0),
+        offset: 0,
+        len: 0,
     }
 }
 
@@ -288,10 +335,10 @@ pub struct Instruction {
 
     /// The decoded constructors for each subtable reference by the instruction including subtables
     /// referenced by a potential delay slot.
-    pub(crate) subtables: Vec<DecodedConstructor>,
+    pub subtables: Vec<DecodedConstructor>,
 
     /// The root level constructor for the instruction in the delay slot (if present).
-    pub(crate) delay_slot: Option<DecodedConstructor>,
+    pub delay_slot: Option<DecodedConstructor>,
 
     /// The address of the instruction.
     pub inst_start: u64,
@@ -310,6 +357,11 @@ impl Instruction {
         self.delay_slot = None;
         self.last_subtable = 0;
         self.reserve_subtables(1).0
+    }
+
+    /// Returns whether the current instruction contains a delayslot.
+    pub fn has_delay_slot(&self) -> bool {
+        self.delay_slot.is_some()
     }
 
     /// Returns the length of the instruction in bytes.
@@ -352,7 +404,7 @@ impl Instruction {
         Ok(SubtableCtxMut {
             inst: self,
             data,
-            constructor: DecodedConstructor { id, locals, subtables },
+            constructor: DecodedConstructor { id, locals, subtables, offset: 0, len: 0 },
         })
     }
 
@@ -381,6 +433,12 @@ pub struct DecodedConstructor {
 
     /// The range of subtable fields defined by the constructor.
     pub subtables: SubtablesSlice,
+
+    /// Byte offset of the decoded constructor from the start of the instruction.
+    pub offset: u8,
+
+    /// Length (in bytes) of the constructor.
+    pub len: u8,
 }
 
 pub struct SubtableCtx<'a, 'b> {
@@ -438,6 +496,11 @@ impl<'a, 'b> SubtableCtx<'a, 'b> {
     pub fn semantics(&self) -> &'b [SemanticAction] {
         let (start, end) = self.data.constructors[self.constructor.id as usize].semantics;
         &self.data.semantics[start as usize..end as usize]
+    }
+
+    pub fn temporaries(&self) -> &[PcodeTmp] {
+        let (start, end) = self.data.constructors[self.constructor.id as usize].temporaries;
+        &self.data.temporaries[start as usize..end as usize]
     }
 }
 

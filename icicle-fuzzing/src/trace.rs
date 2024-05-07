@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashSet, path::PathBuf, rc::Rc};
+use std::{collections::HashSet, path::PathBuf};
 
 use icicle_vm::cpu::Cpu;
 
@@ -67,16 +67,13 @@ fn resolve_block_coverage_impl<I>(
 where
     I: InputSource,
 {
-    let total_cov = Rc::new(RefCell::new(HashSet::new()));
-    let new_cov = Rc::new(RefCell::new(HashSet::new()));
+    let ((mut vm, (total_cov, new_cov)), mut runner) = initialize_vm_auto(config, |vm, config| {
+        let total_cov = vm.cpu.trace.register_typed_data(HashSet::new());
+        let new_cov = vm.cpu.trace.register_typed_data(HashSet::new());
 
-    let ((mut vm, _), mut runner) = initialize_vm_auto(config, |vm, config| {
-        let combined = total_cov.clone();
-        let new = new_cov.clone();
-
-        let hook = vm.cpu.add_hook(Box::new(move |_: &mut Cpu, addr: u64| {
-            if combined.borrow_mut().insert(addr) {
-                new.borrow_mut().insert(addr);
+        let hook = vm.cpu.add_hook(Box::new(move |cpu: &mut Cpu, addr: u64| {
+            if cpu.trace[total_cov].insert(addr) {
+                cpu.trace[new_cov].insert(addr);
             }
         }));
 
@@ -86,22 +83,22 @@ where
         };
         icicle_vm::injector::register_block_hook_injector(vm, start, end, hook);
 
-        Ok(())
+        Ok((total_cov, new_cov))
     })?;
 
     let snapshot = vm.snapshot();
 
     let mut output = vec![];
     source.visit(|tag, input| {
-        new_cov.borrow_mut().clear();
+        vm.cpu.trace[new_cov].clear();
         vm.restore(&snapshot);
         runner.set_input(&mut vm, &input)?;
         vm.run();
-        output.push(CoverageEntry { tag, new: new_cov.borrow().clone() });
+        output.push(CoverageEntry { tag, new: vm.cpu.trace[new_cov].clone() });
         Ok(())
     })?;
+    let combined_cov = vm.cpu.trace[total_cov].clone();
     drop(vm);
 
-    let combined_cov = Rc::try_unwrap(total_cov).unwrap().into_inner();
     Ok((combined_cov, output))
 }

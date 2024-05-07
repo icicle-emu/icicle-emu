@@ -54,12 +54,10 @@ smlawteq r0,r1,r1,pc
 	$U8:1 = !ZR
 	if $U8:1 jump 0x80000004:8
 <L1>:
-	$U9:8 = 0x0:8
-	$U9:4 = r1
+	$U9:8 = zext(r1)
 	$U9:8 = $U9:8 << 0x20:1
 	$U9:8 = $U9:8 s>> 0x20:1
-	$U10:8 = 0x0:8
-	$U10:2 = $tmp0:2
+	$U10:8 = zext($tmp0:2)
 	$U10:8 = $U10:8 << 0x30:1
 	$U10:8 = $U10:8 s>> 0x30:1
 	$U13:8 = $U9:8 * $U10:8
@@ -459,7 +457,6 @@ b.w 0x8005708
 mov r7,r1
 <L0> (entry=0x8005704):
 	instruction(0x8005704)
-<L1>:
 	instruction(0x8005708)
 	r7 = r1
 
@@ -487,7 +484,7 @@ beq 0x8008c40
 	NG = tmpNG
 	OV = tmpOV
 	instruction(0x8008c4e)
-	$U1:1 = tmpZR
+	$U1:1 = ZR
 	if $U1:1 jump 0x8008c40:4
 
 mvns.w r12,r4, asr #0x15
@@ -505,7 +502,7 @@ beq 0x80003aa
 	instruction(0x800034e)
 	instruction(0x8000350)
 	$tmp0:4 = r5 s>> 0x15:4
-	$U6:1 = tmpZR == 0x0:1
+	$U6:1 = ZR == 0x0:1
 	$U5:1 = !$U6:1
 	if $U5:1 jump <L2>
 <L1>:
@@ -544,8 +541,8 @@ bx.gt lr
 	OV = tmpOV
 	instruction(0x8000ec2)
 	instruction(0x8000ec4)
-	$U4:1 = !tmpZR
-	$U5:1 = tmpNG == tmpOV
+	$U4:1 = !ZR
+	$U5:1 = NG == OV
 	$U3:1 = $U4:1 && $U5:1
 	$U2:1 = !$U3:1
 	if $U2:1 jump <L2>
@@ -612,7 +609,7 @@ bcs 0x80022b0
 	NG = tmpNG
 	OV = tmpOV
 	instruction(0x800228c)
-	$U1:1 = tmpCY
+	$U1:1 = CY
 	if $U1:1 jump 0x80022b0:4
 
 ldr.w pc,[sp],#0x8

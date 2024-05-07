@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use icicle_cpu::{debug_info::SourceLocation, utils::get_u64};
 use pcode::PcodeDisplay;
 
@@ -87,8 +89,9 @@ pub fn current_disasm(vm: &Vm) -> String {
     };
 
     let mut out = String::new();
-
+    
     let block = &vm.code.blocks[block_id as usize];
+    let pc_valid =  block.contains_addr(vm.cpu.read_pc());
     for (i, op) in block.pcode.instructions.iter().enumerate() {
         if matches!(op.op, pcode::Op::InstructionMarker) {
             let addr = op.inputs.first().as_u64();
@@ -100,14 +103,14 @@ pub fn current_disasm(vm: &Vm) -> String {
         else {
             write!(out, "\t{}", op.display(&vm.cpu.arch.sleigh)).unwrap();
         }
-        if i == block_offset as usize {
+        if i == block_offset as usize && pc_valid {
             write!(out, " <-- next instruction").unwrap();
         }
         out.push('\n');
     }
 
     write!(out, "\t{}", block.exit.display(&vm.cpu.arch.sleigh)).unwrap();
-    if block_offset == block.pcode.instructions.len() as u64 {
+    if block_offset == block.pcode.instructions.len() as u64 || !pc_valid {
         write!(out, " <-- next instruction").unwrap();
     }
     out.push('\n');
@@ -145,6 +148,11 @@ pub fn callstack_from_debug_info(vm: &mut Vm) -> Option<Vec<u64>> {
     let debug_info = vm.env.debug_info()?;
     // @todo: use proper dwarf based unwinding.
 
+    // Find the end of all known blocks in the program. Every returning address must point to the
+    // next address after a block.
+    // @fixme: this could be slow if this function is frequently called and there are lot of blocks.
+    let known_block_ends: HashSet<u64> = vm.code.blocks.iter().map(|x| x.end).collect();
+
     // Fallback mode: just look for values that look like addresses.
     let sp = vm.cpu.read_reg(vm.cpu.arch.reg_sp);
 
@@ -168,7 +176,29 @@ pub fn callstack_from_debug_info(vm: &mut Vm) -> Option<Vec<u64>> {
 
     let known_start_symbols = ["main", "reset", "start", "main_trampoline"];
     for chunk in stack.chunks_exact(vm.cpu.arch.reg_pc.size as usize) {
-        let slot = get_u64(chunk);
+        let mut slot = get_u64(chunk);
+
+        if matches!(vm.cpu.arch.triple.architecture, target_lexicon::Architecture::Arm(_)) {
+            // Check if this matches a possible exception handler frame.
+            //
+            // DISABLED: This is too easily mistaken due to negative return values.
+            //
+            // const ARM_EXC_RETURN: u64 = 0xf000_0000;
+            // if (slot & ARM_EXC_RETURN) == ARM_EXC_RETURN {
+            //     callstack.push(slot);
+            //     continue;
+            // }
+
+            // Remove thumb bit.
+            slot &= !1;
+        }
+
+        // Ensure that the instruction before the return address is at the end of a known code
+        // block.
+        if !known_block_ends.contains(&slot) {
+            continue;
+        }
+
         if let Some((name, _addr, kind)) = debug_info.symbols.resolve_addr(slot) {
             if matches!(kind, icicle_cpu::debug_info::SymbolKind::Function) {
                 callstack.push(slot);

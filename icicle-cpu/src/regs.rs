@@ -58,6 +58,8 @@ pub trait ValueSource {
             9 => DynamicValue::U72(self.read(value)),
             10 => DynamicValue::U80(self.read(value)),
             16 => DynamicValue::U128(self.read(value)),
+            // For 256 bit values, currently we only support reading the lower 128 bits
+            32 => DynamicValue::U128(self.read(value.truncate(16))),
             _ => DynamicValue::U8(0),
         }
     }
@@ -77,6 +79,9 @@ pub trait ValueSource {
             9 => self.write_var::<[u8; 9]>(var, val.zxt()),
             10 => self.write_var::<[u8; 10]>(var, val.zxt()),
             16 => self.write_var::<[u8; 16]>(var, val.zxt()),
+            // For 256 bit values, currently we only support writing to the lower 128 bits
+            32 => self.write_var::<[u8; 16]>(var.truncate(16), val.zxt()),
+
             _ => (),
         }
     }

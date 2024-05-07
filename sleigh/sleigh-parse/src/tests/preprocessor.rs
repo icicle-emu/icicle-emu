@@ -43,6 +43,21 @@ define endian=$(ENDIAN);
     assert_eq!(result.unwrap(), "define endian = big ;");
 }
 
+#[test]
+fn define_nothing() {
+    let result = preprocess_to_string(
+        r#"
+@define ENDIAN
+@ifdef ENDIAN
+define endian=big;
+@endif
+"#,
+    );
+
+    assert_eq!(result.unwrap(), "define endian = big ;");
+}
+
+
 /// Tests that the `@define` macro works with integer values
 #[test]
 fn define_integer() {

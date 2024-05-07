@@ -73,6 +73,9 @@ fn build_case_matcher(
                 (ast::ConstraintCmp::Equal, &ConstraintOperand::Constant(value)) => {
                     context.add_constraint(context_token, *field, Some(value as u64), false)?;
                 }
+                // Comparing a field with itself (no op)
+                (ast::ConstraintCmp::Equal, &ConstraintOperand::Field(rhs_field))
+                    if field == &rhs_field => {}
                 _ => {
                     context.add_constraint(context_token, *field, None, false)?;
                     complex.push(constraint.clone())
@@ -82,6 +85,9 @@ fn build_case_matcher(
                 (ast::ConstraintCmp::Equal, &ConstraintOperand::Constant(value)) => {
                     tokens.add_constraint(*token, *field, Some(value as u64), token.big_endian)?;
                 }
+                // Comparing a field with itself (no op)
+                (ast::ConstraintCmp::Equal, &ConstraintOperand::Field(rhs_field))
+                    if field == &rhs_field => {}
                 _ => {
                     tokens.add_constraint(*token, *field, None, token.big_endian)?;
                     complex.push(constraint.clone())
@@ -134,7 +140,8 @@ impl BitMatcher {
         }
         let new_mask = BitVec::from_u64(mask, token_bits).shift_start(token_offset);
 
-        let Some(value) = value else {
+        let Some(value) = value
+        else {
             // complex constrained, just add 1 to the value.
             let value_part = new_mask.and(&self.mask.not());
             self.bits = self.bits.or(&value_part);

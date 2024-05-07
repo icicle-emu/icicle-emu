@@ -1,43 +1,13 @@
-use std::collections::{HashMap, HashSet};
+use hashbrown::{HashMap, HashSet};
 
 use pcode::{Instruction, Op, PcodeLabel, VarId, VarNode};
 
-use crate::exec::const_eval::{BitVecExt, ConstEval};
-
-struct OptimizerState {
-    /// Whether the const evaluator had to bail on the current instruction.
-    const_valid: bool,
-
-    /// Bit-level const evaluator.
-    const_eval: ConstEval,
-}
-
-impl OptimizerState {
-    fn reset(&mut self) {
-        self.const_valid = false;
-        self.const_eval.clear();
-    }
-
-    /// Const propagates a single value.
-    fn const_prop_value(&mut self, value: pcode::Value) -> pcode::Value {
-        if value.is_invalid() {
-            return value;
-        }
-
-        match self.const_eval.get_const(value) {
-            Some(x) => pcode::Value::Const(x, value.size()),
-            None => {
-                let existing = self.const_eval.get_value(value);
-                self.const_eval.matches_existing(&existing).map_or(value, |x| x.into())
-            }
-        }
-    }
-}
+use crate::exec::const_eval::{self, BitVecExt, ConstEval};
 
 pub struct Optimizer {
     /// Configures whether the optimzer is operating on a block representing a single instruction
     /// only. Within an instruction boundary we allow redundant loads/stores to be removed.
-    _single_instruction_only: bool,
+    single_instruction_only: bool,
 
     /// Structure for performing dead code elimination.
     dead_store_detector: DeadStoreDetector,
@@ -54,23 +24,24 @@ pub struct Optimizer {
     /// A temporary block to write the optimized instructions into.
     block: pcode::Block,
 
+    /// Constant propagated state for the outputs of `block`.
+    state: Vec<(usize, pcode::VarNode, const_eval::Value)>,
+
     /// The optimizer state used for evaluating an instruction.
-    state: std::cell::RefCell<OptimizerState>,
+    const_eval: std::cell::RefCell<ConstEval>,
 }
 
 impl Optimizer {
     pub fn new() -> Self {
         Self {
-            _single_instruction_only: true,
+            single_instruction_only: true,
             dead_store_detector: DeadStoreDetector::default(),
             labels: HashMap::new(),
             reachable_labels: HashSet::new(),
             jump_target: None,
             block: pcode::Block::new(),
-            state: std::cell::RefCell::new(OptimizerState {
-                const_valid: false,
-                const_eval: ConstEval::new(),
-            }),
+            state: vec![],
+            const_eval: std::cell::RefCell::new(ConstEval::new()),
         }
     }
 
@@ -79,9 +50,10 @@ impl Optimizer {
     }
 
     /// Simplifies the target block by propagating constants.
-    pub fn const_prop(&mut self, block: &mut pcode::Block) -> Result<(), ()> {
+    pub fn const_prop(&mut self, block: &mut pcode::Block) {
         self.block.clear();
-        self.state.get_mut().reset();
+        self.state.clear();
+        self.const_eval.get_mut().clear();
         self.jump_target = None;
 
         // Precompute the location of all labels within the block.
@@ -99,15 +71,21 @@ impl Optimizer {
         self.reachable_labels.clear();
         for (idx, stmt) in block.instructions.iter().enumerate() {
             if let Op::PcodeBranch(label) = stmt.op {
-                if self.labels[&label] < idx {
+                // The `None` case here corresponds to jumps to invalid labels, these will trigger
+                // an `InvalidTarget` exception at runtime.
+                if self.labels.get(&label).map_or(false, |target| *target < idx) {
                     self.reachable_labels.insert(label);
                 }
             }
         }
 
         for stmt in &block.instructions {
-            // Assume that the current instruction can be const evaluated.
-            self.state.get_mut().const_valid = true;
+            if matches!(stmt.op, Op::InstructionMarker) {
+                // Prevent temporaries from being propagated across instruction boundaries.
+                let mut const_eval = self.const_eval.borrow_mut();
+                const_eval.results.clear();
+                const_eval.inputs.retain(|id, _| self.dead_store_detector.should_persist(*id));
+            }
 
             // Check whether we are at a new label.
             if let Op::PcodeLabel(id) = stmt.op {
@@ -124,7 +102,7 @@ impl Optimizer {
 
                     // Since this label is reachable elsewhere we need to flush the current state
                     // and add the label.
-                    self.state.get_mut().const_eval.clear();
+                    self.const_eval.get_mut().clear();
                     self.block.push(Op::PcodeLabel(id));
                 }
                 else if self.jump_target == Some(id) {
@@ -139,8 +117,35 @@ impl Optimizer {
                 continue;
             }
 
-            if let Some(inst) = simplify(self, stmt)? {
-                self.block.push(inst);
+            if let Some((mut inst, const_state)) = simplify(self, stmt) {
+                if !inst.output.is_invalid() {
+                    // Check if this is a write to the lower bytes of register where the upper bits
+                    // are zero. If this is the case then store the output to a temporary, then
+                    // zero-extend it into the full register. This adds an extra op, but simplifies
+                    // later analysis.
+                    match zero_extended_output(inst.output, const_state.clone()) {
+                        Some(extended_output) => {
+                            self.block.recompute_next_tmp();
+                            let tmp = self.block.alloc_tmp(inst.output.size);
+                            inst.output = tmp;
+                            self.block.push(inst);
+
+                            let id = self.block.instructions.len();
+                            self.block.push((extended_output, pcode::Op::ZeroExtend, tmp));
+                            self.state.push((id, extended_output, const_state));
+                        }
+                        None => {
+                            let id = self.block.instructions.len();
+                            self.block.push(inst);
+                            self.state.push((id, inst.output, const_state));
+                        }
+                    }
+                }
+                else {
+                    let id = self.block.instructions.len();
+                    self.block.push(inst);
+                    self.state.push((id, inst.output, const_state));
+                }
             }
         }
 
@@ -154,13 +159,20 @@ impl Optimizer {
 
         // Replace the current block with the optimized one.
         std::mem::swap(&mut self.block, block);
+    }
 
-        Ok(())
+    pub fn const_prop_values(
+        &self,
+    ) -> impl Iterator<Item = &(usize, pcode::VarNode, const_eval::Value)> {
+        self.state.iter()
     }
 
     /// Removes all instructions that write to a variable that is never read.
     pub fn dead_store_elimination(&mut self, block: &mut pcode::Block) {
-        let dead_code = self.dead_store_detector.get_dead_code(block);
+        let dead_code = self.dead_store_detector.get_dead_code(block, self.single_instruction_only);
+        if dead_code.is_empty() {
+            return;
+        }
 
         self.block.clear();
         for (_, stmt) in
@@ -180,30 +192,29 @@ impl Optimizer {
 }
 
 /// Simplifies an instruction based information from const propagation
-fn simplify(exec: &mut Optimizer, stmt: &Instruction) -> Result<Option<Instruction>, ()> {
-    let state = exec.state.get_mut();
+fn simplify(exec: &mut Optimizer, stmt: &Instruction) -> Option<(Instruction, const_eval::Value)> {
+    let state = exec.const_eval.get_mut();
 
     // Perform const propagation on the inputs of the current instruction.
     let inputs =
         [state.const_prop_value(stmt.inputs.first()), state.const_prop_value(stmt.inputs.second())];
-    let input_values =
-        [state.const_eval.get_value(inputs[0]), state.const_eval.get_value(inputs[1])];
+    let input_values = [state.get_value(inputs[0]), state.get_value(inputs[1])];
     let updated_instruction = Instruction::from((stmt.output, stmt.op, inputs));
 
-    let prev_output = state.const_eval.get_value(stmt.output.into());
-    state.const_eval.eval(updated_instruction)?;
+    let prev_output = state.get_base_value(stmt.output.into());
+    state.eval(updated_instruction);
 
     // If the instruction is an internal branch, then we need to keep track of the label that we are
     // jumping to.
     if let Op::PcodeBranch(label) = stmt.op {
-        match state.const_eval.get_const(inputs[0]) {
+        match state.get_const(inputs[0]) {
             Some(0) => {
                 // The branch is always false, so skip the branch.
-                return Ok(None);
+                return None;
             }
             Some(1) => {
                 exec.jump_target = Some(label);
-                return Ok(None);
+                return None;
             }
             _ => {}
         }
@@ -215,9 +226,9 @@ fn simplify(exec: &mut Optimizer, stmt: &Instruction) -> Result<Option<Instructi
     }
 
     if let Op::Branch(_) = stmt.op {
-        if state.const_eval.get_const(inputs[0]) == Some(0) {
+        if state.get_const(inputs[0]) == Some(0) {
             // The branch is always false, so skip the branch.
-            return Ok(None);
+            return None;
         }
         // @todo: add a barrier here?
         // exec.barrier();
@@ -225,36 +236,72 @@ fn simplify(exec: &mut Optimizer, stmt: &Instruction) -> Result<Option<Instructi
 
     if external_state_modifications(stmt.op) {
         // Need to flush const evaluation state, since the target operation may modify any register.
-        state.const_eval.clear();
+        state.clear();
     }
 
+    let full_output = state.get_base_value(stmt.output.into());
     if stmt.op.has_side_effects() {
         // If the instruction has side-effects then we need to retain the original instruction.
-        return Ok(Some(updated_instruction));
+        return Some((updated_instruction, full_output));
     }
 
-    let output = state.const_eval.get_value(stmt.output.into());
-    if output == prev_output {
+    let output = state.get_value(stmt.output.into());
+    if output == prev_output.clone().slice_to(stmt.output.offset * 8, stmt.output.size * 8) {
         // If the instruction has no side-effects and the output value hasn't changed then we can
         // safely remove ignore this instruction.
-        return Ok(None);
+        return None;
     }
 
-    if let Some(value) = output.get_const() {
+    let known_output = if let Some(value) = output.get_const() {
         // Copy from constant.
-        Ok(Some(stmt.output.copy_from(pcode::Value::Const(value, stmt.output.size))))
+        Some(pcode::Value::Const(value, stmt.output.size))
     }
     else if output == input_values[0] {
         // Copy from first input.
-        Ok(Some(stmt.output.copy_from(inputs[0])))
+        Some(inputs[0])
     }
     else if output == input_values[1] {
         // Copy from second input.
-        Ok(Some(stmt.output.copy_from(inputs[1])))
+        Some(inputs[1])
+    }
+    else {
+        None
+    };
+
+    if let Some(value) = known_output {
+        match zero_extended_output(stmt.output, prev_output) {
+            Some(extended_output) => Some((extended_output.zext_from(value), full_output)),
+            None => Some((stmt.output.copy_from(value), full_output)),
+        }
     }
     else {
         // Unable to simplify the instruction.
-        Ok(Some(updated_instruction))
+        Some((updated_instruction, full_output))
+    }
+}
+
+/// Returns a larger varnode for `output` if the bits above the `output` slice are all zeroes.
+fn zero_extended_output(
+    output: pcode::VarNode,
+    prev_output: const_eval::Value,
+) -> Option<pcode::VarNode> {
+    if output.offset != 0 {
+        // Avoid handling inner slices.
+        return None;
+    }
+
+    let new_bitsize = (output.size * 8) as usize;
+    let full_length = prev_output.len();
+    let upper_zeros = prev_output
+        .slice_to(new_bitsize as u8, (full_length - new_bitsize) as u8)
+        .known_trailing_zeros();
+
+    let zero_bytes = upper_zeros / 8;
+    if zero_bytes != 0 && (output.size as usize + zero_bytes).is_power_of_two() {
+        Some(pcode::VarNode::new(output.id, output.size + zero_bytes as u8))
+    }
+    else {
+        None
     }
 }
 
@@ -315,7 +362,11 @@ struct DeadStoreDetector {
 }
 
 impl DeadStoreDetector {
-    fn get_dead_code(&mut self, block: &pcode::Block) -> &HashSet<usize> {
+    fn get_dead_code(
+        &mut self,
+        block: &pcode::Block,
+        single_instruction_only: bool,
+    ) -> &HashSet<usize> {
         self.dead_code.clear();
         self.live_reads.clear();
         self.live_across_block.clear();
@@ -332,6 +383,13 @@ impl DeadStoreDetector {
                     self.live_reads.entry(*id).and_modify(|x| x.set |= entry.set).or_insert(*entry);
                 }
                 self.live_across_block.clone_from(&self.live_reads);
+            }
+
+            if single_instruction_only && matches!(stmt.op, Op::InstructionMarker) {
+                // Reset liveness tracking across instruction boundaries.
+                self.live_reads.clear();
+                self.live_across_block.clear();
+                self.last_write.clear();
             }
 
             let is_live = self.is_live(stmt.output) || stmt.op.has_side_effects();
@@ -365,9 +423,9 @@ impl DeadStoreDetector {
     }
 
     fn is_live(&mut self, var: pcode::VarNode) -> bool {
-        use std::collections::hash_map::Entry;
+        use hashbrown::hash_map::Entry;
 
-        if self.should_persist(var) {
+        if self.should_persist(var.id) {
             match self.last_write.entry(var.id) {
                 Entry::Occupied(mut prev) => {
                     let mut merged = *prev.get();
@@ -393,8 +451,8 @@ impl DeadStoreDetector {
     }
 
     /// Returns whether the variable needs to be persisted at the end of the block.
-    fn should_persist(&self, var: VarNode) -> bool {
-        !var.is_temp() && !self.additional_tmps.contains(&var.id)
+    fn should_persist(&self, id: pcode::VarId) -> bool {
+        id > 0 && !self.additional_tmps.contains(&id)
     }
 }
 
@@ -416,7 +474,7 @@ mod test {
 
         block.push((b, Op::IntLeft, a, 0_u64));
 
-        opt.const_prop(&mut block).unwrap();
+        opt.const_prop(&mut block);
         opt.dead_store_elimination(&mut block);
 
         assert_eq!(block.instructions.len(), 1);
@@ -435,7 +493,7 @@ mod test {
         block.push((tmp, Op::Copy, a));
         block.push((b, Op::Copy, tmp));
 
-        opt.const_prop(&mut block).unwrap();
+        opt.const_prop(&mut block);
         eprintln!("{:?}", block);
         opt.dead_store_elimination(&mut block);
 
@@ -453,7 +511,7 @@ mod test {
         let b = VarNode::new(2, 8);
 
         block.push((b, Op::PcodeOp(0), a));
-        opt.const_prop(&mut block).unwrap();
+        opt.const_prop(&mut block);
         eprintln!("{:?}", block);
         opt.dead_store_elimination(&mut block);
 

@@ -184,6 +184,7 @@ impl BasicInstructionSource {
             reg_init: vec![],
             on_boot: crate::cpu::generic_on_boot,
             calling_cov: crate::cpu::CallCov::default(),
+            temporaries: vec![],
             sleigh,
         };
         Self { arch, base_addr: 0, mem: vec![] }

@@ -2,6 +2,7 @@
 pub enum MemError {
     Unallocated,
     Unmapped,
+    UnmappedRegister,
     Uninitalized,
     ReadViolation,
     WriteViolation,
@@ -21,6 +22,7 @@ impl std::str::FromStr for MemError {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s {
             "Unmapped" => Self::Unmapped,
+            "UnmappedRegister" => Self::UnmappedRegister,
             "Unallocated" => Self::Unallocated,
             "Uninitalized" => Self::Uninitalized,
             "ReadViolation" => Self::ReadViolation,
@@ -41,6 +43,7 @@ impl MemError {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Unmapped => "Unmapped",
+            Self::UnmappedRegister => "UnmappedRegister",
             Self::Unallocated => "Unallocated",
             Self::Uninitalized => "Uninitalized",
             Self::ReadViolation => "ReadViolation",
@@ -70,6 +73,7 @@ impl MemError {
             Self::OutOfMemory => 0x1_0009,
             Self::SelfModifyingCode => 0x1_000a,
             Self::AddressOverflow => 0x1_000b,
+            Self::UnmappedRegister => 0x1_000c,
             Self::Unknown => 0x1_FFFF,
         }
     }

@@ -5,7 +5,7 @@ use sleigh_runtime::{
 
 use crate::{
     constructor::{resolve_pattern_expr, FieldIndex, ResolveIdent, Scope},
-    symbols::{ContextFieldId, Symbol, SymbolKind},
+    symbols::{Symbol, SymbolKind},
 };
 
 #[derive(Clone, Default)]
@@ -14,7 +14,7 @@ pub(crate) struct DisasmActions {
     pub fields: Vec<(FieldIndex, Vec<PatternExprOp<DisasmConstantValue>>)>,
 
     /// The context fields modified in this section
-    pub context_mod: Vec<(ContextFieldId, Vec<PatternExprOp<ContextModValue>>)>,
+    pub context_mod: Vec<(Field, Vec<PatternExprOp<ContextModValue>>)>,
 
     /// The context fields globally set by this section
     pub global_set: Vec<u32>,
@@ -29,17 +29,14 @@ pub(crate) fn resolve(
     for action in disasm_actions {
         match action {
             ast::DisasmAction::Assignment { ident, expr } => {
-                let field_id = scope.fields.len().try_into().unwrap();
-
                 match scope.globals.lookup(*ident) {
                     // An expression that modifies the decoder context.
                     Ok(Symbol { kind: SymbolKind::ContextField, id }) => {
                         let field = scope.globals.context_fields[id as usize].field;
-                        scope.add_field(*ident, field)?;
 
                         let mut out = vec![];
                         resolve_pattern_expr::<ContextModValue>(scope, expr, &mut out)?;
-                        section.context_mod.push((id, out));
+                        section.context_mod.push((field, out));
                     }
 
                     // An expression that sets a disassembly constant.
@@ -50,6 +47,8 @@ pub(crate) fn resolve(
                         let mut out = vec![];
                         resolve_pattern_expr::<DisasmConstantValue>(scope, expr, &mut out)?;
                         section.fields.push((field_id, out));
+
+                        scope.mapping.insert(*ident, Local::Field(field_id));
                     }
 
                     Ok(Symbol { kind, .. }) => {
@@ -60,8 +59,6 @@ pub(crate) fn resolve(
                         ));
                     }
                 }
-
-                scope.mapping.insert(*ident, Local::Field(field_id));
             }
             ast::DisasmAction::GlobalSet { start_sym, context_sym } => {
                 let resolved = match DisasmConstantValue::resolve_ident(scope, *start_sym).ok() {

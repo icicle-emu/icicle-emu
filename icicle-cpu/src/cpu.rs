@@ -1,6 +1,6 @@
 use std::cell::UnsafeCell;
 
-use icicle_mem::{perm, MemError, MemResult, Mmu};
+use icicle_mem::{perm, tlb::TranslationCache, MemError, MemResult, Mmu};
 use pcode::PcodeDisplay;
 
 use crate::{
@@ -10,7 +10,7 @@ use crate::{
     },
     lifter::{BlockExit, Target},
     regs::{RegValue, Regs, ValueSource},
-    trace::Trace,
+    trace::{self, Trace},
     ExceptionCode, InstHook, VarSource,
 };
 
@@ -139,6 +139,9 @@ pub struct Arch {
     /// Values to initialize registers with on reset.
     pub reg_init: Vec<(pcode::VarNode, u128)>,
 
+    /// Registers that should be treated as temporaries.
+    pub temporaries: Vec<pcode::VarId>,
+
     /// Registers that represent arguments for the current calling convention.
     pub calling_cov: CallCov,
 
@@ -153,6 +156,7 @@ impl Arch {
     /// A generic architecture used for testing.
     pub fn none() -> Self {
         let mut sleigh = sleigh_runtime::SleighData::default();
+        sleigh.alignment = 1;
         sleigh.add_custom_reg("INVALID_VARNODE", 0);
         let reg_pc = sleigh.add_custom_reg("pc", 8).unwrap();
         let reg_next_pc = sleigh.add_custom_reg("next_pc", 8).unwrap();
@@ -170,6 +174,7 @@ impl Arch {
             reg_isa_mode: None,
             isa_mode_context: vec![0],
             reg_init: vec![],
+            temporaries: vec![],
             calling_cov: CallCov::default(),
             on_boot: |_, _| {},
             sleigh,
@@ -188,6 +193,31 @@ impl Arch {
         match self.triple.endianness().unwrap() {
             target_lexicon::Endianness::Little => u64::from_le_bytes(buf),
             target_lexicon::Endianness::Big => u64::from_be_bytes(buf),
+        }
+    }
+}
+
+#[repr(C)]
+pub struct JitContext {
+    pub tlb_ptr: *mut TranslationCache,
+    pub tracer_mem: [*mut u8; trace::MAX_TRACER_MEM],
+    pub hooks: [trace::HookData; trace::MAX_HOOKS],
+}
+
+impl Default for JitContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JitContext {
+    pub fn new() -> Self {
+        const NULL_HOOK: trace::HookData = trace::HookData::null();
+
+        Self {
+            tlb_ptr: std::ptr::null_mut(),
+            tracer_mem: [std::ptr::null_mut(); trace::MAX_TRACER_MEM],
+            hooks: [NULL_HOOK; trace::MAX_HOOKS],
         }
     }
 }
@@ -219,6 +249,7 @@ pub struct Cpu {
     pub enable_shadow_stack: bool,
 
     pub mem: Mmu,
+    pub jit_ctx: JitContext,
 
     pub icount: u64,
     pub fuel: Fuel,
@@ -264,6 +295,7 @@ impl Cpu {
             enable_shadow_stack: false,
 
             mem: Mmu::new(),
+            jit_ctx: JitContext::default(),
 
             icount: 0,
             fuel: Fuel::default(),
@@ -348,8 +380,9 @@ impl Cpu {
 
     /// Translate a SLEIGH register offset to an Icicle varnode.
     pub fn var_for_offset(&self, offset: u32, size: u8) -> Option<pcode::VarNode> {
-        let (id, reg_offset) = self.arch.sleigh.map_sleigh_reg(offset, size)?;
-        Some(pcode::VarNode::new(id, 16).slice(reg_offset, size))
+        let (reg, reg_offset) = self.arch.sleigh.map_sleigh_reg(offset, size)?;
+        // @todo: check behaviour of big-endian dynamic accesses.
+        reg.get_var(reg_offset, size)
     }
 
     /// Reads the register represented by `var`. For special registers, this may perform additional
@@ -529,6 +562,20 @@ impl Cpu {
         self.mem.read_bytes(addr, &mut buf[..ptr_size as usize], perm::READ)?;
         Ok(self.arch.bytes_to_pointer(buf))
     }
+
+    /// Update pointers used directly in the JIT.
+    ///
+    /// This must be called before entering the JIT.
+    pub fn update_jit_context(&mut self) {
+        // @todo: optimize: this doesn't need to be done every time we enter the JIT.
+        self.jit_ctx.tlb_ptr = self.mem.tlb.as_mut();
+        for (dst, src) in self.jit_ctx.tracer_mem.iter_mut().zip(self.trace.storage_ptr()) {
+            *dst = src;
+        }
+        for (dst, hook) in self.jit_ctx.hooks.iter_mut().zip(self.trace.hooks.get_mut()) {
+            (dst.fn_ptr, dst.data_ptr) = hook.get_ptr();
+        }
+    }
 }
 
 impl ValueSource for Cpu {
@@ -581,15 +628,20 @@ impl<'a> PcodeExecutor for UncheckedExecutor<'a> {
         match id {
             pcode::RAM_SPACE => self.cpu.mem.read::<N>(addr, perm::READ),
             pcode::REGISTER_SPACE => {
-                let var =
-                    self.cpu.var_for_offset(addr as u32, N as u8).ok_or(MemError::Unmapped)?;
+                let var = self
+                    .cpu
+                    .var_for_offset(addr as u32, N as u8)
+                    .ok_or(MemError::UnmappedRegister)?;
                 Ok(self.cpu.read_var(var))
             }
             pcode::RESERVED_SPACE_END.. => {
                 let offset = addr as usize;
                 let mut value = [0; N];
                 value.copy_from_slice(
-                    &self.cpu.trace.storage[id as usize - 1].data()[offset..offset + N],
+                    self.cpu.trace.storage[id as usize - pcode::RESERVED_SPACE_END as usize]
+                        .data()
+                        .get(offset..offset + N)
+                        .ok_or(MemError::Unmapped)?,
                 );
                 Ok(value)
             }
@@ -611,7 +663,10 @@ impl<'a> PcodeExecutor for UncheckedExecutor<'a> {
             }
             pcode::RESERVED_SPACE_END.. => {
                 let offset = addr as usize;
-                self.cpu.trace.storage[id as usize - 1].data_mut()[offset..offset + N]
+                self.cpu.trace.storage[id as usize - pcode::RESERVED_SPACE_END as usize]
+                    .data_mut()
+                    .get_mut(offset..offset + N)
+                    .ok_or(MemError::Unmapped)?
                     .copy_from_slice(&value);
                 Ok(())
             }

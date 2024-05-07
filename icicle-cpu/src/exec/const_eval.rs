@@ -1,37 +1,29 @@
 //! A bit-level constant evaluator for pcode.
 
-use std::{cell::Cell, collections::HashMap, convert::TryInto};
+use hashbrown::HashMap;
 
 const DEBUG: bool = false;
 
 pub type OutputExprId = u32;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ConstEval {
     /// The value written to the output in each expression.
     pub values: Vec<(pcode::VarNode, Value)>,
 
     /// Keeps track of the index in `values` for each input register.
-    inputs: HashMap<i16, usize>,
+    pub inputs: HashMap<i16, usize>,
 
     /// Keeps track which values are already stored in VarNodes.
-    results: HashMap<Value, pcode::VarNode>,
-
-    /// Keeps track of whether any error has been encountered while performing const propagation.
-    error: Cell<bool>,
+    pub results: HashMap<Value, pcode::VarNode>,
 }
 
 impl ConstEval {
     pub fn new() -> Self {
-        Self {
-            inputs: HashMap::new(),
-            values: vec![],
-            results: HashMap::new(),
-            error: Cell::new(false),
-        }
+        Self { inputs: HashMap::new(), values: vec![], results: HashMap::new() }
     }
 
-    pub fn eval(&mut self, stmt: pcode::Instruction) -> Result<OutputExprId, ()> {
+    pub fn eval(&mut self, stmt: pcode::Instruction) -> OutputExprId {
         let a = self.get_value(stmt.inputs.first());
         let b = self.get_value(stmt.inputs.second());
 
@@ -68,10 +60,7 @@ impl ConstEval {
         }
         self.values[id as usize] = (stmt.output, value);
 
-        if self.error.take() {
-            return Err(());
-        }
-        Ok(id)
+        id
     }
 
     fn add_input_var(&mut self, var: pcode::VarNode) -> usize {
@@ -99,6 +88,14 @@ impl ConstEval {
     }
 
     pub fn get_value(&mut self, var: pcode::Value) -> Value {
+        let value = self.get_base_value(var);
+        match var {
+            pcode::Value::Var(var) => value.slice_to(var.offset * 8, var.size * 8),
+            _ => value,
+        }
+    }
+
+    pub fn get_base_value(&mut self, var: pcode::Value) -> Value {
         match var {
             pcode::Value::Var(pcode::VarNode::NONE) => Value::empty(),
             pcode::Value::Var(var) => {
@@ -106,10 +103,21 @@ impl ConstEval {
                     Some(id) => *id,
                     None => self.add_input_var(var),
                 };
-                let value = self.values[id].1.clone();
-                value.slice_to(var.offset * 8, var.size * 8)
+                self.values[id].1.clone()
             }
             pcode::Value::Const(value, size) => Value::from_const(value).slice_to(0, size * 8),
+        }
+    }
+
+    pub fn const_prop_value(&mut self, value: pcode::Value) -> pcode::Value {
+        if value.is_invalid() {
+            return value;
+        }
+
+        let existing = self.get_value(value);
+        match existing.get_const() {
+            Some(x) => pcode::Value::Const(x, value.size()),
+            None => self.matches_existing(&existing).map_or(value, |x| x.into()),
         }
     }
 
@@ -210,17 +218,17 @@ impl std::fmt::Display for Value {
 }
 
 impl Value {
-    fn new(id: u32) -> Self {
+    pub fn new(id: u32) -> Self {
         let mut out = Self::unknown();
         out.bits[..].fill_expr(id);
         out
     }
 
-    fn unknown() -> Self {
+    pub fn unknown() -> Self {
         Self { offset: 0, len: MAX_BITS as u8, bits: [Bit::Unknown; 128] }
     }
 
-    fn zero() -> Self {
+    pub fn zero() -> Self {
         Self { offset: 0, len: MAX_BITS as u8, bits: [Bit::Zero; 128] }
     }
 
@@ -243,7 +251,7 @@ impl Value {
         tmp
     }
 
-    fn slice_to(mut self, offset: u8, len: u8) -> Self {
+    pub fn slice_to(mut self, offset: u8, len: u8) -> Self {
         self.offset = offset;
         self.len = len;
         self
@@ -309,6 +317,11 @@ pub trait BitVecExt {
     /// Counts the number of leading bits that are const equal to zero.
     fn known_leading_zeros(&self) -> usize {
         self.slice().iter().rev().take_while(|x| **x == Bit::Zero).count()
+    }
+
+    /// Counts the number of trailing bits that are const equal to zero.
+    fn known_trailing_zeros(&self) -> usize {
+        self.slice().iter().take_while(|x| **x == Bit::Zero).count()
     }
 
     /// Counts the number of leading bits that are either zero or equal to the sign bit
@@ -978,7 +991,7 @@ mod test {
 
         let mut optimizer = ConstEval::new();
         for stmt in block.instructions.iter() {
-            optimizer.eval(stmt.clone()).unwrap();
+            optimizer.eval(stmt.clone());
         }
 
         optimizer.get_value(output.into())

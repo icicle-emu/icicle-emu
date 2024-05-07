@@ -3,7 +3,7 @@ pub type ValueSize = u16;
 #[derive(Debug, Clone)]
 pub enum SemanticAction {
     Op { op: pcode::Op, inputs: Vec<Value>, output: Option<Value> },
-    AddressOf { output: Value, base: Local, offset: Value },
+    AddressOf { output: Value, base: Local },
     LoadRegister { pointer: Value, output: Value, size: ValueSize },
     StoreRegister { pointer: Value, value: Value, size: ValueSize },
     DelaySlot,
@@ -68,6 +68,12 @@ impl Export {
             Self::RegisterRef(_, size) => Some(*size),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct PcodeTmp {
+    pub name: Option<sleigh_parse::ast::Ident>,
+    pub size: Option<ValueSize>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

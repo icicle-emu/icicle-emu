@@ -15,19 +15,21 @@ pub const ENABLE_ZERO_PAGE_OPTIMIZATION: bool = true;
 pub const ENABLE_MEMORY_HOOKS: bool = true;
 
 pub trait ReadHook {
-    fn read(&mut self, mem: &mut Mmu, addr: u64, size: u8);
+    fn read(&mut self, mem: &mut Mmu, addr: u64, size: u8) -> Option<u64>;
 }
 
 impl ReadHook for () {
-    fn read(&mut self, _: &mut Mmu, _: u64, _: u8) {}
+    fn read(&mut self, _: &mut Mmu, _: u64, _: u8) -> Option<u64> {
+        None
+    }
 }
 
 impl<T> ReadHook for T
 where
-    T: FnMut(&mut Mmu, u64, u8),
+    T: FnMut(&mut Mmu, u64, u8) -> Option<u64>,
 {
-    fn read(&mut self, mem: &mut Mmu, addr: u64, size: u8) {
-        self(mem, addr, size);
+    fn read(&mut self, mem: &mut Mmu, addr: u64, size: u8) -> Option<u64> {
+        self(mem, addr, size)
     }
 }
 
@@ -119,6 +121,12 @@ pub struct Mmu {
 
     /// Registed handlers for I/O memory
     io: Vec<Box<dyn IoMemoryAny>>,
+
+    /// Last IO memory region read -- IO reads are not currently translatable in the JIT, so always
+    /// trigger tlb misses. To mitigate some of the performance impact of repeat accesses to the
+    /// same address, we keep track of the last IO handler used and check if it matches the address
+    /// before doing a search for the region.
+    last_io_handler: Option<(u64, u64, IoHandler)>,
 }
 
 impl crate::Resettable for Mmu {
@@ -159,6 +167,7 @@ impl Mmu {
 
             uncacheable_writes: vec![],
             write_hooks: vec![],
+            last_io_handler: None,
         }
     }
 
@@ -233,6 +242,7 @@ impl Mmu {
         self.tlb.clear();
         self.mapping = RangeMap::new();
         self.physical.clear();
+        self.last_io_handler = None;
     }
 
     /// Get size (in bytes) of a single page in physical memory.
@@ -372,7 +382,10 @@ impl Mmu {
         if len == 0 {
             return false; // @todo: should mapping nothing count as being valid?
         }
-        let Some(end) = start.checked_add(len - 1) else { return false };
+        let Some(end) = start.checked_add(len - 1)
+        else {
+            return false;
+        };
         let mapping = mapping.into();
         debug!("map_memory: start={:#0x}, end={:#0x}, mapping={:?}", start, end, mapping);
 
@@ -382,6 +395,7 @@ impl Mmu {
         }
         self.mapping_changed = true;
         self.tlb.remove_range(start, len);
+        self.last_io_handler = None;
 
         true
     }
@@ -407,7 +421,10 @@ impl Mmu {
         if len == 0 {
             return false; // @todo: should unmapping nothing count as being valid?
         }
-        let Some(end) = start.checked_add(len - 1) else { return false };
+        let Some(end) = start.checked_add(len - 1)
+        else {
+            return false;
+        };
 
         debug!("unmap_memory: start={:#0x}, end={:#0x}", start, end);
         self.mapping_changed = true;
@@ -601,6 +618,7 @@ impl Mmu {
             }
 
             self.tlb.remove_range(overlap_start, (overlap_end - overlap_start) + 1);
+            self.last_io_handler = None;
 
             let shifted_start = (overlap_start as i64 + offset) as u64;
             let shifted_end = (overlap_end as i64 + offset) as u64;
@@ -614,6 +632,7 @@ impl Mmu {
     /// Clear the translation lookahead buffer.
     pub fn clear_tlb(&mut self) {
         self.tlb.clear();
+        self.last_io_handler = None;
     }
 
     /// Obtain a raw pointer to the translation lookahead buffer.
@@ -649,6 +668,7 @@ impl Mmu {
     /// Restore the full memory state from `snapshot`
     pub fn restore(&mut self, snapshot: Snapshot) {
         self.tlb.clear();
+        self.last_io_handler = None;
 
         self.modified.clear();
         self.mapping_changed = true;
@@ -665,6 +685,7 @@ impl Mmu {
     pub fn snapshot_virtual_mapping(&mut self) -> VirtualMemoryMap {
         // Clear the TLB to ensure that no writes will be missed.
         self.tlb.clear();
+        self.last_io_handler = None;
 
         // Mark all physical pages in the mapping as copy-on-write.
         for (_, _, entry) in self.mapping.iter() {
@@ -679,6 +700,7 @@ impl Mmu {
     /// Take the underlying virtual address space.
     pub fn take_virtual_mapping(&mut self) -> VirtualMemoryMap {
         self.tlb.clear();
+        self.last_io_handler = None;
         self.mapping_changed = true;
         std::mem::take(&mut self.mapping)
     }
@@ -687,6 +709,7 @@ impl Mmu {
     pub fn restore_virtual_mapping(&mut self, mapping: VirtualMemoryMap) {
         self.mapping = mapping;
         self.tlb.clear();
+        self.last_io_handler = None;
 
         self.modified.clear();
         self.mapping_changed = true;
@@ -696,6 +719,7 @@ impl Mmu {
     pub fn reset_virtual(&mut self) {
         self.mapping.clear();
         self.tlb.clear();
+        self.last_io_handler = None;
 
         self.modified.clear();
         self.mapping_changed = true;
@@ -704,6 +728,7 @@ impl Mmu {
     /// Clear the page modification log
     pub fn clear_page_modification_log(&mut self) {
         self.tlb.clear_write();
+        self.last_io_handler = None;
         self.modified.clear();
     }
 
@@ -730,7 +755,10 @@ impl Mmu {
     /// Check that the region of memory between addr..addr+len is initialized and executable, and
     /// ensure that if it is ever written to in the future it will be detected.
     pub fn ensure_executable(&mut self, start: u64, len: u64) -> bool {
-        let Some(end) = start.checked_add(len - 1) else { return false };
+        let Some(end) = start.checked_add(len - 1)
+        else {
+            return false;
+        };
 
         let tlb = &mut self.tlb;
         let physical = &mut self.physical;
@@ -899,7 +927,10 @@ impl Mmu {
 
     /// Checks whether the memory range entirely consists of mapped regular memory.
     pub fn is_regular_region(&self, start: u64, len: u64) -> bool {
-        let Some(end) = start.checked_add(len - 1) else { return false };
+        let Some(end) = start.checked_add(len - 1)
+        else {
+            return false;
+        };
         for (_, _, entry) in self.mapping.overlapping_iter((start, end)) {
             match entry {
                 Some(MemoryMapping::Physical(_) | MemoryMapping::Unallocated(_)) => {}
@@ -1038,26 +1069,53 @@ impl Mmu {
             return self.read_unaligned(addr, perm);
         }
 
-        if perm != perm::NONE && ENABLE_MEMORY_HOOKS {
-            active_hooks!(addr, self.read_hooks, |hook: &mut dyn ReadHook| {
-                hook.read(self, addr, N as u8)
-            })
+        if perm != perm::NONE && ENABLE_MEMORY_HOOKS && !self.read_hooks.is_empty() {
+            let mut hooks = std::mem::take(&mut self.read_hooks);
+            for hook in &mut hooks {
+                if hook.start <= addr && addr < hook.end {
+                    if let Some(result) = hook.handler.read(self, addr, N as u8) {
+                        let mut buf = [0; N];
+                        buf.copy_from_slice(&result.to_le_bytes()[..N]);
+                        return Ok(buf);
+                    }
+                }
+            }
+            debug_assert!(self.read_hooks.is_empty());
+            self.read_hooks = hooks;
         }
 
-        tracing::trace!("read_tlb_miss: {:#0x}", self.page_aligned(addr));
-        self.tlb_miss_count += 1;
-        let result = match self.mapping.get(addr).ok_or(MemError::Unmapped)? {
-            MemoryMapping::Physical(entry) => self.read_physical(entry.index, addr, perm),
-            &MemoryMapping::Unallocated(entry) => {
-                perm::check(entry.perm | perm::MAP, perm)?;
-                let index = self.init_physical(addr, false).ok_or(MemError::OutOfMemory)?;
-                self.read_physical(index, addr, perm)
+        macro_rules! handle_io {
+            ($id:expr) => {
+                (|| {
+                    let mut buf = [0; N];
+                    self.io[$id].read(addr, &mut buf)?;
+                    Ok(buf)
+                })()
+            };
+        }
+
+        let result = match self.last_io_handler.as_ref() {
+            Some((start, end, id)) if (*start..=*end).contains(&addr) => {
+                handle_io!(id.0)
             }
-            MemoryMapping::Io(id) => (|| {
-                let mut buf = [0; N];
-                self.io[*id].read(addr, &mut buf)?;
-                Ok(buf)
-            })(),
+            _ => {
+                tracing::trace!("read_tlb_miss: {:#0x}", self.page_aligned(addr));
+                self.tlb_miss_count += 1;
+                match self.mapping.get_with_range(addr).ok_or(MemError::Unmapped)? {
+                    (_, _, MemoryMapping::Physical(entry)) => {
+                        self.read_physical(entry.index, addr, perm)
+                    }
+                    (_, _, &MemoryMapping::Unallocated(entry)) => {
+                        perm::check(entry.perm | perm::MAP, perm)?;
+                        let index = self.init_physical(addr, false).ok_or(MemError::OutOfMemory)?;
+                        self.read_physical(index, addr, perm)
+                    }
+                    (start, end, MemoryMapping::Io(id)) => {
+                        self.last_io_handler = Some((start, end, IoHandler(*id)));
+                        handle_io!(*id)
+                    }
+                }
+            }
         };
 
         // Since we allow byte-level memory memory mapping to be created, rarely we may have a read

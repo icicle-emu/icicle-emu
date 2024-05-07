@@ -3,10 +3,10 @@
 mod mem;
 mod ops;
 
-use std::{collections::HashMap, convert::TryInto};
+use std::collections::HashMap;
 
 use cranelift::{
-    codegen::ir::{Endianness, FuncRef, Function, SigRef},
+    codegen::ir::{AliasRegion, Endianness, FuncRef, Function, SigRef},
     frontend::Switch,
     prelude::*,
 };
@@ -14,13 +14,13 @@ use cranelift_jit::JITModule;
 use cranelift_module::{FuncId, Module};
 
 use icicle_cpu::{
-    cpu::Fuel,
+    cpu::{Fuel, JitContext},
     lifter::{Block as IcicleBlock, BlockExit, Target},
     Cpu, Exception, ExceptionCode, Regs,
 };
 use memoffset::offset_of;
 
-use crate::{translate::ops::Ctx, CompilationTarget, MemHandler, VmCtx};
+use crate::{translate::ops::Ctx, CompilationTarget, MemHandler};
 
 impl MemHandler<FuncRef> {
     fn import(module: &mut JITModule, current: &mut Function, funcs: &MemHandler<FuncId>) -> Self {
@@ -156,10 +156,19 @@ impl VmPtr {
         (offset_of!(Cpu, regs) + Regs::var_offset(var) as usize).try_into().unwrap()
     }
 
+    fn jit_ctx_offset() -> i32 {
+        offset_of!(Cpu, jit_ctx).try_into().unwrap()
+    }
+
     fn store_arg(&self, builder: &mut FunctionBuilder, id: u16, value: Value) {
         let arg_offset = id as usize * std::mem::size_of::<u128>();
         let offset: i32 = (offset_of!(Cpu, args) + arg_offset).try_into().unwrap();
-        builder.ins().store(MemFlags::trusted().with_vmctx(), value, self.0, offset);
+        builder.ins().store(
+            MemFlags::trusted().with_alias_region(Some(AliasRegion::Vmctx)),
+            value,
+            self.0,
+            offset,
+        );
     }
 
     fn load_var(
@@ -170,20 +179,40 @@ impl VmPtr {
     ) -> Value {
         let offset = VmPtr::var_offset(var);
         if var.offset == 0 {
-            builder.ins().load(ty, MemFlags::trusted().with_vmctx(), self.0, offset)
+            builder.ins().load(
+                ty,
+                MemFlags::trusted().with_alias_region(Some(AliasRegion::Vmctx)),
+                self.0,
+                offset,
+            )
         }
         else {
-            builder.ins().load(ty, MemFlags::new().with_vmctx().with_notrap(), self.0, offset)
+            builder.ins().load(
+                ty,
+                MemFlags::new().with_alias_region(Some(AliasRegion::Vmctx)).with_notrap(),
+                self.0,
+                offset,
+            )
         }
     }
 
     fn store_var(&self, builder: &mut FunctionBuilder, var: pcode::VarNode, value: Value) {
         let offset = VmPtr::var_offset(var);
         if var.offset == 0 {
-            builder.ins().store(MemFlags::trusted().with_vmctx(), value, self.0, offset);
+            builder.ins().store(
+                MemFlags::trusted().with_alias_region(Some(AliasRegion::Vmctx)),
+                value,
+                self.0,
+                offset,
+            );
         }
         else {
-            builder.ins().store(MemFlags::new().with_vmctx().with_notrap(), value, self.0, offset);
+            builder.ins().store(
+                MemFlags::new().with_alias_region(Some(AliasRegion::Vmctx)).with_notrap(),
+                value,
+                self.0,
+                offset,
+            );
         }
     }
 }
@@ -195,7 +224,7 @@ macro_rules! gen_load_store {
                 let offset: i32 = ($offset).try_into().unwrap();
                 builder.ins().load(
                     <$ty>::clif_type(),
-                    MemFlags::trusted().with_vmctx(),
+                    MemFlags::trusted().with_alias_region(Some(AliasRegion::Vmctx)),
                     self.0,
                     offset,
                 )
@@ -208,7 +237,12 @@ macro_rules! gen_load_store {
             ) {
                 let offset: i32 = ($offset).try_into().unwrap();
                 let value = value.into().get_value(builder);
-                builder.ins().store(MemFlags::trusted().with_vmctx(), value, self.0, offset);
+                builder.ins().store(
+                    MemFlags::trusted().with_alias_region(Some(AliasRegion::Vmctx)),
+                    value,
+                    self.0,
+                    offset,
+                );
             }
         }
     };
@@ -220,26 +254,14 @@ gen_load_store!(_load_block_offset, store_block_offset, offset_of!(Cpu, block_of
 gen_load_store!(_load_block_id, store_block_id, offset_of!(Cpu, block_id), u64);
 gen_load_store!(load_fuel, store_fuel, offset_of!(Cpu, fuel) + offset_of!(Fuel, remaining), u64);
 
-fn load_const(builder: &mut FunctionBuilder, value: u64, ty: types::Type) -> Value {
-    match ty {
-        types::F32 => builder.ins().f32const(f32::from_bits(value as u32)),
-        types::F64 => builder.ins().f64const(f64::from_bits(value)),
-        _ if ty.bits() > 64 => {
-            let tmp = builder.ins().iconst(types::I64, value as i64);
-            builder.ins().uextend(ty, tmp)
-        }
-        _ => builder.ins().iconst(ty, value as i64),
-    }
-}
-
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 struct WriteState {
     value: Value,
     dirty: bool,
     size: u8,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct VarState {
     /// The last value written for each power of two.
     values: [Option<WriteState>; 5],
@@ -264,6 +286,7 @@ pub(crate) struct TranslatorCtx {
     pub disable_jit_reg: bool,
     pub always_flush_vars: bool,
     pub enable_shadow_stack: bool,
+    page_size: u64,
     reg_pc: pcode::VarNode,
     endianness: Endianness,
     local_blocks: HashMap<usize, Block>,
@@ -279,6 +302,7 @@ impl TranslatorCtx {
             disable_jit_reg: false,
             always_flush_vars: true,
             enable_shadow_stack: true,
+            page_size: icicle_cpu::mem::physical::PAGE_SIZE as u64,
             endianness,
             local_blocks: HashMap::new(),
             entry_points: vec![],
@@ -317,12 +341,11 @@ pub(crate) fn translate<'a>(
     let hook_sig = builder.import_signature(functions.hook_signature.clone());
 
     builder.func.signature.params.push(AbiParam::new(types::I64)); // cpu_ptr
-    builder.func.signature.params.push(AbiParam::new(types::I64)); // jit_ctx
     builder.func.signature.params.push(AbiParam::new(types::I64)); // addr
 
     builder.func.signature.returns.push(AbiParam::new(types::I64)); // next_addr
 
-    let (vm_ptr, jit_ctx, tlb_ptr) = define_jit_entry(&mut builder, ctx);
+    let (vm_ptr, tlb_ptr) = define_jit_entry(&mut builder, ctx);
 
     let exit_block = builder.create_block();
     builder.append_block_param(exit_block, types::I64); // block_id
@@ -334,7 +357,6 @@ pub(crate) fn translate<'a>(
         ctx,
 
         vm_ptr: VmPtr(vm_ptr),
-        jit_ctx,
         tlb_ptr,
         hook_sig,
         symbols,
@@ -355,18 +377,15 @@ pub(crate) fn translate<'a>(
     translator.finalize();
 }
 
-fn define_jit_entry(
-    builder: &mut FunctionBuilder,
-    ctx: &mut TranslatorCtx,
-) -> (Value, Value, Value) {
+fn define_jit_entry(builder: &mut FunctionBuilder, ctx: &mut TranslatorCtx) -> (Value, Value) {
     let entry_block = builder.create_block();
 
     builder.append_block_params_for_function_params(entry_block);
     builder.switch_to_block(entry_block);
     builder.seal_block(entry_block);
 
-    let (cpu_ptr, jit_ctx, addr) = match builder.block_params(entry_block) {
-        &[x0, x1, x2] => (x0, x1, x2),
+    let (cpu_ptr, addr) = match builder.block_params(entry_block) {
+        &[x0, x1] => (x0, x1),
         params => unreachable!("expected 3 params for entry block (got {})", params.len()),
     };
 
@@ -374,9 +393,9 @@ fn define_jit_entry(
     // block, and Cranelift's redundant load analysis isn't good enough to avoid reloading it.
     let tlb_ptr = builder.ins().load(
         types::I64,
-        MemFlags::trusted().with_vmctx(),
-        jit_ctx,
-        offset_of!(VmCtx, tlb_ptr) as i32,
+        MemFlags::trusted().with_alias_region(Some(AliasRegion::Vmctx)),
+        cpu_ptr,
+        offset_of!(Cpu, jit_ctx) as i32 + offset_of!(JitContext, tlb_ptr) as i32,
     );
 
     match &ctx.entry_points[..] {
@@ -404,7 +423,7 @@ fn define_jit_entry(
         }
     }
 
-    (cpu_ptr, jit_ctx, tlb_ptr)
+    (cpu_ptr, tlb_ptr)
 }
 
 struct Translator<'a> {
@@ -412,7 +431,6 @@ struct Translator<'a> {
     builder: FunctionBuilder<'a>,
 
     vm_ptr: VmPtr,
-    jit_ctx: Value,
     tlb_ptr: Value,
     hook_sig: SigRef,
     symbols: Symbols,
@@ -547,7 +565,7 @@ impl<'a> Translator<'a> {
         if var.size() == 10 {
             value = self.builder.ins().ireduce(types::I64, value);
         }
-        self.builder.ins().bitcast(ty, MemFlags::new(), value)
+        self.bitcast(ty, value)
     }
 
     fn read_bool(&mut self, var: pcode::Value) -> Value {
@@ -560,6 +578,23 @@ impl<'a> Translator<'a> {
     /// Resizes value to an integer with `size` bytes, truncating or zero-extending as needed.
     fn resize_int(&mut self, value: Value, in_size: u8, out_size: u8) -> Value {
         resize_int(&mut self.builder, value, in_size, out_size)
+    }
+
+    /// Casts a value to a different type.
+    fn bitcast(&mut self, to_ty: Type, value: Value) -> Value {
+        self.builder.ins().bitcast(to_ty, MemFlags::new(), value)
+    }
+
+    fn load_const(&mut self, ty: types::Type, value: u64) -> Value {
+        match ty {
+            types::F32 => self.builder.ins().f32const(f32::from_bits(value as u32)),
+            types::F64 => self.builder.ins().f64const(f64::from_bits(value)),
+            _ if ty.bits() > 64 => {
+                let tmp = self.builder.ins().iconst(types::I64, value as i64);
+                self.builder.ins().uextend(ty, tmp)
+            }
+            _ => self.builder.ins().iconst(ty, value as i64),
+        }
     }
 
     fn read_var(&mut self, var: pcode::VarNode) -> Value {
@@ -606,7 +641,7 @@ impl<'a> Translator<'a> {
     fn read_typed(&mut self, value: pcode::Value, ty: types::Type) -> Value {
         match value {
             pcode::Value::Var(var) => self.read_var(var),
-            pcode::Value::Const(value, _) => load_const(&mut self.builder, value, ty),
+            pcode::Value::Const(value, _) => self.load_const(ty, value),
         }
     }
 
@@ -624,15 +659,20 @@ impl<'a> Translator<'a> {
 
         let flush = !var.is_temp() || self.ctx.always_flush_vars;
         match var.offset {
-            0 => {
+            0 if is_jit_supported_size(var.size) => {
                 let state = self.ctx.active_vars.entry(var.id).or_default();
                 for i in 0..=var.size.trailing_zeros() as usize {
                     state.values[i] = Some(WriteState { value, size: var.size, dirty: !flush });
                 }
                 state.last_size = var.size
             }
-            // Just invalidate any cached value if the offset is not zero.
-            _ => self.invalidate_var(var),
+            // Just invalidate any cached value if the offset is not zero or this is not a natively
+            // sized value.
+            _ => {
+                self.invalidate_var(var);
+                self.vm_ptr.store_var(&mut self.builder, var, value);
+                return;
+            }
         }
 
         if flush {
@@ -646,10 +686,14 @@ impl<'a> Translator<'a> {
         }
     }
 
+    /// Write the PC value of the current instruction to memory so it is visible in the CPU state.
+    ///
+    /// Note: this does not update the PC register that we use for normal codegen since this happens
+    /// off of the main block path (so the value will not be written in all blocks).
     fn flush_current_pc(&mut self) {
         let reg_pc = self.ctx.reg_pc;
         let current_pc = self.builder.ins().iconst(sized_int(reg_pc.size), self.last_addr as i64);
-        self.write(reg_pc, current_pc)
+        self.vm_ptr.store_var(&mut self.builder, reg_pc, current_pc);
     }
 
     /// Run an operation in the interpreter.
@@ -732,10 +776,10 @@ impl<'a> Translator<'a> {
                 Op::IntAnd => ctx.emit_int_op(ops::int_and),
                 Op::IntMul => ctx.emit_int_op(ops::int_mul),
 
-                Op::IntDiv => ctx.emit_div_op(ops::int_div),
-                Op::IntSignedDiv => ctx.emit_div_op(ops::int_signed_div),
-                Op::IntRem => ctx.emit_div_op(ops::int_rem),
-                Op::IntSignedRem => ctx.emit_div_op(ops::int_signed_rem),
+                Op::IntDiv => ctx.emit_div_op(ops::int_div, false),
+                Op::IntSignedDiv => ctx.emit_div_op(ops::int_signed_div, true),
+                Op::IntRem => ctx.emit_div_op(ops::int_rem, false),
+                Op::IntSignedRem => ctx.emit_div_op(ops::int_signed_rem, true),
 
                 Op::IntLeft => ctx.emit_shift_op(ops::int_left),
                 Op::IntRight => ctx.emit_shift_op(ops::int_right),
@@ -796,7 +840,9 @@ impl<'a> Translator<'a> {
                         let ptr =
                             ctx.get_trace_store_ptr(id - pcode::RESERVED_SPACE_END, inputs[0]);
 
-                        let load_flags = MemFlags::new().with_notrap().with_heap();
+                        let load_flags = MemFlags::new()
+                            .with_notrap()
+                            .with_alias_region(Some(AliasRegion::Heap));
                         let ty = sized_int(output.size);
                         let value = ctx.trans.builder.ins().load(ty, load_flags, ptr, 0);
                         self.write(output, value);
@@ -818,7 +864,9 @@ impl<'a> Translator<'a> {
                             ctx.get_trace_store_ptr(id - pcode::RESERVED_SPACE_END, inputs[0]);
                         let value = ctx.trans.read_int(inputs[1]);
 
-                        let store_flags = MemFlags::new().with_notrap().with_heap();
+                        let store_flags = MemFlags::new()
+                            .with_notrap()
+                            .with_alias_region(Some(AliasRegion::Heap));
                         ctx.trans.builder.ins().store(store_flags, value, ptr, 0);
                     }
                 },
