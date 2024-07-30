@@ -34,7 +34,6 @@
 0x00011000 [10 8b bc ec] "vldmia r12!,{d8,d9,d10,d11,d12,d13,d14,d15}";
 0x00011000 [8f 40 60 f4] "vld4.32 {d20,d21,d22,d23},[r0]";
 
-@skip // Requires dynamically computed register offsets
 0x00011000 [02 08 41 f4] "vst2.8 {d16, d17}, [r1], r2";
 
 
@@ -250,6 +249,19 @@
 
 // Saturating operations
 
-@skip // Broken in SLEIGH (addition is performed with insufficient precision).
+0x11000|1 [81 f3 04 01] "usat r1,#0x4,r1"
+{
+    r1 = 0x1234_5678 => r1 = 0xf, Q = 1;
+    r1 = 1 => r1 = 1, Q = 0;
+    r1 = 0xf => r1 = 0xf, Q = 0;
+}
+
+
 0x11000|1 [82 fa 8e f2] "qadd r2,r2,lr"
-    r2 = 0x7fffffff, lr = 1 => r2 = 0x7fffffff;
+{
+    // Unable to compute saturation of 32-bit values correctly after addition as already been
+    // performed.
+    //
+    // Q value computed incorrectly (result of SignedSaturate passed to SignedDoesSaturate instead of original result)
+    // r2 = 0x7fffffff, lr = 1 => r2 = 0x7fffffff, Q = 1;
+}

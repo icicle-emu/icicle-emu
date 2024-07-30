@@ -3,15 +3,15 @@ use std::{
     rc::Rc,
 };
 
-use icicle_vm::{
+use crate::{
     cpu::{
-        debug_info::{DebugInfo, SourceLocation},
+        debug_info::DebugInfo,
         elf::ElfLoader,
         mem::{perm, IoMemory, IoMemoryAny, Mapping, MemError, MemResult},
         utils::XorShiftRng,
         Cpu, Environment, Exception, ExceptionCode, ValueSource,
     },
-    hw, VmExit,
+    hw, BuildError, VmExit,
 };
 
 use super::config::{self, Config, Mcu};
@@ -93,8 +93,9 @@ struct Interrupt {
 const INTERRUPT_RET_PC: u32 = 0xfff0;
 
 impl Msp430 {
-    pub fn new(cpu: &Cpu, config: Config) -> anyhow::Result<Self> {
-        let mcu = Mcu::from_path(&config.mcu)?;
+    pub fn new(cpu: &Cpu, config: Config) -> Result<Self, BuildError> {
+        let mcu = Mcu::from_path(&config.mcu)
+            .map_err(|e| BuildError::FailedToInitEnvironment(e.to_string()))?;
         Ok(Self {
             interrupts: Rc::new(interrupts(&mcu)),
             interrupt_rng: XorShiftRng::new(0x1234),
@@ -354,6 +355,8 @@ impl Environment for Msp430 {
             self.debug_info = metadata.debug_info;
         }
 
+        tracing::debug!("memory layout: {:#x?}", cpu.mem.get_mapping());
+
         // Reset vector contains the entry address
         let entry = cpu
             .mem
@@ -368,7 +371,7 @@ impl Environment for Msp430 {
         self.next_interrupt
     }
 
-    fn handle_exception(&mut self, cpu: &mut Cpu) -> Option<icicle_vm::VmExit> {
+    fn handle_exception(&mut self, cpu: &mut Cpu) -> Option<crate::VmExit> {
         match ExceptionCode::from_u32(cpu.exception.code) {
             ExceptionCode::InstructionLimit => {
                 // Check whether we want to trigger an interrupt.
@@ -422,14 +425,6 @@ impl Environment for Msp430 {
         }
     }
 
-    fn symbolize_addr(&mut self, _cpu: &mut Cpu, addr: u64) -> Option<SourceLocation> {
-        self.debug_info.symbolize_addr(addr)
-    }
-
-    fn lookup_symbol(&mut self, symbol: &str) -> Option<u64> {
-        self.debug_info.symbols.resolve_sym(symbol)
-    }
-
     fn snapshot(&mut self) -> Box<dyn std::any::Any> {
         let interrupt_enable_state: Vec<_> =
             self.interrupts.iter().map(|x| x.enabled.get()).collect();
@@ -455,6 +450,10 @@ impl Environment for Msp430 {
         self.flags = *flags;
         self.next_interrupt = *next_interrupt;
         self.interrupt = *interrupt;
+    }
+
+    fn debug_info(&self) -> Option<&DebugInfo> {
+        Some(&self.debug_info)
     }
 }
 

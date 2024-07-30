@@ -1,6 +1,6 @@
 use std::cell::UnsafeCell;
 
-use icicle_mem::{perm, tlb::TranslationCache, MemError, MemResult, Mmu};
+use icicle_mem::{perm, tlb::TranslationCache, MemResult, Mmu};
 use pcode::PcodeDisplay;
 
 use crate::{
@@ -624,26 +624,37 @@ impl<'a> PcodeExecutor for UncheckedExecutor<'a> {
         }
     }
 
-    fn load_mem<const N: usize>(&mut self, id: pcode::MemId, addr: u64) -> MemResult<[u8; N]> {
+    fn load_mem<const N: usize>(&mut self, id: pcode::MemId, addr: u64) -> Option<[u8; N]> {
         match id {
-            pcode::RAM_SPACE => self.cpu.mem.read::<N>(addr, perm::READ),
+            pcode::RAM_SPACE => match self.cpu.mem.read::<N>(addr, perm::READ) {
+                Ok(val) => Some(val),
+                Err(err) => {
+                    self.exception(ExceptionCode::from_load_error(err), addr);
+                    return None;
+                }
+            },
             pcode::REGISTER_SPACE => {
-                let var = self
-                    .cpu
-                    .var_for_offset(addr as u32, N as u8)
-                    .ok_or(MemError::UnmappedRegister)?;
-                Ok(self.cpu.read_var(var))
+                let Some(var) = self.cpu.var_for_offset(addr as u32, N as u8)
+                else {
+                    self.exception(ExceptionCode::UnmappedRegister, addr);
+                    return None;
+                };
+                Some(self.cpu.read_var(var))
             }
             pcode::RESERVED_SPACE_END.. => {
                 let offset = addr as usize;
+                let Some(slice) = self.cpu.trace.storage
+                    [id as usize - pcode::RESERVED_SPACE_END as usize]
+                    .data()
+                    .get(offset..offset + N)
+                else {
+                    self.exception(ExceptionCode::ReadUnmapped, addr);
+                    return None;
+                };
+
                 let mut value = [0; N];
-                value.copy_from_slice(
-                    self.cpu.trace.storage[id as usize - pcode::RESERVED_SPACE_END as usize]
-                        .data()
-                        .get(offset..offset + N)
-                        .ok_or(MemError::Unmapped)?,
-                );
-                Ok(value)
+                value.copy_from_slice(slice);
+                Some(value)
             }
         }
     }
@@ -653,24 +664,37 @@ impl<'a> PcodeExecutor for UncheckedExecutor<'a> {
         id: pcode::MemId,
         addr: u64,
         value: [u8; N],
-    ) -> MemResult<()> {
+    ) -> Option<()> {
         match id {
-            pcode::RAM_SPACE => self.cpu.mem.write(addr, value, perm::WRITE),
+            pcode::RAM_SPACE => {
+                if let Err(err) = self.cpu.mem.write(addr, value, perm::WRITE) {
+                    self.exception(ExceptionCode::from_load_error(err), addr);
+                    return None;
+                }
+            }
             pcode::REGISTER_SPACE => {
-                let var =
-                    self.cpu.var_for_offset(addr as u32, N as u8).ok_or(MemError::Unmapped)?;
-                Ok(self.cpu.write_var(var, value))
+                let Some(var) = self.cpu.var_for_offset(addr as u32, N as u8)
+                else {
+                    self.exception(ExceptionCode::UnmappedRegister, addr);
+                    return None;
+                };
+                self.cpu.write_var(var, value);
             }
             pcode::RESERVED_SPACE_END.. => {
                 let offset = addr as usize;
-                self.cpu.trace.storage[id as usize - pcode::RESERVED_SPACE_END as usize]
+                let Some(dst) = self.cpu.trace.storage
+                    [id as usize - pcode::RESERVED_SPACE_END as usize]
                     .data_mut()
                     .get_mut(offset..offset + N)
-                    .ok_or(MemError::Unmapped)?
-                    .copy_from_slice(&value);
-                Ok(())
+                else {
+                    self.exception(ExceptionCode::ReadUnmapped, addr);
+                    return None;
+                };
+                dst.copy_from_slice(&value);
             }
         }
+
+        Some(())
     }
 
     fn set_arg(&mut self, idx: u16, value: u128) {

@@ -216,6 +216,13 @@ impl Decoder {
                 }
                 DecodeAction::Subtable(idx, id) => {
                     let constructor = self.decode_subtable(sleigh, ctx.inst, *id);
+                    if !self.is_valid && self.allow_backtracking {
+                        // If there was no valid constructor for this subtable and we allow
+                        // backtracking, then exit here and backtrack. If backtracking is disabled,
+                        // then this must be an invalid instruction, but we continue with decoding
+                        // to provide a partial decoding for debugging.
+                        return None;
+                    }
                     ctx.subtables_mut()[*idx as usize] = constructor;
                 }
                 DecodeAction::NextToken(size) => {
@@ -501,6 +508,14 @@ impl<'a, 'b> SubtableCtx<'a, 'b> {
     pub fn temporaries(&self) -> &[PcodeTmp] {
         let (start, end) = self.data.constructors[self.constructor.id as usize].temporaries;
         &self.data.temporaries[start as usize..end as usize]
+    }
+
+    /// Extends `output` with the constructor IDs referenced in the order they are visited in.
+    pub fn append_visited_constructors(&self, output: &mut Vec<ConstructorId>) {
+        output.push(self.constructor.id);
+        for subtable in self.subtables() {
+            self.visit_constructor(*subtable).append_visited_constructors(output);
+        }
     }
 }
 

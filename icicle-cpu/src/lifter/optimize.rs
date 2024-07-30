@@ -1,4 +1,4 @@
-use hashbrown::{HashMap, HashSet};
+use ahash::{AHashMap as HashMap, AHashSet as HashSet};
 
 use pcode::{Instruction, Op, PcodeLabel, VarId, VarNode};
 
@@ -359,6 +359,12 @@ struct DeadStoreDetector {
 
     /// Additional variables that do not need to be persisted across blocks.
     additional_tmps: HashSet<VarId>,
+
+    /// Buffer used for keeping track of temporaries that cross block boundaries.
+    live_tmps: HashSet<i16>,
+
+    /// Buffer used for tracking which temporaries have been written to in the current block.
+    written_tmps: HashSet<i16>,
 }
 
 impl DeadStoreDetector {
@@ -367,6 +373,29 @@ impl DeadStoreDetector {
         block: &pcode::Block,
         single_instruction_only: bool,
     ) -> &HashSet<usize> {
+        self.live_tmps.clear();
+        self.written_tmps.clear();
+
+        // Identify any temporaries that are used in multiple blocks.
+        for inst in &block.instructions {
+            if matches!(inst.op, pcode::Op::PcodeLabel(_)) {
+                // Start of a new block.
+                self.written_tmps.clear();
+                continue;
+            }
+
+            // If there is an input temporary that has not been written to in this block then keep
+            // track of it.
+            for input in inst.inputs.get() {
+                if let pcode::Value::Var(x) = input {
+                    if !self.written_tmps.contains(&x.id) {
+                        self.live_tmps.insert(x.id);
+                    }
+                }
+            }
+            self.written_tmps.insert(inst.output.id);
+        }
+
         self.dead_code.clear();
         self.live_reads.clear();
         self.live_across_block.clear();
@@ -423,9 +452,9 @@ impl DeadStoreDetector {
     }
 
     fn is_live(&mut self, var: pcode::VarNode) -> bool {
-        use hashbrown::hash_map::Entry;
+        use std::collections::hash_map::Entry;
 
-        if self.should_persist(var.id) {
+        if self.should_persist(var.id) || self.live_tmps.contains(&var.id) {
             match self.last_write.entry(var.id) {
                 Entry::Occupied(mut prev) => {
                     let mut merged = *prev.get();

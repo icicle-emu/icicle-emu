@@ -123,7 +123,7 @@ pub struct FuzzConfig {
     pub msp430: Msp430Config,
 
     /// Config for targets with a custom startup.
-    pub custom_setup: CustomSetup,
+    pub custom_setup: Option<CustomSetup>,
 }
 
 impl FuzzConfig {
@@ -157,17 +157,19 @@ impl FuzzConfig {
             arch_string.parse().map_err(|e| anyhow::format_err!("{}: {}", arch_string, e))?;
 
         let custom_setup = match std::env::var("ICICLE_CUSTOM_SETUP") {
-            Ok(setup) => ron::from_str(&setup).context("error parsing `ICICLE_CUSTOM_SETUP`")?,
+            Ok(setup) => {
+                Some(ron::from_str(&setup).context("error parsing `ICICLE_CUSTOM_SETUP`")?)
+            }
             Err(_) => match std::env::var("ICICLE_CUSTOM_SETUP_PATH") {
                 Ok(path) => {
                     let setup = std::fs::read_to_string(&path).with_context(|| {
                         format!("error reading `ICICLE_CUSTOM_SETUP_PATH: {path}")
                     })?;
-                    ron::from_str(&setup).with_context(|| {
+                    Some(ron::from_str(&setup).with_context(|| {
                         format!("error parsing ICICLE_CUSTOM_SETUP_PATH: {path}")
-                    })?
+                    })?)
                 }
-                Err(_) => CustomSetup::default(),
+                Err(_) => None,
             },
         };
 
@@ -254,12 +256,15 @@ impl FuzzConfig {
     pub fn get_target(&mut self) -> anyhow::Result<Box<dyn FuzzTarget>> {
         use target_lexicon::{Architecture, OperatingSystem};
 
+        if let Some(setup) = self.custom_setup.take() {
+            return Ok(Box::new(HookedTarget::new(setup)));
+        }
+
         Ok(match (self.arch.operating_system, self.arch.architecture) {
             (OperatingSystem::Linux, _) => Box::new(linux::Target::new()),
             (OperatingSystem::None_, Architecture::Msp430) => {
                 Box::new(msp430::RandomIoTarget::new())
             }
-            (OperatingSystem::None_, _) => Box::new(HookedTarget::new(self.custom_setup.clone())),
             _ => anyhow::bail!("unsupported target: {}", self.arch),
         })
     }
@@ -424,8 +429,13 @@ pub trait Fuzzer {
 }
 
 /// Run `run` configured for an inbuilt fuzzing target architecture.
-pub fn run_auto<T, F: Fuzzer<Output = T>>(config: FuzzConfig, fuzzer: F) -> anyhow::Result<T> {
+pub fn run_auto<T, F: Fuzzer<Output = T>>(mut config: FuzzConfig, fuzzer: F) -> anyhow::Result<T> {
     use target_lexicon::{Architecture, OperatingSystem};
+
+    if let Some(setup) = config.custom_setup.take() {
+        let target = HookedTarget::new(setup);
+        return fuzzer.run(target, config);
+    }
 
     match (config.arch.operating_system, config.arch.architecture) {
         (OperatingSystem::Linux, _) => {
@@ -434,10 +444,6 @@ pub fn run_auto<T, F: Fuzzer<Output = T>>(config: FuzzConfig, fuzzer: F) -> anyh
         }
         (OperatingSystem::None_, Architecture::Msp430) => {
             let target = msp430::RandomIoTarget::new();
-            fuzzer.run(target, config)
-        }
-        (OperatingSystem::None_, _) => {
-            let target = HookedTarget::new(config.custom_setup.clone());
             fuzzer.run(target, config)
         }
         _ => anyhow::bail!("unsupported target: {}", config.arch),

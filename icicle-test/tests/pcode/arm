@@ -50,14 +50,14 @@ swivc 0xffa324
 smlawteq r0,r1,r1,pc
 <L0> (entry=0x80000000):
 	$U6:4 = r1
-	$tmp0:2 = $U6[2]:2
+	$U7:2 = $U6[2]:2
 	$U8:1 = !ZR
 	if $U8:1 jump 0x80000004:8
 <L1>:
 	$U9:8 = zext(r1)
 	$U9:8 = $U9:8 << 0x20:1
 	$U9:8 = $U9:8 s>> 0x20:1
-	$U10:8 = zext($tmp0:2)
+	$U10:8 = zext($U7:2)
 	$U10:8 = $U10:8 << 0x30:1
 	$U10:8 = $U10:8 s>> 0x30:1
 	$U13:8 = $U9:8 * $U10:8
@@ -97,6 +97,29 @@ vldmia r12!,{d8,d9,d10,d11,d12,d13,d14,d15}
 vld4.32 {d20,d21,d22,d23},[r0]
 <L0> (entry=0x11000):
 	invalid
+
+vst2.8 {d16,d17},[r1],r2
+<L0> (entry=0x11000):
+	mult_addr = r1
+	$U1:4 = 0x380:4
+	$U4:4 = 0x388:4
+	mult_dat8 = 0x8:8
+<L1>:
+	$U5:1 = register[$U1:4]
+	ram[mult_addr] = $U5:1
+	mult_addr = mult_addr + 0x1:4
+	$U6:1 = register[$U4:4]
+	ram[mult_addr] = $U6:1
+	mult_addr = mult_addr + 0x1:4
+	mult_dat8 = mult_dat8 - 0x1:8
+	$U7:1 = mult_dat8 == 0x0:8
+	if $U7:1 jump <L3>
+<L2>:
+	$U1:4 = $U1:4 + 0x1:4
+	$U4:4 = $U4:4 + 0x1:4
+	jump <L1>
+<L3>:
+	r1 = r1 + r2
 
 udf #0x0
 <L0> (entry=0x11000):
@@ -357,12 +380,12 @@ pop.w {r3,r4,r5,r6,r7,r8,r9,pc}
 	r3 = r3 | r2
 <L4>:
 	instruction(0x8011eae)
-	$tmp0:4 = r0 + 0x104:4
+	$U1:4 = r0 + 0x104:4
 	$U3:1 = ZR != 0x0:1
 	$U2:1 = !$U3:1
 	if $U2:1 jump <L6>
 <L5>:
-	ram[$tmp0:4] = r3
+	ram[$U1:4] = r3
 <L6>:
 	instruction(0x8011eb2)
 	$U1:4 = r4 + 0x4:4
@@ -501,12 +524,12 @@ beq 0x80003aa
 	NG = tmpNG
 	instruction(0x800034e)
 	instruction(0x8000350)
-	$tmp0:4 = r5 s>> 0x15:4
+	$U4:4 = r5 s>> 0x15:4
 	$U6:1 = ZR == 0x0:1
 	$U5:1 = !$U6:1
 	if $U5:1 jump <L2>
 <L1>:
-	r12 = ~$tmp0:4
+	r12 = ~$U4:4
 	tmpNG = r12 s< 0x0:4
 	tmpZR = r12 == 0x0:4
 	ZR = tmpZR
@@ -558,14 +581,14 @@ bx.gt lr
 	OV = tmpOV
 <L2>:
 	instruction(0x8000ec8)
-	$tmp0:4 = r2 << 0x17:4
+	$U4:4 = r2 << 0x17:4
 	$U7:1 = !ZR
 	$U8:1 = NG == OV
 	$U6:1 = $U7:1 && $U8:1
 	$U5:1 = !$U6:1
 	if $U5:1 jump <L4>
 <L3>:
-	r0 = r0 | $tmp0:4
+	r0 = r0 | $U4:4
 <L4>:
 	instruction(0x8000ecc)
 	$U5:1 = !ZR
@@ -639,14 +662,14 @@ ldrex r3,[r3,#0x0]
 
 strex r3,r3,[r6,#0x0]
 <L0> (entry=0x11000):
-	$tmp0:4 = r3
+	$U2:4 = r3
 	$U3:1 = exclusive_addr == r6
 	r3 = 0x1:4
 	$U4:1 = !$U3:1
 	if $U4:1 jump 0x11004:8
 <L1>:
 	r3 = 0x0:4
-	ram[r6] = $tmp0:4
+	ram[r6] = $U2:4
 
 clrex
 <L0> (entry=0x11000):
@@ -689,4 +712,17 @@ vcvt.f32.u32 s0,s0
 <L0> (entry=0x11000):
 	$U1:8 = zext(s0)
 	s0 = int2float($U1:8)
+
+usat r1, #0x4, r1
+<L0> (entry=0x11000):
+	$U2:4 = UnsignedSaturate(r1, 0x4:4)
+	Q = UnsignedDoesSaturate(r1, 0x4:4)
+	r1 = $U2:4
+
+qadd r2,r2,lr
+<L0> (entry=0x11000):
+	$U1:4 = lr + r2
+	$U1:4 = SignedSaturate($U1:4, 0x20:2)
+	Q = SignedDoesSaturate($U1:4, 0x20:2)
+	r2 = $U1:4
 

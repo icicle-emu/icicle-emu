@@ -1,18 +1,12 @@
-pub mod config;
-mod env;
-mod hw;
-
-pub use self::{
-    config::{Config, Mcu},
-    env::Msp430,
-};
-
 use std::{collections::HashSet, rc::Rc};
 
-use icicle_vm::cpu::{
-    mem::{self, MemError, MemResult},
-    utils::XorShiftRng,
-    Environment,
+use icicle_vm::{
+    cpu::{
+        mem::{self, MemError, MemResult},
+        utils::XorShiftRng,
+        Environment,
+    },
+    msp430::Msp430,
 };
 
 use crate::{FuzzConfig, Runnable};
@@ -44,16 +38,16 @@ impl crate::FuzzTarget for RandomIoTarget {
         cpu_config.optimize_block = false;
         let mut vm = icicle_vm::build(&cpu_config)?;
 
-        let mut msp_config = config::Config {
+        let mut msp430_config = icicle_vm::msp430::Config {
             load_addr: config.msp430.load_addr.unwrap_or(0),
             interrupt_interval: config.msp430.interrupt_interval,
-            ..config::Config::default()
+            ..icicle_vm::msp430::Config::default()
         };
         if let Some(mcu) = config.msp430.mcu.as_ref() {
-            msp_config.mcu = mcu.clone();
+            msp430_config.mcu = mcu.clone();
         }
 
-        let mut env = env::Msp430::new(&vm.cpu, msp_config)?;
+        let mut env = Msp430::new(&vm.cpu, msp430_config)?;
         env.load(&mut vm.cpu, config.guest_args[0].as_bytes())
             .map_err(|e| anyhow::format_err!("{}", e))?;
 
@@ -76,7 +70,7 @@ impl crate::FuzzTarget for RandomIoTarget {
 
     fn initialize_vm(&mut self, config: &FuzzConfig, vm: &mut icicle_vm::Vm) -> anyhow::Result<()> {
         if let Some(var) = vm.cpu.arch.sleigh.get_reg("afl.prev_pc").map(|x| x.var) {
-            let env = vm.env_mut::<env::Msp430>().unwrap();
+            let env = vm.env_mut::<Msp430>().unwrap();
             env.afl_prev_pc = Some(var);
         }
 
@@ -90,7 +84,7 @@ impl crate::FuzzTarget for RandomIoTarget {
 
 impl Runnable for RandomIoTarget {
     fn set_input(&mut self, vm: &mut icicle_vm::Vm, input: &[u8]) -> anyhow::Result<()> {
-        let env = vm.env_mut::<env::Msp430>().unwrap();
+        let env = vm.env_mut::<Msp430>().unwrap();
 
         let (input, rand_seed) = match self.fixed_seed {
             Some(seed) => {
@@ -126,7 +120,7 @@ impl Runnable for RandomIoTarget {
         offset: u64,
         input: &[u8],
     ) -> anyhow::Result<()> {
-        let env = vm.env_ref::<env::Msp430>().unwrap();
+        let env = vm.env_ref::<Msp430>().unwrap();
 
         let mut handler_ref = env.unknown_peripheral_handler.inner.borrow_mut();
         let handler = handler_ref

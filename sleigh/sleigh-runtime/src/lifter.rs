@@ -14,6 +14,7 @@ pub enum Error {
     AddressOfTemporary,
     VarNodeOffsetIsNotConstant,
     TooManyTemporaries,
+    TooManyLabels,
     UnsupportedVarNodeSize(ValueSize),
     InvalidExport(ConstructorId),
     Internal(&'static str),
@@ -41,6 +42,9 @@ impl std::fmt::Display for Error {
             }
             Error::TooManyTemporaries => {
                 f.write_str("Exceeded the maximum number of temporaries allowed by the runtime")
+            }
+            Error::TooManyLabels => {
+                f.write_str("Exceeded the maximum number of labels allowed by the runtime")
             }
             Error::UnsupportedVarNodeSize(size) => write!(f, "Unsupported varnode size: {size}"),
             Error::InvalidExport(id) => {
@@ -153,6 +157,9 @@ pub struct Lifter {
     /// Values exported by subtables.
     exports: Vec<Option<Operand>>,
 
+    /// Total number of labels seen by the lifter.
+    label_count: usize,
+
     /// The base index for named temporaries in the active subtable.
     tmp_offset: usize,
 
@@ -168,8 +175,8 @@ pub struct Lifter {
     /// The default size to use for variables that don't specify a size.
     default_size: u16,
 
-    /// Is an extra label at the end of block for jumps to `inst_next` converted to inner jumps.
-    label_at_end: bool,
+    /// An extra label at the end of block to convert `inst_next` jumps to inner jumps.
+    label_at_end: Option<pcode::PcodeLabel>,
 
     /// Keeps track of temporaries that have a constant value during disassembly time.
     disassembly_constants: HashMap<pcode::VarId, u64>,
@@ -180,13 +187,14 @@ impl Lifter {
         Self {
             block: pcode::Block::new(),
             exports: Vec::new(),
+            label_count: 0,
             tmp_offset: 0,
             tmp_max: 256,
             temps: Vec::new(),
             next_sleigh_offset: 0,
             default_size: 0,
             disassembly_constants: HashMap::new(),
-            label_at_end: false,
+            label_at_end: None,
         }
     }
 
@@ -195,10 +203,11 @@ impl Lifter {
         self.exports.clear();
         self.exports.resize(inst.subtables.len(), None);
 
+        self.label_count = 0;
         self.tmp_offset = 0;
         self.temps.clear();
         self.next_sleigh_offset = 0;
-        self.label_at_end = false;
+        self.label_at_end = None;
         self.disassembly_constants.clear();
 
         self.default_size = sleigh.default_space_size;
@@ -206,8 +215,8 @@ impl Lifter {
         self.block.push((pcode::Op::InstructionMarker, (inst.inst_start, inst.num_bytes())));
         self.build_subtable(inst.root(sleigh))?;
 
-        if self.label_at_end {
-            self.block.push(pcode::Op::PcodeLabel(u16::MAX));
+        if let Some(label) = self.label_at_end {
+            self.block.push(pcode::Op::PcodeLabel(label));
         }
 
         Ok(&self.block)
@@ -229,6 +238,18 @@ impl Lifter {
 
     fn build_subtable(&mut self, subtable: SubtableCtx) -> Result<Option<Operand>> {
         LifterCtx { lifter: self, subtable }.build_subtable()
+    }
+
+    fn get_label_at_end(&mut self) -> pcode::PcodeLabel {
+        match self.label_at_end {
+            Some(label) => label,
+            None => {
+                let label = self.label_count as u16;
+                self.label_at_end = Some(label);
+                self.label_count += 1;
+                label
+            }
+        }
     }
 }
 
@@ -252,6 +273,10 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
         // Temporary buffer to store the inputs of an operation before it is emitted.
         let mut resolved_inputs = Vec::new();
         let semantics = self.subtable.semantics();
+
+        let label_offset: u16 =
+            self.lifter.label_count.try_into().map_err(|_| Error::TooManyLabels)?;
+        self.lifter.label_count += self.subtable.constructor_info().num_labels as usize;
 
         let prev_tmp_offset = self.lifter.tmp_offset;
         self.lifter.tmp_offset = self.lifter.temps.len();
@@ -288,9 +313,22 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
                     let inst_next = self.subtable.inst_next;
                     if matches!(op, pcode::Op::Branch(_)) && resolved_inputs[1].const_eq(inst_next)
                     {
-                        self.lifter.label_at_end = true;
+                        let end_label = self.lifter.get_label_at_end();
                         resolved_inputs[1] = ResolvedValue::Const(0, 8);
-                        self.emit(pcode::Op::PcodeBranch(u16::MAX), &resolved_inputs, None)?;
+                        self.emit(pcode::Op::PcodeBranch(end_label), &resolved_inputs, None)?;
+                        continue;
+                    }
+
+                    // Adjust the labels of internal branch operations to prevent overlaps.
+                    if let pcode::Op::PcodeBranch(id) = op {
+                        let label = id + label_offset;
+                        self.emit(pcode::Op::PcodeBranch(label), &resolved_inputs, None)?;
+                        continue;
+                    }
+                    if let pcode::Op::PcodeLabel(id) = op {
+                        let label = id + label_offset;
+                        self.emit(pcode::Op::PcodeLabel(label), &resolved_inputs, None)?;
+                        self.lifter.disassembly_constants.clear();
                         continue;
                     }
 
@@ -302,10 +340,6 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
                             self.emit_store(addr, offset, dst.into())?;
                         }
                         None => self.emit(*op, &resolved_inputs, None)?,
-                    }
-
-                    if matches!(op, pcode::Op::PcodeLabel(_)) {
-                        self.lifter.disassembly_constants.clear()
                     }
                 }
                 SemanticAction::AddressOf { output, base } => {

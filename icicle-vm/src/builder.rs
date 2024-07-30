@@ -327,7 +327,7 @@ pub fn sleigh_init(target: &target_lexicon::Triple) -> Result<SleighLanguage, Bu
     }
 
     // @todo: use compiler specific variants for cspec when available.
-    sleigh_compile::ldef::build(&ldef_path, id, None)
+    sleigh_compile::ldef::build(&ldef_path, id, None, false)
         .map_err(|e| BuildError::SpecCompileError(e.to_string()))
 }
 

@@ -4,15 +4,17 @@ version = "0.2.0"
 edition = "2021"
 
 [dependencies]
-anyhow = "1.0.82"
 icicle-cpu = { path = "../icicle-cpu" }
 icicle-linux = { path = "../icicle-linux" }
 icicle-jit = { path = "../icicle-jit" }
-pcode = { path = "../sleigh/pcode" }
-sleigh-runtime = { path = "../sleigh/sleigh-runtime" }
-sleigh-compile = { path = "../sleigh/sleigh-compile" }
-target-lexicon = "0.12.14"
-tracing = { version = "0.1.40", default-features = false }
-object = { version = "0.32.2", default-features = false, features = ["read_core", "elf"] }
+anyhow = { workspace = true }
+pcode = { workspace = true }
+sleigh-runtime = { workspace = true }
+sleigh-compile = { workspace = true }
+target-lexicon = { workspace = true }
+tracing = { workspace = true }
+object = { workspace = true }
+serde = { workspace = true }
 serde-xml-rs = "0.6.0"
-serde = { version = "1.0.197", features = ["derive"] }
+ihex = "3.0.0"
+ron = "0.8.1"

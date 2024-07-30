@@ -257,6 +257,9 @@ pub struct Constructor {
 
     /// The temporaries used in the semantic section.
     pub temporaries: (u32, u32),
+
+    /// The number of labels used in the semantic section.
+    pub num_labels: u32,
 }
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]

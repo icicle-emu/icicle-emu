@@ -85,8 +85,24 @@ pub struct Pattern {
     pub mask: u64,
 }
 
+impl std::fmt::Display for Pattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use std::fmt::Write;
+
+        for bit in 0..u64::BITS {
+            match ((self.mask >> bit) & 1 != 0, (self.bits >> bit) & 1 != 0) {
+                (true, true) => f.write_char('1')?,
+                (true, false) => f.write_char('0')?,
+                (false, true) => f.write_char('X')?,
+                (false, false) => f.write_char('_')?,
+            }
+        }
+        Ok(())
+    }
+}
+
 impl Pattern {
-    fn matches(&self, other: u64) -> bool {
+    pub fn matches(&self, other: u64) -> bool {
         self.mask & self.bits == self.mask & other
     }
 }

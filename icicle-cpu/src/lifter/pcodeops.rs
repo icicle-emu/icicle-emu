@@ -1,4 +1,4 @@
-use hashbrown::HashMap;
+use ahash::AHashMap as HashMap;
 
 use crate::{lifter::BlockState, Arch, Cpu, ExceptionCode};
 

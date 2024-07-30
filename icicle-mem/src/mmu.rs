@@ -1076,6 +1076,7 @@ impl Mmu {
                     if let Some(result) = hook.handler.read(self, addr, N as u8) {
                         let mut buf = [0; N];
                         buf.copy_from_slice(&result.to_le_bytes()[..N]);
+                        self.read_hooks = hooks;
                         return Ok(buf);
                     }
                 }

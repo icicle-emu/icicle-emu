@@ -4,17 +4,16 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = "1.0.82"
 icicle-vm = { path = "../icicle-vm" }
-pcode = { path = "../sleigh/pcode" }
-sleigh-runtime = { path = "../sleigh/sleigh-runtime" }
-target-lexicon = "0.12.14"
-tracing = { version = "0.1.40", default-features = false }
-serde = { version = "1.0.197", features = ["derive"] }
+anyhow = { workspace = true }
+ahash = { workspace = true }
+pcode = { workspace = true }
+sleigh-runtime = { workspace = true }
+target-lexicon = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
 ron = "0.8.1"
 bitflags = "2.5.0"
 bytemuck = { version = "1.15.0", features = ["derive"] }
-ihex = "3.0.0"
 crepe = "0.1.8"
 indexmap = "2.2.6"
-hashbrown = "0.14.3"

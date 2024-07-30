@@ -1,7 +1,8 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, rc::Rc};
 
-pub type Addr2LineCtx =
-    addr2line::Context<addr2line::gimli::EndianRcSlice<addr2line::gimli::RunTimeEndian>>;
+use object::{Object, ObjectSection};
+
+pub type Addr2LineCtx = addr2line::Context<gimli::EndianRcSlice<gimli::RunTimeEndian>>;
 
 #[derive(Clone, Default)]
 pub struct DebugInfo {
@@ -41,13 +42,23 @@ impl DebugInfo {
     // @todo: consider doing this on-demand.
     // @todo: avoid needing to mantain a separate copy of the binary in memory.
     pub fn add_file(&mut self, data: &[u8], load_address: u64) -> Result<(), String> {
-        use addr2line::object::{Object, ObjectKind, ObjectSymbol};
+        use object::{Object, ObjectKind, ObjectSymbol};
 
-        let file = addr2line::object::read::File::parse(data)
-            .map_err(|e| format!("Error parsing elf: {}", e))?;
+        let file =
+            object::read::File::parse(data).map_err(|e| format!("Error parsing elf: {}", e))?;
 
         let relocation_offset = if file.kind() == ObjectKind::Dynamic { load_address } else { 0 };
-        match addr2line::Context::new(&file) {
+
+        let endian = if file.is_little_endian() {
+            gimli::RunTimeEndian::Little
+        }
+        else {
+            gimli::RunTimeEndian::Big
+        };
+
+        let dwarf = dwarf_ctx(&file, endian)
+            .map_err(|err| format!("error loading debug info from object file: {err}"))?;
+        match addr2line::Context::from_dwarf(dwarf) {
             Ok(ctx) => {
                 self.ctx.insert(relocation_offset, std::rc::Rc::new(ctx));
             }
@@ -138,7 +149,7 @@ impl DebugInfo {
                 // address, by inspecting additional debug info depending on whether we are in a
                 // regular function frame or an inlined function.
                 let function_start = (|| {
-                    let (_dwarf, unit) = ctx.find_dwarf_and_unit(local_addr).skip_all_loads()?;
+                    let unit = ctx.find_dwarf_and_unit(local_addr).skip_all_loads()?;
                     let entry = unit.entry(last_frame.dw_die_offset?).ok()?;
                     resolve_start_address(&entry)
                 })()
@@ -193,6 +204,24 @@ impl DebugInfo {
             None => path.to_string(),
         }
     }
+}
+
+fn dwarf_ctx(
+    object: &object::File,
+    endian: gimli::RunTimeEndian,
+) -> anyhow::Result<gimli::Dwarf<gimli::EndianRcSlice<gimli::RunTimeEndian>>> {
+    let load_section = |id: gimli::SectionId| -> anyhow::Result<Rc<[u8]>> {
+        Ok(match object.section_by_name(id.name()) {
+            Some(section) => section.uncompressed_data()?.into(),
+            None => Rc::default(),
+        })
+    };
+    let dwarf_sections = gimli::DwarfSections::load(load_section)?;
+
+    let borrow_section = |section: &Rc<[u8]>| gimli::EndianRcSlice::new(section.clone(), endian);
+    let dwarf = dwarf_sections.borrow(borrow_section);
+
+    Ok(dwarf)
 }
 
 fn resolve_start_address<R, Offset>(
@@ -252,7 +281,6 @@ pub enum SymbolKind {
 fn get_symbol_kind(sym: &object::Symbol) -> SymbolKind {
     use object::ObjectSymbol;
     match sym.kind() {
-        object::SymbolKind::Null => SymbolKind::Null,
         object::SymbolKind::Text => SymbolKind::Function,
         object::SymbolKind::Label => SymbolKind::Label,
         object::SymbolKind::Data => SymbolKind::Object,

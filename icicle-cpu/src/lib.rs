@@ -13,7 +13,7 @@ mod trace;
 
 use std::any::Any;
 
-use hashbrown::{HashMap, HashSet};
+use ahash::{AHashMap as HashMap, AHashSet as HashSet};
 
 use crate::debug_info::{DebugInfo, SourceLocation};
 
@@ -57,19 +57,6 @@ impl BlockTable {
         let group = *self.map.get(&key)?;
         Some(BlockInfoRef { group, code: self })
     }
-
-    pub fn address_of(&self, id: u64, offset: u64) -> u64 {
-        let block = &self.blocks[id as usize];
-        block
-            .pcode
-            .instructions
-            .iter()
-            .take(offset as usize)
-            .filter(|inst| matches!(inst.op, pcode::Op::InstructionMarker))
-            .map(|x| x.inputs.first().as_u64())
-            .last()
-            .unwrap_or(0)
-    }
 }
 
 pub struct BlockInfoRef<'a> {
@@ -112,13 +99,13 @@ pub trait Environment {
     }
 
     /// Obtains debug information about the target address.
-    fn symbolize_addr(&mut self, _cpu: &mut Cpu, _addr: u64) -> Option<SourceLocation> {
-        None
+    fn symbolize_addr(&mut self, _: &mut Cpu, addr: u64) -> Option<SourceLocation> {
+        self.debug_info()?.symbolize_addr(addr)
     }
 
     /// Looks up symbol in the environment
-    fn lookup_symbol(&mut self, _symbol: &str) -> Option<u64> {
-        None
+    fn lookup_symbol(&mut self, symbol: &str) -> Option<u64> {
+        self.debug_info()?.symbols.resolve_sym(symbol)
     }
 
     /// Gets the address of the program entrypoint.

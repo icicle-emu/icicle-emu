@@ -1,14 +1,11 @@
 use std::{any::Any, path::PathBuf};
 
 use icicle_cpu::{
-    debug_info::{DebugInfo, SourceLocation},
-    elf::ElfLoader,
-    pe::PeLoader,
-    Cpu, Environment, EnvironmentAny, VmExit,
+    debug_info::DebugInfo, elf::ElfLoader, pe::PeLoader, Cpu, Environment, EnvironmentAny, VmExit,
 };
 use object::read::FileKind;
 
-use crate::{BuildError, Vm};
+use crate::{msp430::Msp430, BuildError, Vm};
 
 struct GenericEmbedded {
     debug_info: DebugInfo,
@@ -29,6 +26,7 @@ impl PeLoader for GenericEmbedded {}
 fn read_file(path: &[u8]) -> Result<Vec<u8>, String> {
     let path = std::str::from_utf8(path)
         .map_err(|e| format!("@fixme: only utf-8 paths are supported: {e}"))?;
+    tracing::debug!("loading binary from host path: {path}");
     std::fs::read(path).map_err(|e| format!("Failed to read {path}: {e}"))
 }
 
@@ -81,12 +79,8 @@ impl Environment for GenericEmbedded {
         None
     }
 
-    fn symbolize_addr(&mut self, _: &mut Cpu, addr: u64) -> Option<SourceLocation> {
-        self.debug_info.symbolize_addr(addr)
-    }
-
-    fn lookup_symbol(&mut self, symbol: &str) -> Option<u64> {
-        self.debug_info.symbols.resolve_sym(symbol)
+    fn debug_info(&self) -> Option<&DebugInfo> {
+        Some(&self.debug_info)
     }
 
     fn snapshot(&mut self) -> Box<dyn Any> {
@@ -105,7 +99,7 @@ pub fn build_auto(vm: &mut Vm) -> Result<Box<dyn EnvironmentAny>, BuildError> {
             Ok(Box::new(build_linux_env(vm, &config, sysroot, true)?))
         }
         target_lexicon::OperatingSystem::None_ | target_lexicon::OperatingSystem::Unknown => {
-            Ok(Box::new(build_machine_env(vm)?))
+            build_machine_env(vm)
         }
         _ => Err(BuildError::UnsupportedOperatingSystem),
     }
@@ -133,8 +127,15 @@ pub fn build_linux_env(
     Ok(kernel)
 }
 
-fn build_machine_env(vm: &mut Vm) -> Result<GenericEmbedded, BuildError> {
+fn build_machine_env(vm: &mut Vm) -> Result<Box<dyn EnvironmentAny>, BuildError> {
     match vm.cpu.arch.triple.architecture {
-        _ => Ok(GenericEmbedded::new()),
+        target_lexicon::Architecture::Msp430 => {
+            let msp430_config = match std::env::var("MSP430_MCU") {
+                Ok(path) => crate::msp430::Config { mcu: path, ..crate::msp430::Config::default() },
+                Err(_) => crate::msp430::Config::default(),
+            };
+            Ok(Box::new(Msp430::new(&vm.cpu, msp430_config)?))
+        }
+        _ => Ok(Box::new(GenericEmbedded::new())),
     }
 }

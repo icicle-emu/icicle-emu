@@ -4,14 +4,14 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = "1.0.82"
-bstr = { version = "1.9.1", default-features = false }
 icicle-vm = { path = "../icicle-vm" }
 icicle-fuzzing = { path = "../icicle-fuzzing" }
 icicle-gdb = { path = "../icicle-gdb" }
+anyhow = { workspace = true }
+target-lexicon = { workspace = true }
+pcode = { workspace = true }
+bstr = { version = "1.9.1", default-features = false }
 libc = "0.2.153"
 serde_json = "1.0.115"
-target-lexicon = "0.12.14"
-tracing = { version = "0.1.40", default-features = false, features = ["release_max_level_trace"] }
+tracing = { workspace = true, features = ["release_max_level_trace"] }
 tracing-subscriber = { version = "0.3.18", default-features = false, features = ["fmt", "env-filter", "ansi"] }
-pcode = { path = "../sleigh/pcode" }

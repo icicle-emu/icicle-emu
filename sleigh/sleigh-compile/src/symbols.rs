@@ -414,7 +414,12 @@ impl SymbolTable {
         }
 
         let result = crate::constructor::build(ctx, self, constructor).map_err(|e| {
-            format!("Failed to build constructor: \"{}\": {}", constructor.display(&self.parser), e)
+            format!(
+                "{} Failed to build constructor: \"{}\": {}",
+                self.format_span(&constructor.span),
+                constructor.display(&self.parser),
+                e
+            )
         })?;
 
         let table = &mut self.tables[result.table as usize];

@@ -76,22 +76,3 @@ impl<T> ErrorExt for Result<T, Error> {
         })
     }
 }
-
-struct DisplayStringList<'a>(&'a Vec<String>);
-
-impl<'a> std::fmt::Display for DisplayStringList<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("[")?;
-
-        for entry in self.0.iter().take(self.0.len() - 1) {
-            f.write_str(entry)?;
-            f.write_str(", ")?;
-        }
-
-        if !self.0.is_empty() {
-            f.write_str(self.0.last().unwrap())?;
-        }
-
-        f.write_str("]")
-    }
-}

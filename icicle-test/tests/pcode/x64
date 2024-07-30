@@ -169,60 +169,60 @@ CPUID
 	$U17:1 = EAX == 0x80000004:4
 	if $U17:1 jump <L32>
 <L16>:
-	$tmp0 = cpuid(EAX, ECX)
+	$U1:16 = cpuid(EAX, ECX)
 	jump <L33>
 <L17>:
-	$tmp0 = cpuid_basic_info(EAX, ECX)
+	$U1:16 = cpuid_basic_info(EAX, ECX)
 	jump <L33>
 <L18>:
-	$tmp0 = cpuid_Version_info(EAX, ECX)
+	$U1:16 = cpuid_Version_info(EAX, ECX)
 	jump <L33>
 <L19>:
-	$tmp0 = cpuid_cache_tlb_info(EAX, ECX)
+	$U1:16 = cpuid_cache_tlb_info(EAX, ECX)
 	jump <L33>
 <L20>:
-	$tmp0 = cpuid_serial_info(EAX, ECX)
+	$U1:16 = cpuid_serial_info(EAX, ECX)
 	jump <L33>
 <L21>:
-	$tmp0 = cpuid_Deterministic_Cache_Parameters_info(EAX, ECX)
+	$U1:16 = cpuid_Deterministic_Cache_Parameters_info(EAX, ECX)
 	jump <L33>
 <L22>:
-	$tmp0 = cpuid_MONITOR_MWAIT_Features_info(EAX, ECX)
+	$U1:16 = cpuid_MONITOR_MWAIT_Features_info(EAX, ECX)
 	jump <L33>
 <L23>:
-	$tmp0 = cpuid_Thermal_Power_Management_info(EAX, ECX)
+	$U1:16 = cpuid_Thermal_Power_Management_info(EAX, ECX)
 	jump <L33>
 <L24>:
-	$tmp0 = cpuid_Extended_Feature_Enumeration_info(EAX, ECX)
+	$U1:16 = cpuid_Extended_Feature_Enumeration_info(EAX, ECX)
 	jump <L33>
 <L25>:
-	$tmp0 = cpuid_Direct_Cache_Access_info(EAX, ECX)
+	$U1:16 = cpuid_Direct_Cache_Access_info(EAX, ECX)
 	jump <L33>
 <L26>:
-	$tmp0 = cpuid_Architectural_Performance_Monitoring_info(EAX, ECX)
+	$U1:16 = cpuid_Architectural_Performance_Monitoring_info(EAX, ECX)
 	jump <L33>
 <L27>:
-	$tmp0 = cpuid_Extended_Topology_info(EAX, ECX)
+	$U1:16 = cpuid_Extended_Topology_info(EAX, ECX)
 	jump <L33>
 <L28>:
-	$tmp0 = cpuid_Processor_Extended_States_info(EAX, ECX)
+	$U1:16 = cpuid_Processor_Extended_States_info(EAX, ECX)
 	jump <L33>
 <L29>:
-	$tmp0 = cpuid_Quality_of_Service_info(EAX, ECX)
+	$U1:16 = cpuid_Quality_of_Service_info(EAX, ECX)
 	jump <L33>
 <L30>:
-	$tmp0 = cpuid_brand_part1_info(EAX, ECX)
+	$U1:16 = cpuid_brand_part1_info(EAX, ECX)
 	jump <L33>
 <L31>:
-	$tmp0 = cpuid_brand_part2_info(EAX, ECX)
+	$U1:16 = cpuid_brand_part2_info(EAX, ECX)
 	jump <L33>
 <L32>:
-	$tmp0 = cpuid_brand_part3_info(EAX, ECX)
+	$U1:16 = cpuid_brand_part3_info(EAX, ECX)
 <L33>:
-	RAX = zext($tmp0:4)
-	RBX = zext($tmp0[4]:4)
-	RDX = zext($tmp0[8]:4)
-	RCX = zext($tmp0[12]:4)
+	RAX = zext($U1:4)
+	RBX = zext($U1[4]:4)
+	RDX = zext($U1[8]:4)
+	RCX = zext($U1[12]:4)
 
 MUL RBX
 <L0> (entry=0x1a):
@@ -463,12 +463,12 @@ CMOVZ EAX,EBX
 CMOVZ ECX,dword ptr [RSI + -0x61b9d73e]
 <L0> (entry=0x8a):
 	$U3:8 = RSI + 0xffffffff9e4628c2:8
-	$tmp0:4 = ram[$U3:8]
+	$U1:4 = ram[$U3:8]
 	RCX = zext(ECX)
 	$U2:1 = !ZF
 	if $U2:1 jump 0x91:8
 <L1>:
-	RCX = zext($tmp0:4)
+	RCX = zext($U1:4)
 
 SHL EAX,0x1
 <L0> (entry=0x12000):
@@ -818,36 +818,36 @@ PUNPCKHDQ MM1, qword ptr [RSI]
 
 BSF EAX,EDX
 <L0> (entry=0x1000):
-	$tmp0:4 = 0x0:4
+	$U1:4 = 0x0:4
 	ZF = EDX == 0x0:4
 	if ZF jump <L3>
 <L1>:
-	$U3:4 = EDX >> $tmp0:4
+	$U3:4 = EDX >> $U1:4
 	$U4:4 = $U3:4 & 0x1:4
 	$U5:1 = $U4:4 != 0x0:4
 	if $U5:1 jump <L3>
 <L2>:
-	$tmp0:4 = $tmp0:4 + 0x1:4
+	$U1:4 = $U1:4 + 0x1:4
 	jump <L1>
 <L3>:
-	RAX = zext($tmp0:4)
+	RAX = zext($U1:4)
 
 BSR ESP,dword ptr [0x101000]
 <L0> (entry=0x1000):
-	$tmp0:4 = 0x1f:4
+	$U1:4 = 0x1f:4
 	$U5:4 = ram[0x101000:8]
 	ZF = $U5:4 == 0x0:4
 	if ZF jump <L3>
 <L1>:
 	$U6:4 = ram[0x101000:8]
-	$U3:4 = $U6:4 >> $tmp0:4
+	$U3:4 = $U6:4 >> $U1:4
 	$U4:1 = $U3:4 != 0x0:4
 	if $U4:1 jump <L3>
 <L2>:
-	$tmp0:4 = $tmp0:4 - 0x1:4
+	$U1:4 = $U1:4 - 0x1:4
 	jump <L1>
 <L3>:
-	RSP = zext($tmp0:4)
+	RSP = zext($U1:4)
 
 FSUBR dword ptr [0x121100]
 <L0> (entry=0x120000):
@@ -1975,18 +1975,18 @@ CVTSI2SD XMM6, dword ptr [RBP + 0x20]
 
 CMPXCHG8B qword ptr [RDX + -0x3ea0fba4]
 <L0> (entry=0x12026):
-	$tmp1:8 = RDX + 0xffffffffc15f045c:8
-	$tmp0:8 = ram[$tmp1:8]
+	$U10:8 = RDX + 0xffffffffc15f045c:8
+	$U1:8 = ram[$U10:8]
 	$U2:8 = zext(EDX)
 	$U3:8 = $U2:8 << 0x20:8
 	$U4:8 = zext(EAX)
 	$U5:8 = $U3:8 | $U4:8
-	ZF = $U5:8 == $tmp0:8
+	ZF = $U5:8 == $U1:8
 	if ZF jump <L2>
 <L1>:
-	EDX = $tmp0[4]:4
-	RDX = zext($tmp0[4]:4)
-	EAX = $tmp0:4
+	EDX = $U1[4]:4
+	RDX = zext($U1[4]:4)
+	EAX = $U1:4
 	RAX = zext(EAX)
 	jump 0x1202d:8
 <L2>:
@@ -1994,22 +1994,22 @@ CMPXCHG8B qword ptr [RDX + -0x3ea0fba4]
 	$U8:8 = $U7:8 << 0x20:8
 	$U9:8 = zext(EBX)
 	$U11:8 = $U8:8 | $U9:8
-	ram[$tmp1:8] = $U11:8
+	ram[$U10:8] = $U11:8
 
 CMPXCHG8B qword ptr [RAX]
 <L0> (entry=0x65):
-	$tmp1:8 = RAX
-	$tmp0:8 = ram[RAX]
+	$U10:8 = RAX
+	$U1:8 = ram[RAX]
 	$U2:8 = zext(EDX)
 	$U3:8 = $U2:8 << 0x20:8
 	$U4:8 = zext(EAX)
 	$U5:8 = $U3:8 | $U4:8
-	ZF = $U5:8 == $tmp0:8
+	ZF = $U5:8 == $U1:8
 	if ZF jump <L2>
 <L1>:
-	EDX = $tmp0[4]:4
-	RDX = zext($tmp0[4]:4)
-	EAX = $tmp0:4
+	EDX = $U1[4]:4
+	RDX = zext($U1[4]:4)
+	EAX = $U1:4
 	RAX = zext(EAX)
 	jump 0x68:8
 <L2>:
@@ -2017,14 +2017,14 @@ CMPXCHG8B qword ptr [RAX]
 	$U8:8 = $U7:8 << 0x20:8
 	$U9:8 = zext(EBX)
 	$U11:8 = $U8:8 | $U9:8
-	ram[$tmp1:8] = $U11:8
+	ram[$U10:8] = $U11:8
 
 CMPXCHG dword ptr [0x1010],ESI
 <L0> (entry=0x0):
-	$tmp0:4 = ram[0x1010:8]
-	CF = EAX < $tmp0:4
-	OF = EAX sborrow $tmp0:4
-	$U2:4 = EAX - $tmp0:4
+	$U1:4 = ram[0x1010:8]
+	CF = EAX < $U1:4
+	OF = EAX sborrow $U1:4
+	$U2:4 = EAX - $U1:4
 	SF = $U2:4 s< 0x0:4
 	ZF = $U2:4 == 0x0:4
 	$U3:4 = $U2:4 & 0xff:4
@@ -2033,7 +2033,7 @@ CMPXCHG dword ptr [0x1010],ESI
 	PF = $U5:1 == 0x0:1
 	if ZF jump <L2>
 <L1>:
-	RAX = zext($tmp0:4)
+	RAX = zext($U1:4)
 	jump 0x7:8
 <L2>:
 	ram[0x1010:8] = ESI

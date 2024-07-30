@@ -1,6 +1,10 @@
 //! Code for loading SLEIGH specifications using ldefs
 
-use std::path::{Path, PathBuf};
+use std::{
+    fs::File,
+    io::BufReader,
+    path::{Path, PathBuf},
+};
 
 use serde_derive::Deserialize;
 use sleigh_runtime::SleighData;
@@ -69,19 +73,23 @@ pub fn build(
     ldef_path: &Path,
     lang_id: &str,
     cspec_id: Option<&str>,
+    verbose: bool,
 ) -> Result<SleighLanguage, Error> {
     let ldef = LanguageDef::from_xml(ldef_path)?;
     let language =
         ldef.find_match(lang_id).ok_or_else(|| Error::LanguageNotFound(lang_id.into()))?;
 
     let pspec_path = language.pspec_path(&ldef_path).ok_or(Error::InvalidPath)?;
-    let pspec: PSpec = serde_xml_rs::from_reader(
-        std::fs::File::open(&pspec_path).map_err(|err| Error::Io(pspec_path.clone(), err))?,
-    )
+    let pspec: PSpec = serde_xml_rs::from_reader(BufReader::new(
+        File::open(&pspec_path).map_err(|err| Error::Io(pspec_path.clone(), err))?,
+    ))
     .map_err(|err| Error::ParseError(pspec_path, err.to_string()))?;
 
     let slaspec_path = language.slaspec_path(&ldef_path).ok_or(Error::InvalidPath)?;
-    let sleigh = crate::from_path(&slaspec_path).map_err(Error::CompileError)?;
+
+    let ast = sleigh_parse::Parser::from_path(&slaspec_path)
+        .map_err(|e| Error::ParseError(slaspec_path, e))?;
+    let sleigh = crate::build_inner(ast, verbose).map_err(Error::CompileError)?;
 
     // Resolve the initial context using information from `context_data` in the processor
     // specification.
@@ -111,9 +119,9 @@ pub fn build(
 
         // If we have a compiler spec, we can obtain additional information about the target
         // specification.
-        let cspec: CSpec = serde_xml_rs::from_reader(
-            std::fs::File::open(&path).map_err(|err| Error::Io(path.clone(), err))?,
-        )
+        let cspec: CSpec = serde_xml_rs::from_reader(BufReader::new(
+            File::open(&path).map_err(|err| Error::Io(path.clone(), err))?,
+        ))
         .map_err(|err| Error::ParseError(path, err.to_string()))?;
 
         sp = get_reg(&cspec.stackpointer.register)?;
@@ -300,8 +308,8 @@ pub struct LanguageDef {
 
 impl LanguageDef {
     pub fn from_xml(path: &Path) -> Result<Self, Error> {
-        serde_xml_rs::from_reader(std::io::BufReader::new(
-            std::fs::File::open(&path).map_err(|err| Error::Io(path.into(), err))?,
+        serde_xml_rs::from_reader(BufReader::new(
+            File::open(&path).map_err(|err| Error::Io(path.into(), err))?,
         ))
         .map_err(|err| Error::ParseError(path.into(), err.to_string()))
     }

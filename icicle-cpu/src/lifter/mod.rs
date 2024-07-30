@@ -2,10 +2,9 @@ pub mod msp430;
 pub mod optimize;
 pub mod pcodeops;
 
-use hashbrown::{HashMap, HashSet};
+use ahash::AHashMap as HashMap;
 
 use pcode::PcodeDisplay;
-use sleigh_runtime::SleighData;
 
 use crate::{cpu::Arch, lifter::optimize::Optimizer, BlockTable};
 
@@ -46,12 +45,6 @@ pub struct InstructionLifter {
 
     /// Controls whether we should also generate disassembly for the lifted instruction.
     generate_disassembly: bool,
-
-    /// Buffer used for keeping track of temporaries that cross block boundaries.
-    live_tmps: HashMap<i16, u16>,
-
-    /// Buffer used for tracking which temporaries have been written to in the current block.
-    written_tmps: HashSet<i16>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -79,8 +72,6 @@ impl InstructionLifter {
             lifted: pcode::Block::new(),
             generate_disassembly: true,
             disasm: String::new(),
-            live_tmps: HashMap::new(),
-            written_tmps: HashSet::new(),
         }
     }
 
@@ -186,68 +177,6 @@ impl InstructionLifter {
         tracing::trace!("decode: {vaddr:#x} {:02x?}", &buf[..len]);
 
         Ok(&self.decoded)
-    }
-
-    /// Promotes temporaries that cross internal branches/labels to registers.
-    fn promote_live_tempories(&mut self, sleigh: &SleighData) {
-        self.live_tmps.clear();
-        self.written_tmps.clear();
-
-        let mut next_saved_tmp: u16 = 0;
-
-        for inst in &self.lifted.instructions {
-            if matches!(
-                inst.op,
-                pcode::Op::PcodeLabel(_) | pcode::Op::PcodeBranch(_) | pcode::Op::Branch(_)
-            ) {
-                // Start of a new basic block.
-                self.written_tmps.clear();
-                continue;
-            }
-
-            // If there is an input temporary that has not been written to in this block then keep
-            // track of it.
-            for input in inst.inputs.get() {
-                if let pcode::Value::Var(x) = input {
-                    if x.is_temp() && !self.written_tmps.contains(&x.id) {
-                        self.live_tmps.entry(x.id).or_insert_with(|| {
-                            next_saved_tmp += 1;
-                            next_saved_tmp - 1
-                        });
-                    }
-                }
-            }
-
-            if inst.output.is_temp() {
-                self.written_tmps.insert(inst.output.id);
-            }
-        }
-
-        if next_saved_tmp as usize > sleigh.saved_tmps.len() {
-            eprintln!(
-                "{}",
-                self.lifted.instructions.iter().map(|x| format!("{x:?}\n")).collect::<String>()
-            );
-            panic!("Too many saved temporaries");
-        }
-
-        // Now we know all temporaries that we need to promote, so do the promotion.
-        for inst in &mut self.lifted.instructions {
-            let mut inputs = inst.inputs.get();
-            for input in &mut inputs {
-                if let pcode::Value::Var(var) = input {
-                    if let Some(&x) = self.live_tmps.get(&var.id) {
-                        *var = sleigh.saved_tmps[x as usize].slice(var.offset, var.size);
-                    }
-                }
-            }
-            inst.inputs = inputs.into();
-
-            if let Some(&x) = self.live_tmps.get(&inst.output.id) {
-                inst.output =
-                    sleigh.saved_tmps[x as usize].slice(inst.output.offset, inst.output.size);
-            }
-        }
     }
 }
 
@@ -948,9 +877,6 @@ impl BlockLifter {
 
         if self.settings.optimize {
             self.optimizer.const_prop(&mut self.instruction_lifter.lifted);
-        }
-        self.instruction_lifter.promote_live_tempories(&ctx.src.arch().sleigh);
-        if self.settings.optimize {
             self.optimizer.dead_store_elimination(&mut self.instruction_lifter.lifted);
         }
         self.instruction_lifter.lifted.recompute_next_tmp();
@@ -958,7 +884,7 @@ impl BlockLifter {
         if self.instruction_lifter.generate_disassembly {
             let new_disasm = &self.instruction_lifter.disasm;
             match ctx.code.disasm.entry(ctx.vaddr) {
-                hashbrown::hash_map::Entry::Occupied(old) => {
+                std::collections::hash_map::Entry::Occupied(old) => {
                     let old_disasm = old.get();
                     if old_disasm != new_disasm {
                         tracing::error!(
@@ -968,7 +894,7 @@ impl BlockLifter {
                         return Err(DecodeError::DisassemblyChanged);
                     }
                 }
-                hashbrown::hash_map::Entry::Vacant(slot) => {
+                std::collections::hash_map::Entry::Vacant(slot) => {
                     slot.insert(new_disasm.clone());
                 }
             }

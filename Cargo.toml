@@ -13,5 +13,18 @@ members = [
 ]
 default-members = ["afl-icicle-trace"]
 
+[workspace.dependencies]
+anyhow = "1.0.82"
+target-lexicon = "0.12.14"
+tracing = { version = "0.1.40", default-features = false }
+object = { version = "0.36.2", default-features = false, features = ["write", "read_core", "elf"] }
+gimli = { version = "0.31.0", features = ["endian-reader"] }
+serde = { version = "1.0.197", features = ["derive"] }
+bytemuck = "1"
+pcode = { path = "./sleigh/pcode" }
+ahash = "0.8.11"
+sleigh-runtime = { path = "./sleigh/sleigh-runtime" }
+sleigh-compile = { path = "./sleigh/sleigh-compile" }
+
 [profile.release]
 debug = 1

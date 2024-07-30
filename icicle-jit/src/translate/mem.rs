@@ -271,7 +271,7 @@ fn load_fallback(trans: &mut Translator, output: pcode::VarNode, guest_addr: Val
     let func = trans.symbols.mmu.load(output.size);
     let value = if output.size == 16 {
         let stack_slot =
-            trans.builder.create_sized_stack_slot(StackSlotData::new(ExplicitSlot, 16));
+            trans.builder.create_sized_stack_slot(StackSlotData::new(ExplicitSlot, 16, 16));
         let out_ptr = trans.builder.ins().stack_addr(types::I64, stack_slot, 0);
         let args = [trans.vm_ptr.0, guest_addr, out_ptr];
         trans.builder.ins().call(func, &args);

@@ -1,5 +1,4 @@
 use half::f16;
-use icicle_mem::MemResult;
 use pcode::{MemId, Value, VarNode};
 
 use crate::{
@@ -10,8 +9,8 @@ use crate::{
 pub trait PcodeExecutor: ValueSource {
     fn exception(&mut self, code: ExceptionCode, value: u64);
     fn next_instruction(&mut self, addr: u64, len: u64);
-    fn load_mem<const N: usize>(&mut self, id: MemId, addr: u64) -> MemResult<[u8; N]>;
-    fn store_mem<const N: usize>(&mut self, id: MemId, addr: u64, value: [u8; N]) -> MemResult<()>;
+    fn load_mem<const N: usize>(&mut self, id: MemId, addr: u64) -> Option<[u8; N]>;
+    fn store_mem<const N: usize>(&mut self, id: MemId, addr: u64, value: [u8; N]) -> Option<()>;
     fn set_arg(&mut self, id: u16, value: u128);
     fn call_helper(&mut self, id: u16, output: VarNode, inputs: [Value; 2]);
     fn call_hook(&mut self, hook: pcode::HookId);
@@ -508,15 +507,11 @@ where
 
         (Op::Load(id), ..) => {
             let addr: u64 = exec.read_dynamic(stmt.inputs.get()[0]).zxt();
-            if let Err(e) = load(exec, id, output, addr) {
-                exec.exception(ExceptionCode::from_load_error(e), addr)
-            }
+            load(exec, id, output, addr);
         }
         (Op::Store(id), ..) => {
             let addr: u64 = exec.read_dynamic(stmt.inputs.get()[0]).zxt();
-            if let Err(e) = store(exec, id, addr, stmt.inputs.get()[1]) {
-                exec.exception(ExceptionCode::from_store_error(e), addr)
-            }
+            store(exec, id, addr, stmt.inputs.get()[1]);
         }
 
         (Op::Arg(id), ..) => {
@@ -622,10 +617,12 @@ where
     }
 }
 
-fn load<E: PcodeExecutor>(exec: &mut E, id: MemId, dst: VarNode, addr: u64) -> MemResult<()> {
+fn load<E: PcodeExecutor>(exec: &mut E, id: MemId, dst: VarNode, addr: u64) {
     macro_rules! load {
         ($dst:expr, $addr:expr, $ty:ty) => {{
-            let tmp = exec.load_mem(id, $addr)?;
+            let Some(tmp) = exec.load_mem(id, $addr) else {
+                return;
+            };
             let value = match exec.is_big_endian() && id == pcode::RAM_SPACE {
                 true => <$ty>::from_be_bytes(tmp),
                 false => <$ty>::from_le_bytes(tmp),
@@ -662,11 +659,9 @@ fn load<E: PcodeExecutor>(exec: &mut E, id: MemId, dst: VarNode, addr: u64) -> M
             }
         }
     }
-
-    Ok(())
 }
 
-fn store<E: PcodeExecutor>(exec: &mut E, id: MemId, addr: u64, value: Value) -> MemResult<()> {
+fn store<E: PcodeExecutor>(exec: &mut E, id: MemId, addr: u64, value: Value) {
     macro_rules! writer {
         ($addr:expr, $value:expr) => {{
             let val = $value;
@@ -674,23 +669,25 @@ fn store<E: PcodeExecutor>(exec: &mut E, id: MemId, addr: u64, value: Value) -> 
                 true => val.to_be_bytes(),
                 false => val.to_le_bytes(),
             };
-            exec.store_mem(id, $addr, bytes)
+            if exec.store_mem(id, $addr, bytes).is_none() {
+                return;
+            }
         }};
     }
 
     match value.size() {
-        1 => writer!(addr, exec.read::<u8>(value))?,
-        2 => writer!(addr, exec.read::<u16>(value))?,
-        4 => writer!(addr, exec.read::<u32>(value))?,
-        8 => writer!(addr, exec.read::<u64>(value))?,
+        1 => writer!(addr, exec.read::<u8>(value)),
+        2 => writer!(addr, exec.read::<u16>(value)),
+        4 => writer!(addr, exec.read::<u32>(value)),
+        8 => writer!(addr, exec.read::<u64>(value)),
         16 => {
             if exec.is_big_endian() && id == pcode::RAM_SPACE {
-                writer!(addr, exec.read::<u64>(value.slice(8, 8)))?;
-                writer!(addr.wrapping_add(8), exec.read::<u64>(value.slice(0, 8)))?;
+                writer!(addr, exec.read::<u64>(value.slice(8, 8)));
+                writer!(addr.wrapping_add(8), exec.read::<u64>(value.slice(0, 8)));
             }
             else {
-                writer!(addr, exec.read::<u64>(value.slice(0, 8)))?;
-                writer!(addr.wrapping_add(8), exec.read::<u64>(value.slice(8, 8)))?;
+                writer!(addr, exec.read::<u64>(value.slice(0, 8)));
+                writer!(addr.wrapping_add(8), exec.read::<u64>(value.slice(8, 8)));
             }
         }
         size => {
@@ -699,18 +696,16 @@ fn store<E: PcodeExecutor>(exec: &mut E, id: MemId, addr: u64, value: Value) -> 
                     writer!(
                         addr.wrapping_add(size as u64 - 1 - i as u64),
                         exec.read::<u8>(value.slice(i, 1))
-                    )?;
+                    );
                 }
             }
             else {
                 for i in 0..size {
-                    writer!(addr.wrapping_add(i as u64), exec.read::<u8>(value.slice(i, 1)))?;
+                    writer!(addr.wrapping_add(i as u64), exec.read::<u8>(value.slice(i, 1)));
                 }
             }
         }
     }
-
-    Ok(())
 }
 
 trait Signed {
@@ -1012,7 +1007,6 @@ impl_float_op! { FloatAdd,    (a, b, a + b) }
 impl_float_op! { FloatSub,    (a, b, a - b) }
 impl_float_op! { FloatMul,    (a, b, a * b) }
 impl_float_op! { FloatDiv,    (a, b, a / b) }
-impl_float_op! { FloatMod,    (a, b, a % b) }
 
 /// Represents an operation that takes a single input producing a float output of the same size
 trait FloatSingleOp<T>: Sized {

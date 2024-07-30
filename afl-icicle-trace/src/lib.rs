@@ -149,7 +149,7 @@ pub fn run_without_parent<T: FuzzTarget>(
     }
 
     let exit = target.run(&mut vm)?;
-    eprintln!("[icicle] exited with: {:?}", exit);
+    eprintln!("\n[icicle] exited with: {:?}", exit);
 
     if std::env::var_os("ICICLE_SAVE_DISASM").is_some() {
         std::fs::write("disasm.asm", icicle_vm::debug::dump_disasm(&vm)?.as_bytes())?;

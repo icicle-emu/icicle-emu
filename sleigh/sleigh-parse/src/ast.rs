@@ -2,9 +2,6 @@ use crate::parser::StrIndex;
 pub use crate::Span;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct ItemId(u32);
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct ConstraintExprId(u32);
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

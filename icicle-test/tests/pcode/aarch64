@@ -83,15 +83,15 @@ adrp x17, 0x224000
 
 stlxr w1, wzr, [x19]
 <L0> (entry=0x40e694):
-	$tmp0:1 = 0x1:1
+	$U1:1 = 0x1:1
 	$U3:1 = 0x1:1
 	$U4:1 = 0x0:1
 	if $U4:1 jump <L2>
 <L1>:
 	ram[x19] = 0x0:4
-	$tmp0:1 = 0x0:1
+	$U1:1 = 0x0:1
 <L2>:
-	x1 = zext($tmp0:1)
+	x1 = zext($U1:1)
 
 mov x1, v0.D[0x0]
 <L0> (entry=0x0):
@@ -234,14 +234,14 @@ fmov h0, x0
 stzg sp, [sp, #-0x10]
 <L0> (entry=0x8000000):
 	$U7:8 = sp + 0xfffffffffffffff0:8
-	$tmp0:8 = $U7:8
-	$tmp1:8 = 0x0:8
-	$tmp2:8 = 0x10:8
+	$U1:8 = $U7:8
+	$U2:8 = 0x0:8
+	$U4:8 = 0x10:8
 <L1>:
-	$U3:8 = $tmp0:8 + $tmp1:8
+	$U3:8 = $U1:8 + $U2:8
 	ram[$U3:8] = 0x0:8
-	$tmp1:8 = $tmp1:8 + 0x8:8
-	$U5:1 = $tmp1:8 < $tmp2:8
+	$U2:8 = $U2:8 + 0x8:8
+	$U5:1 = $U2:8 < $U4:8
 	if $U5:1 jump <L1>
 
 retaa

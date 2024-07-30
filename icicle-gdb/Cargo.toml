@@ -4,12 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = "1.0.82"
+icicle-vm = { path = "../icicle-vm" }
+anyhow = { workspace = true }
+pcode = { workspace = true }
+target-lexicon = { workspace = true }
+tracing = { workspace = true }
 gdbstub = "0.7.1"
 gdbstub_arch = "0.3.0"
-icicle-vm = { path = "../icicle-vm" }
 num-traits = "0.2.18"
-pcode = { path = "../sleigh/pcode" }
-target-lexicon = "0.12.14"
-tracing = { version = "0.1.40", default-features = false }
 tracing-subscriber = { version = "0.3.18", default-features = false, features = ["fmt", "tracing-log", "env-filter", "ansi"] }

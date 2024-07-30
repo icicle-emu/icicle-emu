@@ -8,16 +8,16 @@ doctest = false
 
 [dependencies]
 icicle-cpu = { path = "../icicle-cpu" }
-pcode = { path = "../sleigh/pcode" }
-target-lexicon = "0.12.14"
-tracing = { version = "0.1.40", default-features = false }
+pcode = { workspace = true }
+target-lexicon = { workspace = true }
+tracing = { workspace = true }
 memoffset = "0.9.1"
-cranelift = "0.107.0"
-cranelift-native = "0.107.0"
-cranelift-module = "0.107.0"
-cranelift-jit = "0.107.0"
-cranelift-codegen = { version = "0.107.0", default-features = false, features = ["std"] }
-wasmtime-jit-debug = { version = "19.0.1", features = ["perf_jitdump"] }
+cranelift = "0.110.1"
+cranelift-native = "0.110.1"
+cranelift-module = "0.110.1"
+cranelift-jit = "0.110.1"
+cranelift-codegen = { version = "0.110.1", default-features = false, features = ["std"] }
+wasmtime-jit-debug = { version = "23.0.1", features = ["perf_jitdump"] }
 
 [dev-dependencies]
 quickcheck = { version = "1.0.3", default-features = false }

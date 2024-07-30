@@ -4,16 +4,18 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-addr2line = "0.21.0"
-bitflags = "2.5.0"
 icicle-mem = { path = "../icicle-mem" }
-pcode = { path = "../sleigh/pcode" }
-sleigh-runtime = { path = "../sleigh/sleigh-runtime" }
-target-lexicon = "0.12.14"
-tracing = { version = "0.1.40", default-features = false }
-object = { version = "0.32.2", default-features = false, features = ["read_core", "elf", "pe"] }
-bytemuck = "1.15.0"
-hashbrown = "0.14.3"
+anyhow = { workspace = true }
+ahash = { workspace = true }
+pcode = { workspace = true }
+sleigh-runtime = { workspace = true }
+target-lexicon = { workspace = true }
+tracing = { workspace = true }
+object = { workspace = true }
+gimli = { workspace = true }
+bytemuck = { workspace = true }
+addr2line = "0.24.1"
+bitflags = "2.5.0"
 half = "2.4.1"
 
 [dev-dependencies]

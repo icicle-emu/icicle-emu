@@ -1,6 +1,6 @@
 //! A bit-level constant evaluator for pcode.
 
-use hashbrown::HashMap;
+use ahash::AHashMap as HashMap;
 
 const DEBUG: bool = false;
 

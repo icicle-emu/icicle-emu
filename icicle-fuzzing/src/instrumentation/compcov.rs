@@ -1,6 +1,6 @@
 //! CompareCoverage instrumentation, aka laf-intel (inspired by the implementation from qemuafl)
 
-use hashbrown::{HashMap, HashSet};
+use ahash::{AHashMap as HashMap, AHashSet as HashSet};
 use icicle_vm::{
     cpu::{
         lifter::{Block, BlockExit},

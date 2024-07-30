@@ -18,8 +18,12 @@ mod symbols;
 pub mod ldef;
 
 #[cfg(feature = "ldefs")]
-pub fn from_ldef_path(ldef_path: impl AsRef<Path>, id: &str) -> Result<(SleighData, u64), String> {
-    let output = ldef::build(ldef_path.as_ref(), id, None).map_err(|e| e.to_string())?;
+pub fn from_ldef_path(
+    ldef_path: impl AsRef<Path>,
+    id: &str,
+    verbose: bool,
+) -> Result<(SleighData, u64), ldef::Error> {
+    let output = ldef::build(ldef_path.as_ref(), id, None, verbose)?;
     Ok((output.sleigh, output.initial_ctx))
 }
 
@@ -79,6 +83,7 @@ pub fn build_inner(mut parser: Parser, verbose: bool) -> Result<SleighData, Stri
         delay_slot: false,
         export: None,
         temporaries: (0, 0),
+        num_labels: 0,
     });
     if ctx.capture_debug_info {
         ctx.data.debug_info.constructors.push(ConstructorDebugInfo { line: "invalid".into() });
@@ -420,7 +425,6 @@ fn add_constructor(
     }
     let temp_end = ctx.data.temporaries.len() as u32;
 
-
     ctx.data.constructors.push(Constructor {
         table: constructor.table,
         mnemonic,
@@ -433,6 +437,7 @@ fn add_constructor(
         delay_slot: constructor.has_delay_slot(),
         export: constructor.semantics.export,
         temporaries: (temp_start, temp_end),
+        num_labels: constructor.semantics.count_labels(),
     });
 
     if ctx.capture_debug_info {

@@ -151,6 +151,15 @@ pub struct Semantics {
     pub temporaries: Vec<PcodeTmp>,
 }
 
+impl Semantics {
+    pub fn count_labels(&self) -> u32 {
+        self.actions
+            .iter()
+            .filter(|x| matches!(x, SemanticAction::Op { op: pcode::Op::PcodeLabel(_), .. }))
+            .count() as u32
+    }
+}
+
 enum Destination {
     Local(Value),
     RamRef(Value, ValueSize),
@@ -317,6 +326,9 @@ impl<'a, 'b> Builder<'a, 'b> {
                 self.set_size(output.as_mut().unwrap(), 1);
             }
 
+            // Unconstrained
+            pcode::Op::Load(pcode::REGISTER_SPACE) | pcode::Op::Store(pcode::REGISTER_SPACE) => {}
+
             // input[0] (address): ptr
             pcode::Op::Load(_) | pcode::Op::Store(_) => {
                 self.set_size(&mut inputs[0], self.pointer_size);
@@ -439,6 +451,7 @@ impl<'a, 'b> Builder<'a, 'b> {
                 }
                 self.error(format!("error setting size of {:?} to: {} (was: {})", value, size, x));
             }
+            value.size = Some(size);
             return;
         }
         value.size = Some(size);
@@ -601,13 +614,19 @@ impl<'a, 'b> Builder<'a, 'b> {
                 };
             }
             ast::Statement::Store { space, size, pointer, value } => {
-                let value = self.resolve_expr_value(value)?;
+                let mut value = self.resolve_expr_value(value)?;
                 match self.resolve_address(space, *size, pointer)? {
                     ExprValue::RamRef(ptr, size) => self.store(size, ptr, value),
-                    ExprValue::RegisterRef(pointer, size) => self
-                        .semantics
-                        .actions
-                        .push(SemanticAction::StoreRegister { pointer, value, size }),
+                    ExprValue::RegisterRef(pointer, size) => {
+                        if size != 0 {
+                            self.set_size(&mut value, size)
+                        }
+                        self.semantics.actions.push(SemanticAction::StoreRegister {
+                            pointer,
+                            value,
+                            size,
+                        });
+                    }
                     val => {
                         return Err(format!(
                             "attempted to write to an invalid pointer: {}: {val:?}",
@@ -958,7 +977,10 @@ impl<'a, 'b> Builder<'a, 'b> {
             }
             ExprValue::RamRef(pointer, size) => self.load(size, pointer, out),
             ExprValue::RegisterRef(pointer, size) => {
-                let output = out.unwrap_or_else(|| self.scope.add_tmp(Some(size)).into());
+                let mut output = out.unwrap_or_else(|| self.scope.add_tmp(Some(size)).into());
+                if size != 0 {
+                    self.set_size(&mut output, size)
+                }
                 self.semantics.actions.push(SemanticAction::LoadRegister { pointer, output, size });
                 output
             }

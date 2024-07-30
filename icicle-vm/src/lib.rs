@@ -4,7 +4,7 @@ pub mod elf_dump;
 pub mod env;
 pub mod hw;
 pub mod injector;
-mod msp430;
+pub mod msp430;
 
 pub use icicle_cpu as cpu;
 pub use icicle_cpu::VmExit;
@@ -768,8 +768,12 @@ impl Vm {
 
 #[inline(never)]
 fn print_interpreter_enter(vm: &mut Vm, block_id: u64, offset: u64) {
-    let addr = vm.code.address_of(block_id, offset);
-    eprintln!("interpreter_enter: next_addr={addr:#x}, block.id={block_id}, block.offset={offset}");
+    let pcode = &vm.code.blocks[block_id as usize].pcode;
+    let addr = pcode.address_of(offset as usize).unwrap_or(0);
+    eprintln!(
+        "interpreter_enter: next_addr={addr:#x}, block.id={block_id}, block.offset={offset}\n{}",
+        pcode.display(&vm.cpu.arch.sleigh)
+    );
 }
 
 fn print_interpreter_exit(vm: &mut Vm) {

@@ -7,4 +7,4 @@ edition = "2021"
 doctest = false
 
 [dependencies]
-tracing = { version = "0.1.40", default-features = false }
+tracing = { workspace = true }

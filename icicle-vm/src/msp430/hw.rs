@@ -3,7 +3,7 @@ use std::{
     rc::Rc,
 };
 
-use icicle_vm::cpu::{
+use crate::cpu::{
     mem::{IoMemory, MemError, MemResult},
     utils::get_u64,
 };
@@ -203,7 +203,7 @@ impl Mapper {
 #[derive(Clone, Default)]
 struct State {
     mpy32: Mpy32,
-    debug: icicle_vm::hw::DebugOutput,
+    debug: crate::hw::DebugOutput,
 }
 
 #[derive(Clone, Copy, Debug, Default)]

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use ahash::{AHashMap as HashMap, AHashSet as HashSet};
 
 use icicle_vm::{
     cpu::{
@@ -520,7 +520,7 @@ impl CodeInjector for ExactEdgeCoverageInjector {
 #[derive(Default, Clone)]
 pub struct EdgeHookData {
     pub prev: u64,
-    pub edges: hashbrown::HashSet<(u64, u64)>,
+    pub edges: HashSet<(u64, u64)>,
 }
 
 impl HookHandler for EdgeHookData {
