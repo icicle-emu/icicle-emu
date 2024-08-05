@@ -357,7 +357,7 @@ impl std::fmt::Display for SourceLocation {
                 write!(f, ":{}", line)?;
             }
             if let Some(column) = self.column {
-                write!(f, ".{}", column)?;
+                write!(f, ":{}", column)?;
             }
         }
 
@@ -377,7 +377,7 @@ impl<'a> std::fmt::Display for SourceLocationDisplayFile<'a> {
                 write!(f, ":{}", line)?;
             }
             if let Some(column) = self.source.column {
-                write!(f, ".{}", column)?;
+                write!(f, ":{}", column)?;
             }
         }
 
