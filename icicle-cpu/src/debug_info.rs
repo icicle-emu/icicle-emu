@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, rc::Rc};
 
-use object::{Object, ObjectSection};
+use object::{Object, ObjectKind, ObjectSymbol, ObjectSection};
 
 pub type Addr2LineCtx = addr2line::Context<gimli::EndianRcSlice<gimli::RunTimeEndian>>;
 
@@ -42,8 +42,6 @@ impl DebugInfo {
     // @todo: consider doing this on-demand.
     // @todo: avoid needing to mantain a separate copy of the binary in memory.
     pub fn add_file(&mut self, data: &[u8], load_address: u64) -> Result<(), String> {
-        use object::{Object, ObjectKind, ObjectSymbol};
-
         let file =
             object::read::File::parse(data).map_err(|e| format!("Error parsing elf: {}", e))?;
 
@@ -213,7 +211,7 @@ fn dwarf_ctx(
     let load_section = |id: gimli::SectionId| -> anyhow::Result<Rc<[u8]>> {
         Ok(match object.section_by_name(id.name()) {
             Some(section) => section.uncompressed_data()?.into(),
-            None => Rc::default(),
+            None => Rc::new([]),
         })
     };
     let dwarf_sections = gimli::DwarfSections::load(load_section)?;
@@ -279,7 +277,6 @@ pub enum SymbolKind {
 }
 
 fn get_symbol_kind(sym: &object::Symbol) -> SymbolKind {
-    use object::ObjectSymbol;
     match sym.kind() {
         object::SymbolKind::Text => SymbolKind::Function,
         object::SymbolKind::Label => SymbolKind::Label,
