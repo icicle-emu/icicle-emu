@@ -1,4 +1,4 @@
-use std::net::TcpListener;
+use std::{collections::HashMap, net::TcpListener};
 
 use anyhow::Context;
 use gdbstub::{
@@ -18,18 +18,29 @@ pub type Msp430Stub = stub::VmState<arch::IcicleMsp430>;
 pub type ArmStub = stub::VmState<arch::IcicleArm>;
 
 pub fn listen_auto(addr: &str, vm: Vm) -> anyhow::Result<()> {
+    let commands = CustomCommands::default();
     match vm.cpu.arch.triple.architecture {
-        Architecture::X86_64 => listen(addr, X64Stub::new(vm)),
+        Architecture::X86_64 => listen(addr, X64Stub::new(vm), commands),
         Architecture::Mips32(target_lexicon::Mips32Architecture::Mipsel) => {
-            listen(addr, Mips32Stub::new(vm))
+            listen(addr, Mips32Stub::new(vm), commands)
         }
-        Architecture::Msp430 => listen(addr, Msp430Stub::new(vm)),
-        Architecture::Arm(_) => listen(addr, ArmStub::new(vm)),
-        other => anyhow::bail!("Unsupported architecture: {}", other),
+        Architecture::Msp430 => listen(addr, Msp430Stub::new(vm), commands),
+        Architecture::Arm(_) => listen(addr, ArmStub::new(vm), commands),
+        other => anyhow::bail!("Unsupported architecture: {other}"),
     }
 }
 
-fn listen<T>(addr: &str, mut target: stub::VmState<T>) -> anyhow::Result<()>
+#[derive(Default)]
+pub struct CustomCommands {
+    pub commands: HashMap<String, Box<dyn FnMut(Vm, &str) -> anyhow::Result<()>>>,
+}
+
+fn listen<T>(
+    addr: &str,
+    mut target: stub::VmState<T>,
+    // TODO: add support for injecting custom monitor commands in the stub.
+    _commands: CustomCommands,
+) -> anyhow::Result<()>
 where
     T: stub::DynamicTarget,
 {

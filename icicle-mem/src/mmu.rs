@@ -58,6 +58,7 @@ struct HookEntry<T> {
     start: u64,
     end: u64,
     handler: T,
+    dead: bool,
 }
 
 macro_rules! active_hooks {
@@ -177,24 +178,40 @@ impl Mmu {
         end: u64,
         hook: Box<dyn WriteHook>,
     ) -> Option<u32> {
-        // @fixme: reuse hook ids
-        let next_id = self.write_hooks.len().try_into().unwrap();
+        // Find the first removed slot, or create a new slot.
+        let (id, slot) = match self.write_hooks.iter_mut().enumerate().find(|(_, x)| x.dead) {
+            Some(x) => x,
+            None => {
+                let next_id = self.write_hooks.len();
+                self.write_hooks.push(HookEntry {
+                    start: 0,
+                    end: 0,
+                    handler: Box::new(()),
+                    dead: true,
+                });
+                (next_id, self.write_hooks.last_mut().unwrap())
+            }
+        };
+
+        slot.start = start;
+        slot.end = end;
+        slot.handler = hook;
+        slot.dead = false;
 
         let aligned_start = self.page_aligned(start);
         let aligned_end = self.page_aligned(end + self.page_size());
         self.uncacheable_writes.push((aligned_start, aligned_end));
         self.tlb.clear();
 
-        self.write_hooks.push(HookEntry { start, end, handler: hook });
-        Some(next_id)
+        Some(id.try_into().expect("too many hooks"))
     }
 
     pub fn remove_write_hook(&mut self, id: u32) -> bool {
-        // @todo: actually remove the hook.
         let hook = &mut self.write_hooks[id as usize];
         hook.handler = Box::new(());
         hook.start = 0;
         hook.end = 0;
+        hook.dead = true;
         true
     }
 
@@ -207,7 +224,7 @@ impl Mmu {
         self.uncacheable_reads.push((aligned_start, aligned_end));
         self.tlb.clear();
 
-        self.read_hooks.push(HookEntry { start, end, handler: hook });
+        self.read_hooks.push(HookEntry { start, end, handler: hook, dead: false });
         Some(next_id)
     }
 
@@ -234,7 +251,7 @@ impl Mmu {
         self.uncacheable_reads.push((aligned_start, aligned_end));
         self.tlb.clear();
 
-        self.read_after_hooks.push(HookEntry { start, end, handler: hook });
+        self.read_after_hooks.push(HookEntry { start, end, handler: hook, dead: false });
         Some(next_id)
     }
 
