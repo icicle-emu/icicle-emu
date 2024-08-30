@@ -668,7 +668,7 @@ impl<'a> PcodeExecutor for UncheckedExecutor<'a> {
         match id {
             pcode::RAM_SPACE => {
                 if let Err(err) = self.cpu.mem.write(addr, value, perm::WRITE) {
-                    self.exception(ExceptionCode::from_load_error(err), addr);
+                    self.exception(ExceptionCode::from_store_error(err), addr);
                     return None;
                 }
             }
