@@ -528,9 +528,9 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
             Local::SubtableRef(idx) => {
                 match self.subtable_export(idx).ok_or(Error::InvalidVarNode)? {
                     Operand::Value(value) => value.slice(value_offset, value_size).into(),
-                    Operand::Pointer(var, base, size) => {
+                    Operand::Pointer(var, base, _) => {
                         let offset = base.try_into().map_err(|_| Error::InvalidVarNode)?;
-                        var.slice(offset, size).into()
+                        var.slice(offset, value_size).into()
                     }
                 }
             }
