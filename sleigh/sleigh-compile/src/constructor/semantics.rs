@@ -728,6 +728,7 @@ impl<'a, 'b> Builder<'a, 'b> {
                         ExprValue::Local(mut value) => match value.local {
                             Local::Subtable(idx) => {
                                 value.local = Local::SubtableRef(idx);
+                                value.size = Some(self.pointer_size);
                                 value
                             }
                             _ => value,
