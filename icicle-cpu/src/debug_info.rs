@@ -352,6 +352,17 @@ pub struct SourceLocation {
 }
 
 impl SourceLocation {
+    pub fn label(&self) -> Option<String> {
+        self.function.as_ref().map(|(name, _)| name.clone()).or_else(|| {
+            self.symbol_with_offset.as_ref().map(|(name, offset)| match offset {
+                0 => name.clone(),
+                _ => format!("{name}+{offset:#x}"),
+            })
+        })
+    }
+}
+
+impl SourceLocation {
     pub fn display_file(&self) -> SourceLocationDisplayFile {
         SourceLocationDisplayFile { source: self }
     }

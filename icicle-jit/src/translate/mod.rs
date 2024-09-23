@@ -16,7 +16,7 @@ use cranelift_module::{FuncId, Module};
 use icicle_cpu::{
     cpu::{Fuel, JitContext},
     lifter::{Block as IcicleBlock, BlockExit, Target},
-    Cpu, Exception, ExceptionCode, Regs,
+    Arch, Cpu, Exception, ExceptionCode, Regs,
 };
 use memoffset::offset_of;
 
@@ -269,22 +269,46 @@ struct VarState {
 }
 
 impl VarState {
-    fn flush_to_mem(&self, builder: &mut FunctionBuilder, vm_ptr: &VmPtr, var_id: pcode::VarId) {
-        for (i, value) in self.values.iter().enumerate().rev() {
+    fn flush_to_mem(
+        &mut self,
+        builder: &mut FunctionBuilder,
+        vm_ptr: &VmPtr,
+        var_id: pcode::VarId,
+        clear_dirty_flag: bool,
+    ) {
+        for (i, value) in self.values.iter_mut().enumerate().rev() {
+            let Some(write) = value
+            else {
+                continue;
+            };
+
             let var_size = 1 << i;
-            if let Some(write) = *value {
-                if write.dirty && write.size == var_size {
-                    vm_ptr.store_var(builder, pcode::VarNode::new(var_id, var_size), write.value);
-                }
+            if write.dirty && write.size == var_size {
+                vm_ptr.store_var(builder, pcode::VarNode::new(var_id, var_size), write.value);
+            }
+
+            if clear_dirty_flag {
+                write.dirty = false;
             }
         }
     }
 }
 
 pub(crate) struct TranslatorCtx {
+    /// Configures whether inline address translation in JIT'ed code is attempted.
     pub disable_jit_mem: bool,
+    /// Configures whether varnodes are always _read_ from memory whenever they are accessed.
     pub disable_jit_reg: bool,
+    /// Configures whether varnodes are immediately flushed to memory whenever they are modified in
+    /// the JIT.
     pub always_flush_vars: bool,
+    /// Flush all registers before memory accesses are performed. This must be true if memory hooks
+    /// want to _read_ the current value of CPU registers.
+    pub flush_before_mem: bool,
+    /// Discard any live varnodes after any memory access is performed. This must be true if memory
+    /// hooks want to _modify_ the current value of CPU registers.
+    pub reload_after_mem: bool,
+    /// Configures whether calls to push/pop shadow-stack are injected in the JIT.
     pub enable_shadow_stack: bool,
     page_size: u64,
     reg_pc: pcode::VarNode,
@@ -292,21 +316,30 @@ pub(crate) struct TranslatorCtx {
     local_blocks: HashMap<usize, Block>,
     entry_points: Vec<(u64, Block)>,
     active_vars: HashMap<pcode::VarId, VarState>,
+    temporaries: Vec<pcode::VarId>,
 }
 
 impl TranslatorCtx {
-    pub(crate) fn new(reg_pc: pcode::VarNode, endianness: Endianness) -> Self {
+    pub(crate) fn new(arch: &Arch) -> Self {
+        let endianness = match arch.sleigh.big_endian {
+            false => Endianness::Little,
+            true => Endianness::Big,
+        };
+
         Self {
-            reg_pc,
+            reg_pc: arch.reg_pc,
             disable_jit_mem: false,
             disable_jit_reg: false,
             always_flush_vars: true,
+            flush_before_mem: true,
+            reload_after_mem: false,
             enable_shadow_stack: true,
             page_size: icicle_cpu::mem::physical::PAGE_SIZE as u64,
             endianness,
             local_blocks: HashMap::new(),
             entry_points: vec![],
             active_vars: HashMap::new(),
+            temporaries: arch.temporaries.clone(),
         }
     }
 
@@ -466,7 +499,7 @@ impl<'a> Translator<'a> {
         self.vm_ptr.store_block_offset(&mut self.builder, block_offset);
 
         let pc = self.resize_int(next_addr, 8, self.ctx.reg_pc.size);
-        self.write(self.ctx.reg_pc, pc);
+        self.vm_ptr.store_var(&mut self.builder, self.ctx.reg_pc, pc);
 
         self.builder.ins().return_(&[next_addr]);
 
@@ -495,6 +528,8 @@ impl<'a> Translator<'a> {
 
     /// Exit the JIT with the current interrupt code, value and block offset.
     fn goto_jit_exit_err(&mut self) {
+        // Ensure that any live state is written to registers before we exit.
+        self.flush_state(false);
         let block_id = self.builder.ins().iconst(types::I64, self.block_id as i64);
         let block_offset = self.builder.ins().iconst(types::I64, self.block_offset as i64);
         let next_addr = self.builder.ins().iconst(types::I64, self.last_addr as i64);
@@ -509,6 +544,8 @@ impl<'a> Translator<'a> {
     }
 
     fn goto_jit_exit_external_addr(&mut self, addr: Value) {
+        // Ensure that any live state is written to registers before we exit.
+        self.flush_state(false);
         let block_id = self.builder.ins().iconst(types::I64, self.block_id as i64);
         let block_offset = self.builder.ins().iconst(types::I64, 0_i64);
         self.builder.ins().jump(self.exit_block, &[block_id, block_offset, addr]);
@@ -543,11 +580,30 @@ impl<'a> Translator<'a> {
         ok_block
     }
 
-    pub fn flush_state(&mut self) {
-        // @fixme: allow some hooks to only flush some variables.
-        for (var, state) in self.ctx.active_vars.drain() {
-            state.flush_to_mem(&mut self.builder, &self.vm_ptr, var);
+    /// Ensure that any live variables are flushed to memory.
+    pub fn flush_state(&mut self, clear_dirty_flag: bool) {
+        if self.ctx.always_flush_vars {
+            // Already flushed when updated.
+            return;
         }
+
+        for (var, state) in self.ctx.active_vars.iter_mut() {
+            state.flush_to_mem(&mut self.builder, &self.vm_ptr, *var, clear_dirty_flag);
+        }
+    }
+
+    /// Indicates that cached copies of varnodes cannot be forwarded past this point.
+    pub fn varnode_fence(&mut self) {
+        self.flush_state(false);
+        self.ctx.active_vars.clear();
+
+        // Note: currently we do not prevent load forwarding optimizations in Cranelift. Ideally we
+        // would introduce a compiler fence here but this isn't currently supported (a full MFENCE
+        // has too high of a performance impact to be used here). In practice, this fence is only
+        // needed when calling into the emulator runtime, which currently appears to act as a
+        // compiler fence to Cranelift.
+        //
+        // self.builder.ins().fence();
     }
 
     fn read_int(&mut self, var: pcode::Value) -> Value {
@@ -614,9 +670,13 @@ impl<'a> Translator<'a> {
                 resize_int(&mut self.builder, entry.value, entry.size, required_size)
             }
             _ => {
-                state.flush_to_mem(&mut self.builder, &self.vm_ptr, var.id);
+                state.flush_to_mem(&mut self.builder, &self.vm_ptr, var.id, true);
 
                 let var = pcode::VarNode::new(var.id, required_size);
+                if var.is_temp() {
+                    // @todo: we should validate that the temporary was previously written to within
+                    // this instruction.
+                }
                 let value = self.vm_ptr.load_var(&mut self.builder, var, sized_int(required_size));
 
                 for i in 0..=size_idx {
@@ -657,7 +717,7 @@ impl<'a> Translator<'a> {
             return;
         }
 
-        let flush = !var.is_temp() || self.ctx.always_flush_vars;
+        let flush = self.ctx.always_flush_vars;
         match var.offset {
             0 if is_jit_supported_size(var.size) => {
                 let state = self.ctx.active_vars.entry(var.id).or_default();
@@ -681,8 +741,8 @@ impl<'a> Translator<'a> {
     }
 
     fn invalidate_var(&mut self, var: pcode::VarNode) {
-        if let Some(entry) = self.ctx.active_vars.remove(&var.id) {
-            entry.flush_to_mem(&mut self.builder, &self.vm_ptr, var.id);
+        if let Some(mut entry) = self.ctx.active_vars.remove(&var.id) {
+            entry.flush_to_mem(&mut self.builder, &self.vm_ptr, var.id, false);
         }
     }
 
@@ -701,15 +761,15 @@ impl<'a> Translator<'a> {
         tracing::debug!("interpreter will run for: pc={:#0x} {inst:?}", self.last_addr);
 
         if inst.output != pcode::VarNode::NONE {
-            if let Some(entry) = self.ctx.active_vars.remove(&inst.output.id) {
-                entry.flush_to_mem(&mut self.builder, &self.vm_ptr, inst.output.id);
+            if let Some(mut entry) = self.ctx.active_vars.remove(&inst.output.id) {
+                entry.flush_to_mem(&mut self.builder, &self.vm_ptr, inst.output.id, false);
             }
         }
 
         for input in inst.inputs.get() {
             if let pcode::Value::Var(var) = input {
-                if let Some(entry) = self.ctx.active_vars.get(&var.id) {
-                    entry.flush_to_mem(&mut self.builder, &self.vm_ptr, var.id);
+                if let Some(entry) = self.ctx.active_vars.get_mut(&var.id) {
+                    entry.flush_to_mem(&mut self.builder, &self.vm_ptr, var.id, true);
                 }
             }
         }
@@ -732,6 +792,10 @@ impl<'a> Translator<'a> {
         self.last_addr = addr;
         self.instruction_len = len;
         self.builder.ins().nop();
+
+        // All temporaries are dead at this point. So they can purged at this point without flushing
+        // them to memory.
+        self.ctx.active_vars.retain(|id, _| *id > 0 && !self.ctx.temporaries.contains(id));
     }
 
     fn translate_block(&mut self, block_id: usize, block: &IcicleBlock) {
@@ -886,6 +950,11 @@ impl<'a> Translator<'a> {
                     ctx.trans.maybe_exit_jit(None);
                 }
                 Op::HookIf(id) => {
+                    // Need to flush the JIT state here to prevent the live variables differing
+                    // between the true/false states.
+                    ctx.trans.flush_state(true);
+                    ctx.trans.varnode_fence();
+
                     let hook_block = ctx.trans.builder.create_block();
                     // Typically the only reason to use a conditional hook (instead of just checking
                     // the condition inside of the hook) is because we expect the condition to be
@@ -944,6 +1013,13 @@ impl<'a> Translator<'a> {
                 }
             }
         }
+
+        // Flush any live registers at the end of the block.
+        //
+        // @todo: it should be possible to avoid flushing temporary values here. This would
+        // require special handling of the incoming state for internal blocks, which is yet to be
+        // done.
+        self.flush_state(true);
 
         self.builder.set_srcloc(codegen::ir::SourceLoc::new(self.srcloc));
         self.srcloc += 1;

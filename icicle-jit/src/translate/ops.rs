@@ -65,7 +65,9 @@ impl<'a, 'b> Ctx<'a, 'b> {
 
     pub fn call_hook(&mut self, id: pcode::HookId) {
         // Currently we assume all hooks need state to be flushed to memory.
-        self.trans.flush_state();
+        //
+        // @fixme: allow some hooks to only flush some variables.
+        self.trans.varnode_fence();
 
         let current_pc = self.trans.builder.ins().iconst(types::I64, self.trans.last_addr as i64);
 
