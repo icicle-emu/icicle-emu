@@ -326,8 +326,19 @@ impl JIT {
         let jitdump_filename = format!("./jit-{}.dump", std::process::id());
 
         const EM_X86_64: u32 = 62;
+
+        let e_machine = match self.module.isa().triple().architecture {
+            target_lexicon::Architecture::X86_64 => EM_X86_64,
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "Unsupported architecture for JIT mapping",
+                ));
+            }
+        };
+
         let mut jitdump_file =
-            wasmtime_jit_debug::perf_jitdump::JitDumpFile::new(jitdump_filename, EM_X86_64)?;
+            wasmtime_jit_debug::perf_jitdump::JitDumpFile::new(jitdump_filename, e_machine)?;
 
         let mut writer = std::io::BufWriter::new(std::fs::File::create(path)?);
         for (func_id, size, guest_addresses) in &self.declared_functions {
@@ -343,14 +354,9 @@ impl JIT {
             let timestamp = jitdump_file.get_time_stamp();
             let pid = std::process::id();
             let tid = 0;
-            jitdump_file.dump_code_load_record(
-                &name,
-                host_addr as *mut u8,
-                *size as usize,
-                timestamp,
-                pid,
-                tid,
-            )?;
+            // Safety: Cranelift produces valid start/len values for the generated code.
+            let code = unsafe { std::slice::from_raw_parts(host_addr as *mut u8, *size as usize) };
+            jitdump_file.dump_code_load_record(&name, code, timestamp, pid, tid)?;
         }
 
         Ok(())
