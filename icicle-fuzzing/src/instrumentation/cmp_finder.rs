@@ -909,7 +909,7 @@ mod test {
         ];
         assert_eq!(
             x86_ops(&input),
-            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: EAX, arg2: 0xfffffff:8, offset: 6 }\n"
+            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: EAX, arg2: 0xfffffff:4, offset: 6 }\n"
         );
     }
 
@@ -923,7 +923,7 @@ mod test {
         ];
         assert_eq!(
             x86_ops(&input),
-            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: EDX, arg2: 0xfffffff:8, offset: 5 }\n"
+            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: EDX, arg2: 0xfffffff:4, offset: 5 }\n"
         );
     }
 
