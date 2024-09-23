@@ -213,6 +213,14 @@ fn load_host(trans: &mut Translator, addr: Value, size: u8) -> Value {
 
 /// Generate code for loading a value from RAM.
 pub(super) fn load_ram(trans: &mut Translator, guest_addr: pcode::Value, output: pcode::VarNode) {
+    // Flush all registers _before_ performing memory accesses if requested, to avoid state in the
+    // fallback case diverging from the hot path. Even though the memory API technically does not
+    // support viewing/modifying registers in practice this is possible (e.g., by taking a raw
+    // pointer to the CPU struct), and we may want to fully support it in the future.
+    if trans.ctx.flush_before_mem {
+        trans.flush_state(true);
+    }
+
     let size = output.size;
     if !is_jit_supported_size(size) || trans.ctx.disable_jit_mem {
         trans.interpret(pcode::Instruction::from((
@@ -220,6 +228,9 @@ pub(super) fn load_ram(trans: &mut Translator, guest_addr: pcode::Value, output:
             pcode::Op::Load(pcode::RAM_SPACE),
             pcode::Inputs::one(guest_addr),
         )));
+        if trans.ctx.reload_after_mem {
+            trans.varnode_fence();
+        }
         // Check for memory exceptions.
         trans.maybe_exit_jit(None);
         return;
@@ -259,6 +270,9 @@ pub(super) fn load_ram(trans: &mut Translator, guest_addr: pcode::Value, output:
     // success:
     trans.builder.switch_to_block(success_block);
     trans.builder.seal_block(success_block);
+    if trans.ctx.reload_after_mem {
+        trans.varnode_fence();
+    }
 
     let value = trans.builder.block_params(success_block)[0];
     trans.write(output, value);
@@ -271,7 +285,7 @@ fn load_fallback(trans: &mut Translator, output: pcode::VarNode, guest_addr: Val
     let func = trans.symbols.mmu.load(output.size);
     let value = if output.size == 16 {
         let stack_slot =
-            trans.builder.create_sized_stack_slot(StackSlotData::new(ExplicitSlot, 16, 16));
+            trans.builder.create_sized_stack_slot(StackSlotData::new(ExplicitSlot, 16, 4));
         let out_ptr = trans.builder.ins().stack_addr(types::I64, stack_slot, 0);
         let args = [trans.vm_ptr.0, guest_addr, out_ptr];
         trans.builder.ins().call(func, &args);
@@ -304,12 +318,20 @@ pub(super) fn store_host(trans: &mut Translator, addr: Value, mut value: Value, 
 
 /// Generate code for storing a value to RAM.
 pub(super) fn store_ram(trans: &mut Translator, guest_addr: pcode::Value, value: pcode::Value) {
+    // See note in `load_ram`
+    if trans.ctx.flush_before_mem {
+        trans.flush_state(true);
+    }
+
     let size = value.size();
     if !is_jit_supported_size(size) || trans.ctx.disable_jit_mem {
         trans.interpret(pcode::Instruction::from((
             pcode::Op::Store(pcode::RAM_SPACE),
             pcode::Inputs::new(guest_addr, value),
         )));
+        if trans.ctx.reload_after_mem {
+            trans.varnode_fence();
+        }
         // Check for memory exceptions.
         trans.maybe_exit_jit(None);
         return;
@@ -349,6 +371,9 @@ pub(super) fn store_ram(trans: &mut Translator, guest_addr: pcode::Value, value:
     // success:
     trans.builder.switch_to_block(success_block);
     trans.builder.seal_block(success_block);
+    if trans.ctx.reload_after_mem {
+        trans.varnode_fence();
+    }
 }
 
 /// Handle complex stores using a function provided by the runtime.

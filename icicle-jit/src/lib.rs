@@ -123,7 +123,10 @@ impl JIT {
         };
 
         let (module, functions) = init_module(endianness);
-        let mut translator_ctx = TranslatorCtx::new(cpu.arch.reg_pc, endianness);
+        let mut translator_ctx = TranslatorCtx::new(&cpu.arch);
+        if std::env::var_os("ICICLE_ALWAYS_FLUSH_VARS").is_some() {
+            translator_ctx.always_flush_vars = true;
+        }
         translator_ctx.disable_jit_mem = std::env::var_os("ICICLE_DISABLE_JIT_MEM").is_some();
         translator_ctx.enable_shadow_stack = cpu.enable_shadow_stack;
 
@@ -313,7 +316,11 @@ impl JIT {
     }
 
     #[cfg(target_os = "linux")]
-    pub fn dump_jit_mapping(&self, path: &std::path::Path) -> std::io::Result<()> {
+    pub fn dump_jit_mapping(
+        &self,
+        path: &std::path::Path,
+        debug_info: &icicle_cpu::debug_info::DebugInfo,
+    ) -> std::io::Result<()> {
         use std::io::Write;
 
         let jitdump_filename = format!("./jit-{}.dump", std::process::id());
@@ -329,7 +336,10 @@ impl JIT {
                 writeln!(writer, "{func_id},{host_addr:#p},{guest_addr:#x}")?;
             }
 
-            let name = format!("{:x?}", guest_addresses);
+            let name = match debug_info.symbolize_addr(guest_addresses[0]).and_then(|x| x.label()) {
+                Some(label) => format!("{label}: {:x?}", guest_addresses),
+                None => format!("{:x?}", guest_addresses),
+            };
             let timestamp = jitdump_file.get_time_stamp();
             let pid = std::process::id();
             let tid = 0;
