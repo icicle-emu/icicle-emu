@@ -363,7 +363,11 @@ impl JIT {
     }
 
     #[cfg(not(target_os = "linux"))]
-    pub fn dump_jit_mapping(&self, path: &std::path::Path) -> std::io::Result<()> {
+    pub fn dump_jit_mapping(
+        &self,
+        path: &std::path::Path,
+        _debug_info: &icicle_cpu::debug_info::DebugInfo,
+    ) -> std::io::Result<()> {
         use std::io::Write;
 
         let mut writer = std::io::BufWriter::new(std::fs::File::create(path)?);
