@@ -811,6 +811,7 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
             self.get_runtime_var(tmp)?
         };
         let base = self.get_runtime_value(base)?;
+        let offset = pcode::Value::Const(offset, base.size());
         self.push((addr, pcode::Op::IntAdd, pcode::Inputs::new(base, offset)));
         Ok(addr.into())
     }
