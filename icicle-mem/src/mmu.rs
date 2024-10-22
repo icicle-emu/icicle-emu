@@ -268,6 +268,16 @@ impl Mmu {
         self.physical.allocated_pages()
     }
 
+    #[allow(unused)]
+    pub fn capacity(&self) -> usize {
+        self.physical.capacity()
+    }
+
+    #[allow(unused)]
+    pub fn set_capacity(&mut self, new_capacity: usize) -> bool {
+        self.physical.set_capacity(new_capacity)
+    }
+
     /// Read bytes from `addr` checking that the permissions specified by `perm` are set
     pub fn read_bytes(&mut self, mut addr: u64, buf: &mut [u8], perm: u8) -> MemResult<()> {
         if buf.len() > 16 {
