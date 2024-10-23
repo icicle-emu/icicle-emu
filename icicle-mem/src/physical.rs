@@ -108,7 +108,7 @@ impl PhysicalMemory {
             return false;
         }
         self.capacity = new_capacity;
-        return true
+        true
     }
 
     #[allow(unused)] // @fixme: This should be called when we unmap pages
