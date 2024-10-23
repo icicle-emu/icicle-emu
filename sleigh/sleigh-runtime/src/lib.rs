@@ -11,7 +11,7 @@ pub mod semantics;
 use std::{collections::HashMap, fmt::Display};
 
 pub use crate::{
-    decoder::{ContextModValue, Decoder, DisasmConstantValue, Instruction},
+    decoder::{ContextModValue, Decoder, DisasmConstantValue, Instruction, SubtableCtx},
     expr::PatternExprOp,
     lifter::{Error as LifterError, Lifter},
 };

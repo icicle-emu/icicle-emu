@@ -123,7 +123,10 @@ impl JIT {
         };
 
         let (module, functions) = init_module(endianness);
-        let mut translator_ctx = TranslatorCtx::new(cpu.arch.reg_pc, endianness);
+        let mut translator_ctx = TranslatorCtx::new(&cpu.arch);
+        if std::env::var_os("ICICLE_ALWAYS_FLUSH_VARS").is_some() {
+            translator_ctx.always_flush_vars = true;
+        }
         translator_ctx.disable_jit_mem = std::env::var_os("ICICLE_DISABLE_JIT_MEM").is_some();
         translator_ctx.enable_shadow_stack = cpu.enable_shadow_stack;
 
@@ -313,14 +316,29 @@ impl JIT {
     }
 
     #[cfg(target_os = "linux")]
-    pub fn dump_jit_mapping(&self, path: &std::path::Path) -> std::io::Result<()> {
+    pub fn dump_jit_mapping(
+        &self,
+        path: &std::path::Path,
+        debug_info: &icicle_cpu::debug_info::DebugInfo,
+    ) -> std::io::Result<()> {
         use std::io::Write;
 
         let jitdump_filename = format!("./jit-{}.dump", std::process::id());
 
         const EM_X86_64: u32 = 62;
+
+        let e_machine = match self.module.isa().triple().architecture {
+            target_lexicon::Architecture::X86_64 => EM_X86_64,
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "Unsupported architecture for JIT mapping",
+                ));
+            }
+        };
+
         let mut jitdump_file =
-            wasmtime_jit_debug::perf_jitdump::JitDumpFile::new(jitdump_filename, EM_X86_64)?;
+            wasmtime_jit_debug::perf_jitdump::JitDumpFile::new(jitdump_filename, e_machine)?;
 
         let mut writer = std::io::BufWriter::new(std::fs::File::create(path)?);
         for (func_id, size, guest_addresses) in &self.declared_functions {
@@ -329,25 +347,27 @@ impl JIT {
                 writeln!(writer, "{func_id},{host_addr:#p},{guest_addr:#x}")?;
             }
 
-            let name = format!("{:x?}", guest_addresses);
+            let name = match debug_info.symbolize_addr(guest_addresses[0]).and_then(|x| x.label()) {
+                Some(label) => format!("{label}: {:x?}", guest_addresses),
+                None => format!("{:x?}", guest_addresses),
+            };
             let timestamp = jitdump_file.get_time_stamp();
             let pid = std::process::id();
             let tid = 0;
-            jitdump_file.dump_code_load_record(
-                &name,
-                host_addr as *mut u8,
-                *size as usize,
-                timestamp,
-                pid,
-                tid,
-            )?;
+            // Safety: Cranelift produces valid start/len values for the generated code.
+            let code = unsafe { std::slice::from_raw_parts(host_addr as *mut u8, *size as usize) };
+            jitdump_file.dump_code_load_record(&name, code, timestamp, pid, tid)?;
         }
 
         Ok(())
     }
 
     #[cfg(not(target_os = "linux"))]
-    pub fn dump_jit_mapping(&self, path: &std::path::Path) -> std::io::Result<()> {
+    pub fn dump_jit_mapping(
+        &self,
+        path: &std::path::Path,
+        _debug_info: &icicle_cpu::debug_info::DebugInfo,
+    ) -> std::io::Result<()> {
         use std::io::Write;
 
         let mut writer = std::io::BufWriter::new(std::fs::File::create(path)?);

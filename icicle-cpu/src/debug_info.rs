@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, rc::Rc};
 
-use object::{Object, ObjectSection};
+use object::{Object, ObjectKind, ObjectSection, ObjectSymbol};
 
 pub type Addr2LineCtx = addr2line::Context<gimli::EndianRcSlice<gimli::RunTimeEndian>>;
 
@@ -42,38 +42,45 @@ impl DebugInfo {
     // @todo: consider doing this on-demand.
     // @todo: avoid needing to mantain a separate copy of the binary in memory.
     pub fn add_file(&mut self, data: &[u8], load_address: u64) -> Result<(), String> {
-        use object::{Object, ObjectKind, ObjectSymbol};
-
-        let file =
+        let object =
             object::read::File::parse(data).map_err(|e| format!("Error parsing elf: {}", e))?;
 
-        let relocation_offset = if file.kind() == ObjectKind::Dynamic { load_address } else { 0 };
+        let relocation_offset = if object.kind() == ObjectKind::Dynamic { load_address } else { 0 };
 
-        let endian = if file.is_little_endian() {
+        let endian = if object.is_little_endian() {
             gimli::RunTimeEndian::Little
         }
         else {
             gimli::RunTimeEndian::Big
         };
 
-        let dwarf = dwarf_ctx(&file, endian)
+        let dwarf = dwarf_ctx(&object, endian)
             .map_err(|err| format!("error loading debug info from object file: {err}"))?;
         match addr2line::Context::from_dwarf(dwarf) {
             Ok(ctx) => {
                 self.ctx.insert(relocation_offset, std::rc::Rc::new(ctx));
             }
-            Err(e) => tracing::warn!("failed to get DWARF debug context: {}", e),
+            Err(e) => tracing::warn!("failed to get DWARF debug context: {e}"),
         }
 
-        for sym in file.symbols().chain(file.dynamic_symbols()) {
+        tracing::info!("Loaded object file with architecture {:?}", object.architecture());
+        let is_arm = matches!(object.architecture(), object::Architecture::Arm);
+
+        for sym in object.symbols().chain(object.dynamic_symbols()) {
             let name = match sym.name() {
                 Ok(name) => name,
                 Err(_) => continue,
             };
-            let addr = sym.address() + relocation_offset;
+            let mut addr = sym.address() + relocation_offset;
             if addr < load_address {
                 continue;
             }
+            if is_arm && matches!(sym.kind(), object::SymbolKind::Text | object::SymbolKind::Label)
+            {
+                // Clear thumb bit
+                addr &= !1;
+            }
+
             std::rc::Rc::make_mut(&mut self.symbols).insert(
                 name.to_string(),
                 addr,
@@ -180,10 +187,9 @@ impl DebugInfo {
 
     /// Return an iterator over all symbols found in the section headers.
     pub fn symbols_iter(&self) -> impl Iterator<Item = (u64, u64, &str, SymbolKind)> {
-        self.symbols
-            .addr_to_sym
-            .iter()
-            .map(|(start, (name, len, kind))| (*start, *len, name.as_str(), *kind))
+        self.symbols.addr_to_sym.iter().flat_map(|(start, entries)| {
+            entries.iter().map(|(name, len, kind)| (*start, *len, name.as_str(), *kind))
+        })
     }
 
     /// Strip the original prefix (from the debug info) from `path` and return the remapped host
@@ -213,7 +219,7 @@ fn dwarf_ctx(
     let load_section = |id: gimli::SectionId| -> anyhow::Result<Rc<[u8]>> {
         Ok(match object.section_by_name(id.name()) {
             Some(section) => section.uncompressed_data()?.into(),
-            None => Rc::default(),
+            None => Rc::new([]),
         })
     };
     let dwarf_sections = gimli::DwarfSections::load(load_section)?;
@@ -265,7 +271,7 @@ where
 #[derive(Debug, Clone, Default)]
 pub struct SymbolTable {
     pub sym_to_addr: BTreeMap<String, (u64, u64, SymbolKind)>,
-    pub addr_to_sym: BTreeMap<u64, (String, u64, SymbolKind)>,
+    pub addr_to_sym: BTreeMap<u64, Vec<(String, u64, SymbolKind)>>,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -279,7 +285,6 @@ pub enum SymbolKind {
 }
 
 fn get_symbol_kind(sym: &object::Symbol) -> SymbolKind {
-    use object::ObjectSymbol;
     match sym.kind() {
         object::SymbolKind::Text => SymbolKind::Function,
         object::SymbolKind::Label => SymbolKind::Label,
@@ -295,18 +300,38 @@ impl SymbolTable {
     /// Inserts a value into the symbol table
     pub fn insert(&mut self, name: String, addr: u64, len: u64, kind: SymbolKind) {
         self.sym_to_addr.insert(name.clone(), (addr, len, kind));
-        self.addr_to_sym.insert(addr, (name, len, kind));
+        self.addr_to_sym.entry(addr).or_default().push((name, len, kind));
     }
 
     /// Attempts to resolve a address to a symbol returning the name of the symbol and its starting
     /// address
     pub fn resolve_addr(&self, addr: u64) -> Option<(&str, u64, SymbolKind)> {
         // @fixme: optimize this search to avoid needing to iterate though the entire symbol array
-        for (start, (name, len, kind)) in self.addr_to_sym.range(..=addr).rev() {
-            if addr < start + len {
+        for (start, entries) in self.addr_to_sym.range(..=addr).rev() {
+            let mut filtered_iter = entries.iter().filter(|(_, len, _)| addr < start + len);
+
+            // First try to find a function-like symbol that matches the current address.
+            if let Some((name, _, kind)) =
+                filtered_iter.clone().find(|(_, _, kind)| matches!(kind, SymbolKind::Function))
+            {
+                return Some((name, *start, *kind));
+            }
+
+            // Otherwise just get an arbitary entry.
+            if let Some((name, _, kind)) = filtered_iter.next() {
                 return Some((name, *start, *kind));
             }
         }
+
+        // If we still failed to find a maching symbol, just get the symbol that is closest.
+        for (start, entries) in self.addr_to_sym.range(..=addr).rev() {
+            if let Some((name, _, kind)) =
+                entries.iter().find(|(_, _, kind)| matches!(kind, SymbolKind::Function))
+            {
+                return Some((name, *start, *kind));
+            }
+        }
+
         None
     }
 
@@ -324,6 +349,17 @@ pub struct SourceLocation {
     pub line: Option<u32>,
     pub column: Option<u32>,
     pub library_name_and_offset: Option<(Vec<u8>, u64)>,
+}
+
+impl SourceLocation {
+    pub fn label(&self) -> Option<String> {
+        self.function.as_ref().map(|(name, _)| name.clone()).or_else(|| {
+            self.symbol_with_offset.as_ref().map(|(name, offset)| match offset {
+                0 => name.clone(),
+                _ => format!("{name}+{offset:#x}"),
+            })
+        })
+    }
 }
 
 impl SourceLocation {
@@ -357,7 +393,7 @@ impl std::fmt::Display for SourceLocation {
                 write!(f, ":{}", line)?;
             }
             if let Some(column) = self.column {
-                write!(f, ".{}", column)?;
+                write!(f, ":{}", column)?;
             }
         }
 
@@ -377,7 +413,7 @@ impl<'a> std::fmt::Display for SourceLocationDisplayFile<'a> {
                 write!(f, ":{}", line)?;
             }
             if let Some(column) = self.source.column {
-                write!(f, ".{}", column)?;
+                write!(f, ":{}", column)?;
             }
         }
 

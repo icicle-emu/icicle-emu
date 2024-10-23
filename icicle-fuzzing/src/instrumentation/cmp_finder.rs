@@ -122,12 +122,21 @@ impl CmpFinder {
             for stmt in &block.pcode.instructions[..cmp.offset] {
                 let _ = self.const_eval.eval(*stmt);
             }
+
+            // Fix cases where arguments are different sizes. This only occurs when the upper bits
+            // of the larger operand are zero, and the smaller operand was zero extended.
+            let base_size = cmp.arg1.size().min(cmp.arg2.size());
+            cmp.arg1 = cmp.arg1.slice(0, base_size);
+            cmp.arg2 = cmp.arg2.slice(0, base_size);
+
             let arg1 = self.const_eval.get_value(cmp.arg1);
             let arg2 = self.const_eval.get_value(cmp.arg2);
 
+            // Handle comparisons involving zero extended by shrinking the values to ignore any
+            // leading zeroes.
             let extended_bytes = arg1.num_extended_bits().min(arg2.num_extended_bits()) / 8;
             if extended_bytes != 0 {
-                let new_size = cmp.arg1.size() - extended_bytes as u8;
+                let new_size = (cmp.arg1.size() - extended_bytes as u8).next_power_of_two();
                 cmp.arg1 = cmp.arg1.slice(0, new_size);
                 cmp.arg2 = cmp.arg2.slice(0, new_size);
             }
@@ -900,7 +909,7 @@ mod test {
         ];
         assert_eq!(
             x86_ops(&input),
-            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: EAX, arg2: 0xfffffff:8, offset: 6 }\n"
+            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: EAX, arg2: 0xfffffff:4, offset: 6 }\n"
         );
     }
 
@@ -914,7 +923,7 @@ mod test {
         ];
         assert_eq!(
             x86_ops(&input),
-            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: EDX, arg2: 0xfffffff:8, offset: 5 }\n"
+            "CmpOp { kind: CmpAttr(IS_EQUAL), arg1: EDX, arg2: 0xfffffff:4, offset: 5 }\n"
         );
     }
 
@@ -1149,5 +1158,18 @@ mod test {
             thumb_ops(&input),
             "CmpOp { kind: CmpAttr(NOT_EQUAL), arg1: r1, arg2: 0x79:4, offset: 3 }\n"
         );
+    }
+
+    #[test]
+    fn thumb_load_zext_beq() {
+        let input = [
+            0x32, 0x8a, // ldrh       r2,[r6,#0x10]
+            0x30, 0x21, // movs       r1,#0x30
+            0x11, 0x42, // tst        r1,r2
+            0xdf, 0xd0, // beq
+        ];
+        // Previously this would crash due to an interaction between the zext operation and the mask
+        // operation causing operands to be of different sizes.
+        assert_eq!(thumb_ops(&input), "");
     }
 }

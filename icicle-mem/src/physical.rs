@@ -236,6 +236,7 @@ impl Page {
         self.executed = false;
     }
 
+    #[inline(always)]
     pub fn data(&self) -> &PageData {
         // Safety: Either we have a unique copy of `self.data` or there are no active mutable
         // references.
@@ -244,6 +245,7 @@ impl Page {
         unsafe { self.data.get().as_ref().unwrap() }
     }
 
+    #[inline(always)]
     pub fn data_mut(&mut self) -> &mut PageData {
         Rc::make_mut(self.data.get_mut())
     }
@@ -254,6 +256,7 @@ impl Page {
     ///
     /// The returned pointer is only valid while `data` is valid and unique (e.g., the pointer must
     /// not be used after a call to [Page::clone] or [Drop::drop]).
+    #[inline(always)]
     pub unsafe fn write_ptr(&mut self) -> PageRef {
         PageRef::new(self.data_mut().into())
     }
@@ -264,6 +267,7 @@ impl Page {
     ///
     /// The returned pointer is only valid while `data` is valid (e.g., the pointer must not be used
     /// after a call to [Drop::drop]).
+    #[inline(always)]
     pub unsafe fn read_ptr(&mut self) -> PageRef {
         PageRef::new(NonNull::new(Rc::as_ptr(self.data.get_mut()) as *mut _).unwrap())
     }
