@@ -87,7 +87,7 @@ impl PhysicalMemory {
             Some(index) => index,
             None => {
                 if self.allocated.len() >= self.capacity {
-                    tracing::warn!("Guest exceeded memory limit");
+                    tracing::warn!("Guest exceeded memory limit {}", self.capacity);
                     return None;
                 }
                 self.allocated.push(Page::new());
@@ -96,6 +96,19 @@ impl PhysicalMemory {
         };
         self.allocated[index.0 as usize].clear();
         Some(index)
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    pub fn set_capacity(&mut self, new_capacity: usize) -> bool {
+        if self.allocated.len() >= new_capacity {
+            tracing::warn!("Failed to reduce capacity below allocated size");
+            return false;
+        }
+        self.capacity = new_capacity;
+        return true
     }
 
     #[allow(unused)] // @fixme: This should be called when we unmap pages
