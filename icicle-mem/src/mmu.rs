@@ -285,12 +285,15 @@ impl Mmu {
         self.physical.allocated_pages()
     }
 
-    #[allow(unused)]
+    /// Gets the current physical memory page limit.
     pub fn capacity(&self) -> usize {
         self.physical.capacity()
     }
 
-    #[allow(unused)]
+    /// Sets the maximum number of physical pages the mmu is allowed to allocate.
+    ///
+    /// Note: If `new_capacity` is smaller than the current number of allocated pages, then the
+    /// capacity is set to the number of allocated pages.
     pub fn set_capacity(&mut self, new_capacity: usize) -> bool {
         self.physical.set_capacity(new_capacity)
     }
