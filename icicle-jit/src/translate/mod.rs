@@ -61,6 +61,8 @@ impl MemHandler<FuncRef> {
     }
 }
 
+pub const TRAP_UNREACHABLE: TrapCode = TrapCode::unwrap_user(1);
+
 /// Checks whether the size of a value is a size that the JIT can handle natively.
 fn is_jit_supported_size(size_in_bytes: u8) -> bool {
     [1, 2, 4, 8, 16].contains(&size_in_bytes)
@@ -452,7 +454,7 @@ fn define_jit_entry(builder: &mut FunctionBuilder, ctx: &mut TranslatorCtx) -> (
             builder.set_cold_block(trap_block);
             builder.switch_to_block(trap_block);
             builder.seal_block(trap_block);
-            builder.ins().trap(TrapCode::UnreachableCodeReached);
+            builder.ins().trap(TRAP_UNREACHABLE);
         }
     }
 
