@@ -222,21 +222,30 @@ pub(super) fn load_ram(trans: &mut Translator, guest_addr: pcode::Value, output:
     }
 
     let size = output.size;
-    if !is_jit_supported_size(size) || trans.ctx.disable_jit_mem {
+    if !is_jit_supported_size(size) {
         trans.interpret(pcode::Instruction::from((
             output,
             pcode::Op::Load(pcode::RAM_SPACE),
             pcode::Inputs::one(guest_addr),
         )));
+        trans.maybe_exit_jit(None);
+
         if trans.ctx.reload_after_mem {
             trans.varnode_fence();
         }
-        // Check for memory exceptions.
-        trans.maybe_exit_jit(None);
         return;
     }
 
     let guest_addr_val = trans.read_zxt(guest_addr, 8);
+
+    if trans.ctx.disable_jit_mem {
+        let value = load_fallback(trans, output, guest_addr_val);
+        if trans.ctx.reload_after_mem {
+            trans.varnode_fence();
+        }
+        trans.write(output, value);
+        return;
+    }
 
     let success_block = trans.builder.create_block();
     trans.builder.append_block_param(success_block, sized_int(size));
@@ -273,7 +282,6 @@ pub(super) fn load_ram(trans: &mut Translator, guest_addr: pcode::Value, output:
     if trans.ctx.reload_after_mem {
         trans.varnode_fence();
     }
-
     let value = trans.builder.block_params(success_block)[0];
     trans.write(output, value);
 }
@@ -324,7 +332,7 @@ pub(super) fn store_ram(trans: &mut Translator, guest_addr: pcode::Value, value:
     }
 
     let size = value.size();
-    if !is_jit_supported_size(size) || trans.ctx.disable_jit_mem {
+    if !is_jit_supported_size(size) {
         trans.interpret(pcode::Instruction::from((
             pcode::Op::Store(pcode::RAM_SPACE),
             pcode::Inputs::new(guest_addr, value),
@@ -340,6 +348,14 @@ pub(super) fn store_ram(trans: &mut Translator, guest_addr: pcode::Value, value:
     let guest_addr_val = trans.read_zxt(guest_addr, 8);
     let store_size = value.size();
     let value = trans.read_int(value);
+
+    if trans.ctx.disable_jit_mem {
+        store_fallback(trans, size, guest_addr_val, value);
+        if trans.ctx.reload_after_mem {
+            trans.varnode_fence();
+        }
+        return;
+    }
 
     let success_block = trans.builder.create_block();
     let fallback_block = trans.builder.create_block();
