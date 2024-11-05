@@ -35,7 +35,7 @@ pub(crate) fn try_read_mem<const N: usize>(cpu: &mut Cpu, addr: u64) -> Option<[
     }
 
     let mut a = [0; N];
-    if cpu.mem.read_bytes(addr, &mut a, perm::READ).is_err() {
+    if cpu.mem.read_bytes(addr, &mut a, perm::NONE).is_err() {
         return None;
     }
 
