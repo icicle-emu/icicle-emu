@@ -405,7 +405,7 @@ impl CodeInjector for ExactBlockCoverageInjector {
         let store = &mut cpu.trace[self.store];
         if store.data().len() <= byte {
             let inner = store.as_mut_any().downcast_mut::<Vec<u64>>().unwrap();
-            inner.resize(icicle_vm::cpu::utils::align_up(byte as u64, 16) as usize, 0);
+            inner.resize(icicle_vm::cpu::utils::align_up(byte as u64 + 1, 16) as usize, 0);
         }
 
         // Inject code to set the target bit.
@@ -451,7 +451,7 @@ impl CodeInjector for ExactBlockCountCoverageInjector {
         let store = &mut cpu.trace[self.store];
         if store.data().len() <= index {
             let inner = store.as_mut_any().downcast_mut::<Vec<u64>>().unwrap();
-            inner.resize(icicle_vm::cpu::utils::align_up(index as u64 / 8, 16) as usize, 0);
+            inner.resize(icicle_vm::cpu::utils::align_up(index as u64 / 8 + 1, 16) as usize, 0);
         }
 
         let block = &mut code.blocks[group.blocks.0];
