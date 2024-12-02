@@ -332,7 +332,7 @@ impl TranslatorCtx {
             reg_pc: arch.reg_pc,
             disable_jit_mem: false,
             disable_jit_reg: false,
-            always_flush_vars: false,
+            always_flush_vars: true,
             flush_before_mem: true,
             reload_after_mem: false,
             enable_shadow_stack: true,
