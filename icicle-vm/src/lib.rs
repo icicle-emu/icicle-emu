@@ -6,6 +6,9 @@ pub mod hw;
 pub mod injector;
 pub mod msp430;
 
+#[cfg(test)]
+mod tests;
+
 pub use icicle_cpu as cpu;
 pub use icicle_cpu::VmExit;
 pub use icicle_linux as linux;
@@ -239,9 +242,7 @@ impl Vm {
             }
             ExceptionCode::SoftwareBreakpoint => VmExit::Breakpoint,
 
-            ExceptionCode::ExternalAddr => {
-                self.handle_external_address(self.cpu.exception.value, u64::MAX)
-            }
+            ExceptionCode::ExternalAddr => self.handle_external_address(self.cpu.exception.value),
             ExceptionCode::CodeNotTranslated => self.handle_code_not_translated(),
             ExceptionCode::UnimplementedOp => self.handle_unimplemented_op(),
             ExceptionCode::ShadowStackInvalid | ExceptionCode::ShadowStackOverflow => {
@@ -256,7 +257,7 @@ impl Vm {
         }
     }
 
-    fn handle_external_address(&mut self, addr: u64, prev_block: u64) -> VmExit {
+    fn handle_external_address(&mut self, addr: u64) -> VmExit {
         self.cpu.write_pc(addr);
 
         let key = self.get_block_key(addr);
@@ -266,10 +267,7 @@ impl Vm {
                 self.cpu.block_offset = 0;
                 VmExit::Running
             }
-            None => {
-                self.cpu.block_id = prev_block;
-                self.handle_code_not_translated()
-            }
+            None => self.handle_code_not_translated(),
         }
     }
 
@@ -298,6 +296,7 @@ impl Vm {
             Err(e) => {
                 tracing::trace!("DecodeError at {pc:#x}: {e:?}");
                 self.cpu.exception = cpu::Exception::new(ExceptionCode::from(e), pc);
+                self.cpu.block_id = u64::MAX;
                 if self.cpu.icount >= self.icount_limit {
                     return VmExit::InstructionLimit;
                 }
@@ -396,7 +395,8 @@ impl Vm {
                 if let Some(offset) =
                     self.cpu.interpret_block_unchecked(&block.pcode, offset as usize)
                 {
-                    // Keep track of the offset where the CPU exited from.
+                    // We exited early due to an exception, so keep track of the offset where the
+                    // CPU exited from.
                     self.cpu.block_id = block_id;
                     self.cpu.block_offset = offset as u64;
                     break;
@@ -416,17 +416,24 @@ impl Vm {
                         Some(group) => {
                             self.cpu.block_id = group.blocks.0 as u64;
                             self.cpu.block_offset = 0;
+
+                            if self.enable_jit {
+                                // We are now at the start of a new block, break out of the
+                                // interpreter and try and re-enter the JIT.
+                                break;
+                            }
+                            else {
+                                block_id = group.blocks.0 as u64;
+                                offset = 0;
+                            }
                         }
                         None => {
                             self.cpu.block_id = block_id;
                             self.cpu.exception.code = ExceptionCode::CodeNotTranslated as u32;
                             self.cpu.exception.value = addr;
+                            break;
                         }
                     }
-
-                    // We always break here even if we know which block to execute next to allow the
-                    // emulator to re-enter the JIT.
-                    break;
                 }
                 Target::Invalid(e, addr) => {
                     tracing::debug!(
@@ -441,7 +448,6 @@ impl Vm {
 
                     // Raise the exception
                     self.cpu.exception = Exception::new(ExceptionCode::from(e), addr);
-
                     break;
                 }
             }
