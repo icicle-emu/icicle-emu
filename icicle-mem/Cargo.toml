@@ -8,3 +8,4 @@ doctest = false
 
 [dependencies]
 tracing = { workspace = true }
+ahash = { workspace = true }

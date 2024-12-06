@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use ahash::AHashSet as HashSet;
 
 use tracing::debug;
 
@@ -1058,7 +1058,11 @@ impl Mmu {
         self.tlb.remove_read(page_start);
 
         // @todo: check the overhead of this hash operation.
-        self.modified.insert(page_start);
+
+        if !page.modified {
+            self.modified.insert(page_start);
+        }
+        page.modified = true;
         page.data_mut().write(addr, value, perm)?;
 
         let uncachable =
