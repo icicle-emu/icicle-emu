@@ -796,26 +796,22 @@ impl Mmu {
             .overlapping_mut::<_, MemError>(start..=end, |start, len, entry| match entry {
                 Some(MemoryMapping::Physical(mapping)) => {
                     let page = physical.get_mut(mapping.index);
-                    page.executed = true;
 
                     // Check whether the code is actually executable.
                     let offset = PageData::offset(start);
                     let len = len as usize;
                     let perm =
                         unsafe { page.write_ptr().ptr.as_mut().get_perm_unchecked(offset, len) };
-                    perm::check(perm, perm::READ | perm::INIT | perm::EXEC)?;
+                    perm::check(perm, perm::INIT | perm::EXEC)?;
+
+                    // Mark the page as executed
+                    page.executed = true;
 
                     // Prevent writes to the region we are executing (we don't currently support
                     // self modifying code).
                     if self.detect_self_modifying_code {
                         unsafe {
-                            page.write_ptr().ptr.as_mut().perm[offset..offset + len].fill(
-                                perm::IN_CODE_CACHE
-                                    | perm::READ
-                                    | perm::INIT
-                                    | perm::EXEC
-                                    | perm::MAP,
-                            )
+                            page.write_ptr().ptr.as_mut().add_perm_unchecked(offset, len, perm::IN_CODE_CACHE);
                         };
                     }
 
