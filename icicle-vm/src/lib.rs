@@ -449,8 +449,15 @@ impl Vm {
                     // the middle of a block).
                     self.cpu.write_pc(addr);
 
-                    // Raise the exception
-                    self.cpu.exception = Exception::new(ExceptionCode::from(e), addr);
+                    // Since the invalid instruction does not have a marker, we need to check if we
+                    // ran out of fuel and raise the appropriate exception first. The next step will
+                    // raise the actual exception related to the DecodeError.
+                    let code = if self.cpu.fuel.remaining == 0 {
+                        ExceptionCode::InstructionLimit
+                    } else {
+                        ExceptionCode::from(e)
+                    };
+                    self.cpu.exception = Exception::new(code, addr);
                     break;
                 }
             }
