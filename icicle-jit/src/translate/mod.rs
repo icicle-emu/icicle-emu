@@ -1045,14 +1045,14 @@ impl<'a> Translator<'a> {
         // @fixme: make `fuel` a variable.
         let remaining_fuel = self.vm_ptr.load_fuel(&mut self.builder);
         let required_fuel = num_instructions as i64;
-        let insufficient_fuel =
-            self.builder.ins().icmp_imm(IntCC::SignedLessThan, remaining_fuel, required_fuel);
+        let switch_to_interpreter =
+            self.builder.ins().icmp_imm(IntCC::SignedLessThanOrEqual, remaining_fuel, required_fuel);
 
         let ok_block = self.builder.create_block();
         let err_block = self.builder.create_block();
         self.builder.set_cold_block(err_block);
 
-        self.builder.ins().brif(insufficient_fuel, err_block, &[], ok_block, &[]);
+        self.builder.ins().brif(switch_to_interpreter, err_block, &[], ok_block, &[]);
 
         // err:
         {
