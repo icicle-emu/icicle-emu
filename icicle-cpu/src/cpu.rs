@@ -68,11 +68,17 @@ impl std::fmt::Debug for ShadowStackEntry {
     }
 }
 
-#[derive(Default, Debug, Copy, Clone)]
+#[derive(Default, Debug, Copy, Clone, PartialEq)]
 #[repr(C)]
 pub struct Exception {
     pub code: u32,
     pub value: u64,
+}
+
+impl From<(ExceptionCode, u64)> for Exception {
+    fn from(value: (ExceptionCode, u64)) -> Self {
+        Self::new(value.0, value.1)
+    }
 }
 
 impl Exception {
