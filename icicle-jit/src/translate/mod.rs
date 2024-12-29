@@ -16,7 +16,7 @@ use cranelift_module::{FuncId, Module};
 use icicle_cpu::{
     cpu::{Fuel, JitContext},
     lifter::{Block as IcicleBlock, BlockExit, Target},
-    Arch, Cpu, Exception, ExceptionCode, Regs,
+    Arch, Cpu, Exception, ExceptionCode, Regs, InternalError,
 };
 use memoffset::offset_of;
 
@@ -1058,7 +1058,7 @@ impl<'a> Translator<'a> {
         {
             self.builder.switch_to_block(err_block);
             self.builder.seal_block(err_block);
-            self.exit_with_exception(ExceptionCode::InstructionLimit, 0);
+            self.exit_with_exception(ExceptionCode::InternalError, InternalError::SwitchToInterpreter as u64);
         }
 
         // ok:
