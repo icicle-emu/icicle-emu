@@ -546,32 +546,27 @@ impl Mmu {
         let tlb = &mut self.tlb;
         self.mapping.overlapping_mut(addr..=end, |start, len, entry| {
             match entry.as_mut().ok_or(MemError::Unmapped)? {
-                MemoryMapping::Physical(entry) => {
+                MemoryMapping::Physical(entry) => 'physical: {
                     tlb.remove_range(start, len);
-                    let page = physical.get_mut(entry.index);
-                    if page.executed {
-                        tracing::error!("Changed perms of code page. JIT cache may now be invalid");
-                    }
 
                     let offset = PageData::offset(start);
                     let len = len as usize;
 
                     if offset == 0
                         && len == physical::PAGE_SIZE
-                        && entry.index.is_zero_page()
-                        && perm::check(perm, perm::READ | perm::INIT | perm::MAP).is_ok()
-                    {
-                        // Switch to zero-page with the correct permissions.
-                        let zero_page = match perm & perm::WRITE != 0 {
-                            true => physical.zero_page(),
-                            false => physical.read_only_zero_page(),
-                        };
-                        debug!("updating zero page: {:?} -> {zero_page:?}", entry.index);
-                        entry.index = zero_page;
+                        && entry.index.is_zero_page() {
+                        if let Some(zero_page) = physical.get_zero_page(perm) {
+                            debug!("updating zero page: {:?} -> {zero_page:?}", entry.index);
+                            entry.index = zero_page;
+                            break 'physical;
+                        }
                     }
-                    else {
-                        page.data_mut().perm[offset..offset + len].fill(perm);
+
+                    let page = physical.get_mut(entry.index);
+                    if page.executed {
+                        tracing::error!("Changed perms of code page. JIT cache may now be invalid");
                     }
+                    page.data_mut().perm[offset..offset + len].fill(perm);
                 }
                 MemoryMapping::Unallocated(entry) => entry.perm = perm,
                 MemoryMapping::Io(_) => {
@@ -858,11 +853,7 @@ impl Mmu {
         // If we are only reading from this page and the entire region is entirely zero, then map it
         // to a zero page.
         if ENABLE_ZERO_PAGE_OPTIMIZATION && !is_write {
-            if let Some(perm) = self.is_zero_region(page_start, page_size) {
-                let zero_page = match perm & perm::WRITE != 0 {
-                    true => self.physical.zero_page(),
-                    false => self.physical.read_only_zero_page(),
-                };
+            if let Some(zero_page) = self.get_zero_page(page_start, page_size) {
                 tracing::trace!("init_physical: addr={page_start:#0x}, index={zero_page:?}");
 
                 let _ = self.mapping.overlapping_mut::<_, ()>(range, |_, _, entry| {
@@ -933,8 +924,8 @@ impl Mmu {
         Some(index)
     }
 
-    /// Checks whether the memory is zero page compatible, returning the permissions of the region.
-    fn is_zero_region(&mut self, start: u64, len: u64) -> Option<u8> {
+    /// Checks whether the memory is zero page compatible, returning the index of the zero page.
+    fn get_zero_page(&self, start: u64, len: u64) -> Option<physical::Index> {
         let end = start.checked_add(len - 1)?;
         let mut perm = None;
         for (_, _, entry) in self.mapping.overlapping_iter(start..=end) {
@@ -948,7 +939,7 @@ impl Mmu {
                 _ => return None,
             }
         }
-        perm
+        perm.and_then(|perm| self.physical.get_zero_page(perm))
     }
 
     /// Checks whether the memory range entirely consists of mapped regular memory.
