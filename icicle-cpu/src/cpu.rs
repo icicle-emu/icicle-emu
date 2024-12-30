@@ -11,7 +11,7 @@ use crate::{
     lifter::{BlockExit, Target},
     regs::{RegValue, Regs, ValueSource},
     trace::{self, Trace},
-    ExceptionCode, InstHook, VarSource,
+    ExceptionCode, InstHook, InternalError, VarSource,
 };
 
 pub const SHADOW_STACK_SIZE: usize = 0x1000;
@@ -76,8 +76,14 @@ pub struct Exception {
 }
 
 impl From<(ExceptionCode, u64)> for Exception {
-    fn from(value: (ExceptionCode, u64)) -> Self {
-        Self::new(value.0, value.1)
+    fn from((code, value): (ExceptionCode, u64)) -> Self {
+        Self::new(code, value)
+    }
+}
+
+impl From<(ExceptionCode, InternalError)> for Exception {
+    fn from((code, value): (ExceptionCode, InternalError)) -> Self {
+        Self::new(code, value as u64)
     }
 }
 

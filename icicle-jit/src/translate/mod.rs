@@ -1045,8 +1045,11 @@ impl<'a> Translator<'a> {
         // @fixme: make `fuel` a variable.
         let remaining_fuel = self.vm_ptr.load_fuel(&mut self.builder);
         let required_fuel = num_instructions as i64;
-        let switch_to_interpreter =
-            self.builder.ins().icmp_imm(IntCC::SignedLessThanOrEqual, remaining_fuel, required_fuel);
+        let switch_to_interpreter = self.builder.ins().icmp_imm(
+            IntCC::SignedLessThanOrEqual,
+            remaining_fuel,
+            required_fuel,
+        );
 
         let ok_block = self.builder.create_block();
         let err_block = self.builder.create_block();
@@ -1058,7 +1061,10 @@ impl<'a> Translator<'a> {
         {
             self.builder.switch_to_block(err_block);
             self.builder.seal_block(err_block);
-            self.exit_with_exception(ExceptionCode::InternalError, InternalError::SwitchToInterpreter as u64);
+            self.exit_with_exception(
+                ExceptionCode::InternalError,
+                InternalError::SwitchToInterpreter as u64,
+            );
         }
 
         // ok:

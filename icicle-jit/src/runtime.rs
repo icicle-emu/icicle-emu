@@ -18,7 +18,7 @@ pub unsafe extern "C" fn address_not_translated(cpu: *mut Cpu, addr: u64) -> u64
 }
 
 pub unsafe extern "C" fn switch_to_interpreter(cpu: *mut Cpu, addr: u64) -> u64 {
-    (*cpu).exception = (ExceptionCode::InternalError, InternalError::SwitchToInterpreter as u64).into();
+    (*cpu).exception = (ExceptionCode::InternalError, InternalError::SwitchToInterpreter).into();
     addr
 }
 

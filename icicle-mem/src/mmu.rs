@@ -552,9 +552,7 @@ impl Mmu {
                     let offset = PageData::offset(start);
                     let len = len as usize;
 
-                    if offset == 0
-                        && len == physical::PAGE_SIZE
-                        && entry.index.is_zero_page() {
+                    if offset == 0 && len == physical::PAGE_SIZE && entry.index.is_zero_page() {
                         if let Some(zero_page) = physical.get_zero_page(perm) {
                             debug!("updating zero page: {:?} -> {zero_page:?}", entry.index);
                             entry.index = zero_page;
@@ -806,7 +804,11 @@ impl Mmu {
                     // self modifying code).
                     if self.detect_self_modifying_code {
                         unsafe {
-                            page.write_ptr().ptr.as_mut().add_perm_unchecked(offset, len, perm::IN_CODE_CACHE);
+                            page.write_ptr().ptr.as_mut().add_perm_unchecked(
+                                offset,
+                                len,
+                                perm::IN_CODE_CACHE,
+                            );
                         };
                     }
 

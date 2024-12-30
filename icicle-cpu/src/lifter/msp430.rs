@@ -1,8 +1,6 @@
 //! A workaround for missing functionality in the SLEIGH spec for MSP430X.
 
-use crate::{
-    exec::const_eval, lifter::BlockLifter, Arch, Cpu, Exception, ExceptionCode, ValueSource,
-};
+use crate::{exec::const_eval, lifter::BlockLifter, Arch, Cpu, Exception, ExceptionCode, ValueSource};
 
 use super::BlockState;
 

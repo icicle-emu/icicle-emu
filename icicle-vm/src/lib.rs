@@ -197,9 +197,12 @@ impl Vm {
 
                 self.run_block_jit();
 
-                // At the beginning of a block we might decide that we need to switch to the interpreter.
-                // This happens if there is not enough fuel, or a breakpoint is set inside the block.
-                if self.cpu.exception == (ExceptionCode::InternalError, InternalError::SwitchToInterpreter as u64).into() {
+                // At the beginning of a block we might decide that we need to switch to the
+                // interpreter. This happens if there is not enough fuel, or a breakpoint is set
+                // inside the block.
+                if self.cpu.exception
+                    == (ExceptionCode::InternalError, InternalError::SwitchToInterpreter).into()
+                {
                     self.run_block_interpreter();
                 }
 
@@ -454,7 +457,8 @@ impl Vm {
                     // raise the actual exception related to the DecodeError.
                     let code = if self.cpu.fuel.remaining == 0 {
                         ExceptionCode::InstructionLimit
-                    } else {
+                    }
+                    else {
                         ExceptionCode::from(e)
                     };
                     self.cpu.exception = Exception::new(code, addr);
@@ -479,7 +483,8 @@ impl Vm {
 
     fn run_block_jit(&mut self) {
         if !self.can_enter_jit() {
-            self.cpu.exception = (ExceptionCode::InternalError, InternalError::SwitchToInterpreter as u64).into();
+            self.cpu.exception =
+                (ExceptionCode::InternalError, InternalError::SwitchToInterpreter).into();
             return;
         }
 

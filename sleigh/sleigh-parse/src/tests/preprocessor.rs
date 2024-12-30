@@ -57,7 +57,6 @@ define endian=big;
     assert_eq!(result.unwrap(), "define endian = big ;");
 }
 
-
 /// Tests that the `@define` macro works with integer values
 #[test]
 fn define_integer() {
