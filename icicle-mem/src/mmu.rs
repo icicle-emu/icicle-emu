@@ -3,11 +3,12 @@ use ahash::AHashSet as HashSet;
 use tracing::debug;
 
 use crate::{
+    Addr, AllocLayout, IoHandler, IoMemory, IoMemoryAny, MemoryMapping, PhysicalMapping, Snapshot,
+    SnapshotData, VirtualMemoryMap,
     perm::{self, MemError, MemResult},
     physical::{self, PageData, PhysicalAddr},
     range_map::RangeMap,
-    tlb, Addr, AllocLayout, IoHandler, IoMemory, IoMemoryAny, MemoryMapping, PhysicalMapping,
-    Snapshot, SnapshotData, VirtualMemoryMap,
+    tlb,
 };
 
 pub const DETECT_SELF_MODIFYING_CODE: bool = true;
@@ -54,25 +55,78 @@ where
     }
 }
 
-struct HookEntry<T> {
-    start: u64,
-    end: u64,
+pub struct HookEntry<T> {
+    pub start: u64,
+    pub end: u64,
     handler: T,
     dead: bool,
 }
 
+impl<T> HookEntry<T> {
+    // @fixme: Handle case where self.end + page_size overflows.
+    fn range(&self, page_size: u64) -> std::ops::RangeInclusive<u64> {
+        let alignment_mask = !(page_size - 1);
+        let start = self.start & alignment_mask;
+        let end = (self.end + page_size) & alignment_mask;
+        start..=end
+    }
+}
+
+/// A wrapper around a vector with stable ids (removed entries are replaced with a dummy value).
+struct HookStore<T> {
+    hooks: Vec<HookEntry<T>>,
+}
+
+impl<T> HookStore<T> {
+    fn new() -> Self {
+        Self { hooks: vec![] }
+    }
+
+    fn add(&mut self, start: u64, end: u64, handler: T) -> u32 {
+        // Check if there is a dead slot that can be reused.
+        let id = self.hooks.iter().position(|x| x.dead).unwrap_or_else(|| {
+            let id = self.hooks.len();
+            self.hooks.push(HookEntry { start, end, handler, dead: false });
+            id
+        });
+        id.try_into().expect("too many hooks")
+    }
+
+    fn remove(&mut self, id: u32) -> bool {
+        let Some(hook) = self.hooks.get_mut(id as usize)
+        else {
+            return false;
+        };
+        // hook.handler = Box::new(());
+        hook.start = 0;
+        hook.end = 0;
+        hook.dead = true;
+        true
+    }
+
+    /// Check if any of the hooks overlap with the page containing `addr`.
+    fn contains_address(&self, addr: u64, page_size: u64) -> bool {
+        self.hooks.iter().any(|x| x.range(page_size).contains(&addr))
+    }
+
+    /// Check if any of the hooks overlap with the page containing `addr`.
+    fn is_empty(&self) -> bool {
+        self.hooks.is_empty() || self.hooks.iter().all(|x| x.dead)
+    }
+}
+
 macro_rules! active_hooks {
     ($addr:expr, $list:expr, $action:expr) => {{
-        if !$list.is_empty() {
+        if !$list.hooks.is_empty() {
             let addr = $addr;
-            let mut hooks = std::mem::take(&mut $list);
+            let mut hooks = std::mem::take(&mut $list.hooks);
             for hook in &mut hooks {
                 if hook.start <= addr && addr < hook.end {
                     ($action)(&mut *hook.handler);
                 }
             }
-            debug_assert!($list.is_empty());
-            $list = hooks;
+            debug_assert!($list.hooks.is_empty());
+            $list.hooks = hooks;
         }
     }};
 }
@@ -107,12 +161,9 @@ pub struct Mmu {
     pub mapping: RangeMap<MemoryMapping>,
 
     /// Unicorn style memory hooks.
-    // @fixme: allow deleting old hooks.
-    read_hooks: Vec<HookEntry<Box<dyn ReadHook>>>,
-    read_after_hooks: Vec<HookEntry<Box<dyn ReadAfterHook>>>,
-    uncacheable_reads: Vec<(u64, u64)>,
-    write_hooks: Vec<HookEntry<Box<dyn WriteHook>>>,
-    uncacheable_writes: Vec<(u64, u64)>,
+    read_hooks: HookStore<Box<dyn ReadHook>>,
+    read_after_hooks: HookStore<Box<dyn ReadAfterHook>>,
+    write_hooks: HookStore<Box<dyn WriteHook>>,
 
     /// The underlying physical memory.
     physical: physical::PhysicalMemory,
@@ -162,12 +213,9 @@ impl Mmu {
             parent_state: Snapshot::new(SnapshotData::new()),
             io: vec![],
 
-            uncacheable_reads: vec![],
-            read_hooks: vec![],
-            read_after_hooks: vec![],
-
-            uncacheable_writes: vec![],
-            write_hooks: vec![],
+            read_hooks: HookStore::new(),
+            read_after_hooks: HookStore::new(),
+            write_hooks: HookStore::new(),
             last_io_handler: None,
         }
     }
@@ -178,63 +226,31 @@ impl Mmu {
         end: u64,
         hook: Box<dyn WriteHook>,
     ) -> Option<u32> {
-        // Find the first removed slot, or create a new slot.
-        let (id, slot) = match self.write_hooks.iter_mut().enumerate().find(|(_, x)| x.dead) {
-            Some(x) => x,
-            None => {
-                let next_id = self.write_hooks.len();
-                self.write_hooks.push(HookEntry {
-                    start: 0,
-                    end: 0,
-                    handler: Box::new(()),
-                    dead: true,
-                });
-                (next_id, self.write_hooks.last_mut().unwrap())
-            }
-        };
-
-        slot.start = start;
-        slot.end = end;
-        slot.handler = hook;
-        slot.dead = false;
-
-        let aligned_start = self.page_aligned(start);
-        let aligned_end = self.page_aligned(end + self.page_size());
-        self.uncacheable_writes.push((aligned_start, aligned_end));
         self.tlb.clear();
-
-        Some(id.try_into().expect("too many hooks"))
+        Some(self.write_hooks.add(start, end, hook))
     }
 
     pub fn remove_write_hook(&mut self, id: u32) -> bool {
-        let hook = &mut self.write_hooks[id as usize];
-        hook.handler = Box::new(());
-        hook.start = 0;
-        hook.end = 0;
-        hook.dead = true;
-        true
+        self.write_hooks.remove(id)
+    }
+
+    pub fn get_write_hook(&mut self, id: u32) -> &mut HookEntry<Box<dyn WriteHook>> {
+        self.tlb.clear();
+        &mut self.write_hooks.hooks[id as usize]
     }
 
     pub fn add_read_hook(&mut self, start: u64, end: u64, hook: Box<dyn ReadHook>) -> Option<u32> {
-        // @fixme: reuse hook ids
-        let next_id = self.read_hooks.len().try_into().unwrap();
-
-        let aligned_start = self.page_aligned(start);
-        let aligned_end = self.page_aligned(end + self.page_size());
-        self.uncacheable_reads.push((aligned_start, aligned_end));
         self.tlb.clear();
-
-        self.read_hooks.push(HookEntry { start, end, handler: hook, dead: false });
-        Some(next_id)
+        Some(self.read_hooks.add(start, end, hook))
     }
 
     pub fn remove_read_hook(&mut self, id: u32) -> bool {
-        // @todo: actually remove the hook.
-        let hook = &mut self.read_hooks[id as usize];
-        hook.handler = Box::new(());
-        hook.start = 0;
-        hook.end = 0;
-        true
+        self.read_hooks.remove(id)
+    }
+
+    pub fn get_read_hook(&mut self, id: u32) -> &mut HookEntry<Box<dyn ReadHook>> {
+        self.tlb.clear();
+        &mut self.read_hooks.hooks[id as usize]
     }
 
     pub fn add_read_after_hook(
@@ -243,20 +259,24 @@ impl Mmu {
         end: u64,
         hook: Box<dyn ReadAfterHook>,
     ) -> Option<u32> {
-        // @fixme: reuse hook ids
-        let next_id = self.read_after_hooks.len().try_into().unwrap();
-
-        let aligned_start = self.page_aligned(start);
-        let aligned_end = self.page_aligned(end + self.page_size());
-        self.uncacheable_reads.push((aligned_start, aligned_end));
         self.tlb.clear();
+        Some(self.read_after_hooks.add(start, end, hook))
+    }
 
-        self.read_after_hooks.push(HookEntry { start, end, handler: hook, dead: false });
-        Some(next_id)
+    pub fn remove_read_after_hook(&mut self, id: u32) -> bool {
+        self.read_after_hooks.remove(id)
+    }
+
+    pub fn get_read_after_hook(&mut self, id: u32) -> &mut HookEntry<Box<dyn ReadAfterHook>> {
+        self.tlb.clear();
+        &mut self.read_after_hooks.hooks[id as usize]
     }
 
     pub fn clear(&mut self) {
         self.tlb.clear();
+        self.write_hooks.hooks.clear();
+        self.read_hooks.hooks.clear();
+        self.read_after_hooks.hooks.clear();
         self.mapping = RangeMap::new();
         self.physical.clear();
         self.last_io_handler = None;
@@ -1008,13 +1028,14 @@ impl Mmu {
         addr: u64,
         perm: u8,
     ) -> MemResult<[u8; N]> {
+        let page_size = self.page_size();
         let page = self.physical.get_mut(index);
         let result = page.data().read(addr, perm)?;
 
         // If there is no memory hook set on the current page, cache the translated address in the
         // TLB.
-        let uncachable =
-            self.uncacheable_reads.iter().any(|&(start, end)| start <= addr && addr < end);
+        let uncachable = self.read_hooks.contains_address(addr, page_size)
+            || self.read_after_hooks.contains_address(addr, page_size);
         if !uncachable {
             self.tlb.insert_read(addr, unsafe { page.read_ptr() });
         }
@@ -1065,8 +1086,7 @@ impl Mmu {
         page.modified = true;
         page.data_mut().write(addr, value, perm)?;
 
-        let uncachable =
-            self.uncacheable_writes.iter().any(|&(start, end)| start <= addr && addr < end);
+        let uncachable = self.write_hooks.contains_address(addr, page_size);
         if !uncachable {
             // Safety: `page.data_mut()` ensures the page is a unique copy of the underlying data.
             self.tlb.insert_write(page_start, unsafe { page.write_ptr() });
@@ -1104,19 +1124,19 @@ impl Mmu {
         }
 
         if perm != perm::NONE && ENABLE_MEMORY_HOOKS && !self.read_hooks.is_empty() {
-            let mut hooks = std::mem::take(&mut self.read_hooks);
+            let mut hooks = std::mem::take(&mut self.read_hooks.hooks);
             for hook in &mut hooks {
                 if hook.start <= addr && addr < hook.end {
                     if let Some(result) = hook.handler.read(self, addr, N as u8) {
                         let mut buf = [0; N];
                         buf.copy_from_slice(&result.to_le_bytes()[..N]);
-                        self.read_hooks = hooks;
+                        self.read_hooks.hooks = hooks;
                         return Ok(buf);
                     }
                 }
             }
             debug_assert!(self.read_hooks.is_empty());
-            self.read_hooks = hooks;
+            self.read_hooks.hooks = hooks;
         }
 
         macro_rules! handle_io {
