@@ -106,12 +106,7 @@ impl<T> HookStore<T> {
 
     /// Check if any of the hooks overlap with the page containing `addr`.
     fn contains_address(&self, addr: u64, page_size: u64) -> bool {
-        self.hooks.iter().any(|x| x.range(page_size).contains(&addr))
-    }
-
-    /// Check if any of the hooks overlap with the page containing `addr`.
-    fn is_empty(&self) -> bool {
-        self.hooks.is_empty() || self.hooks.iter().all(|x| x.dead)
+        self.hooks.iter().any(|x| !x.dead && x.range(page_size).contains(&addr))
     }
 }
 
@@ -121,7 +116,7 @@ macro_rules! active_hooks {
             let addr = $addr;
             let mut hooks = std::mem::take(&mut $list.hooks);
             for hook in &mut hooks {
-                if hook.start <= addr && addr < hook.end {
+                if !hook.dead && hook.start <= addr && addr < hook.end {
                     ($action)(&mut *hook.handler);
                 }
             }
@@ -1123,7 +1118,7 @@ impl Mmu {
             return self.read_unaligned(addr, perm);
         }
 
-        if perm != perm::NONE && ENABLE_MEMORY_HOOKS && !self.read_hooks.is_empty() {
+        if perm != perm::NONE && ENABLE_MEMORY_HOOKS && self.read_hooks.hooks.is_empty() {
             let mut hooks = std::mem::take(&mut self.read_hooks.hooks);
             for hook in &mut hooks {
                 if hook.start <= addr && addr < hook.end {
@@ -1135,7 +1130,7 @@ impl Mmu {
                     }
                 }
             }
-            debug_assert!(self.read_hooks.is_empty());
+            debug_assert!(self.read_hooks.hooks.is_empty());
             self.read_hooks.hooks = hooks;
         }
 
