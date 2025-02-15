@@ -2,8 +2,8 @@ use half::f16;
 use pcode::{MemId, Value, VarNode};
 
 use crate::{
-    regs::{resize_sxt, ValueSource},
     ExceptionCode,
+    regs::{ValueSource, resize_sxt},
 };
 
 pub trait PcodeExecutor: ValueSource {
@@ -545,7 +545,9 @@ where
             | Op::PcodeBranch(_)
             | Op::PcodeLabel(_)
             | Op::TracerLoad(_)
-            | Op::TracerStore(_),
+            | Op::TracerStore(_)
+            | Op::MultiEqual
+            | Op::Indirect,
             ..,
         ) => panic!("Unexpected operation in interpreter: {stmt:?}"),
     }
@@ -620,8 +622,7 @@ where
 fn load<E: PcodeExecutor>(exec: &mut E, id: MemId, dst: VarNode, addr: u64) {
     macro_rules! load {
         ($dst:expr, $addr:expr, $ty:ty) => {{
-            let Some(tmp) = exec.load_mem(id, $addr)
-            else {
+            let Some(tmp) = exec.load_mem(id, $addr) else {
                 return;
             };
             let value = match exec.is_big_endian() && id == pcode::RAM_SPACE {
@@ -641,8 +642,7 @@ fn load<E: PcodeExecutor>(exec: &mut E, id: MemId, dst: VarNode, addr: u64) {
             if exec.is_big_endian() && id == pcode::RAM_SPACE {
                 load!(dst.slice(8, 8), addr, u64);
                 load!(dst.slice(0, 8), addr.wrapping_add(8), u64);
-            }
-            else {
+            } else {
                 load!(dst.slice(0, 8), addr, u64);
                 load!(dst.slice(8, 8), addr.wrapping_add(8), u64);
             }
@@ -652,8 +652,7 @@ fn load<E: PcodeExecutor>(exec: &mut E, id: MemId, dst: VarNode, addr: u64) {
                 for i in 0..size {
                     load!(dst.slice(size - 1 - i, 1), addr.wrapping_add(i as u64), u8);
                 }
-            }
-            else {
+            } else {
                 for i in 0..size {
                     load!(dst.slice(i, 1), addr.wrapping_add(i as u64), u8);
                 }
@@ -685,8 +684,7 @@ fn store<E: PcodeExecutor>(exec: &mut E, id: MemId, addr: u64, value: Value) {
             if exec.is_big_endian() && id == pcode::RAM_SPACE {
                 writer!(addr, exec.read::<u64>(value.slice(8, 8)));
                 writer!(addr.wrapping_add(8), exec.read::<u64>(value.slice(0, 8)));
-            }
-            else {
+            } else {
                 writer!(addr, exec.read::<u64>(value.slice(0, 8)));
                 writer!(addr.wrapping_add(8), exec.read::<u64>(value.slice(8, 8)));
             }
@@ -699,8 +697,7 @@ fn store<E: PcodeExecutor>(exec: &mut E, id: MemId, addr: u64, value: Value) {
                         exec.read::<u8>(value.slice(i, 1))
                     );
                 }
-            }
-            else {
+            } else {
                 for i in 0..size {
                     writer!(addr.wrapping_add(i as u64), exec.read::<u8>(value.slice(i, 1)));
                 }

@@ -577,6 +577,9 @@ pub enum Op {
     PcodeBranch(PcodeLabel),
     PcodeLabel(PcodeLabel),
 
+    MultiEqual,
+    Indirect,
+
     Arg(u16),
     PcodeOp(PcodeOpId),
     Hook(HookId),
@@ -704,7 +707,7 @@ impl Op {
             Op::PcodeLabel(_) => (NONE_SIZE, (NONE_SIZE, NONE_SIZE)),
 
             Op::Arg(_) => (NONE_SIZE, (INT_SIZES, NONE_SIZE)),
-            Op::PcodeOp(_) => (ALL_SIZES, (ALL_SIZES, ALL_SIZES)),
+            Op::PcodeOp(_) | Op::MultiEqual | Op::Indirect => (ALL_SIZES, (ALL_SIZES, ALL_SIZES)),
             Op::Hook(_) => (NONE_SIZE, (NONE_SIZE, NONE_SIZE)),
             Op::HookIf(_) => (NONE_SIZE, (BOOL_SIZE, NONE_SIZE)),
 

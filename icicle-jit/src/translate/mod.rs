@@ -14,13 +14,13 @@ use cranelift_jit::JITModule;
 use cranelift_module::{FuncId, Module};
 
 use icicle_cpu::{
+    Arch, Cpu, Exception, ExceptionCode, InternalError, Regs,
     cpu::{Fuel, JitContext},
     lifter::{Block as IcicleBlock, BlockExit, Target},
-    Arch, Cpu, Exception, ExceptionCode, Regs, InternalError,
 };
 use memoffset::offset_of;
 
-use crate::{translate::ops::Ctx, CompilationTarget, MemHandler};
+use crate::{CompilationTarget, MemHandler, translate::ops::Ctx};
 
 impl MemHandler<FuncRef> {
     fn import(module: &mut JITModule, current: &mut Function, funcs: &MemHandler<FuncId>) -> Self {
@@ -187,8 +187,7 @@ impl VmPtr {
                 self.0,
                 offset,
             )
-        }
-        else {
+        } else {
             builder.ins().load(
                 ty,
                 MemFlags::new().with_alias_region(Some(AliasRegion::Vmctx)).with_notrap(),
@@ -207,8 +206,7 @@ impl VmPtr {
                 self.0,
                 offset,
             );
-        }
-        else {
+        } else {
             builder.ins().store(
                 MemFlags::new().with_alias_region(Some(AliasRegion::Vmctx)).with_notrap(),
                 value,
@@ -279,8 +277,7 @@ impl VarState {
         clear_dirty_flag: bool,
     ) {
         for (i, value) in self.values.iter_mut().enumerate().rev() {
-            let Some(write) = value
-            else {
+            let Some(write) = value else {
                 continue;
             };
 
@@ -1012,6 +1009,9 @@ impl<'a> Translator<'a> {
                     let b = ctx.trans.read_int(inputs[1]);
                     let value = ctx.trans.builder.ins().select(cond, a, b);
                     self.write(output, value);
+                }
+                Op::MultiEqual | Op::Indirect => {
+                    unreachable!("MultiEqual/Indirect ops should not reach the JIT");
                 }
             }
         }
