@@ -577,7 +577,14 @@ pub enum Op {
     PcodeBranch(PcodeLabel),
     PcodeLabel(PcodeLabel),
 
+    /// Represents a copy from one or more possible locations.
+    /// When implementing Static Single Assignment this would be a Phi-Node.
+    ///
+    /// This should not be created in a context where the pcode will be explicitly executed.
     MultiEqual,
+    /// Placeholder for indirect effects such as pointer aliasing.
+    ///
+    /// This should not be created in a context where the pcode will be explicitly executed.
     Indirect,
 
     Arg(u16),
