@@ -192,7 +192,8 @@ impl PcodeDisplay<HashMap<VarNode, (VarNode, u16)>> for VarNode {
     ) -> std::fmt::Result {
         if let Some((orig, ver)) = ctx.get(self) {
             write!(f, "{}", orig.display(ver))
-        } else {
+        }
+        else {
             write!(f, "{}", self.display(&()))
         }
     }

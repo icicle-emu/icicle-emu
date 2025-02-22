@@ -341,7 +341,8 @@ pub trait BitVecExt {
     fn copy_any(&mut self, other: &[Bit]) {
         if self.slice().len() > other.len() {
             self.zero_extend(other);
-        } else {
+        }
+        else {
             self.copy(&other[..self.slice().len()]);
         }
     }
@@ -955,7 +956,8 @@ fn debug_bits(bits: &[Bit], f: &mut std::fmt::Formatter) -> std::fmt::Result {
 
     if let Some(x) = bits.get_const() {
         write!(f, " ({:#0x})", x)?;
-    } else {
+    }
+    else {
         write!(f, " (")?;
         for bit in bits.iter().rev() {
             match bit {

@@ -738,7 +738,8 @@ impl<'a, 'b> Builder<'a, 'b> {
                         },
                         _ => return Err("unsupported expression type in direct branch".into()),
                     }
-                } else {
+                }
+                else {
                     self.read_value(dst, None)?
                 };
 
@@ -781,7 +782,8 @@ impl<'a, 'b> Builder<'a, 'b> {
             ast::PcodeExpr::Integer { value } => ExprValue::Const(*value, None),
             ast::PcodeExpr::AddressOf { size, value } => {
                 let base = self.resolve_ident(*value)?;
-                let ExprValue::Local(base) = base else {
+                let ExprValue::Local(base) = base
+                else {
                     // @todo: check whether any other expressions are allowed.
                     return Err(format!(
                         "{base:?} invalid expression used in address-of operation"

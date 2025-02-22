@@ -187,7 +187,8 @@ impl VmPtr {
                 self.0,
                 offset,
             )
-        } else {
+        }
+        else {
             builder.ins().load(
                 ty,
                 MemFlags::new().with_alias_region(Some(AliasRegion::Vmctx)).with_notrap(),
@@ -206,7 +207,8 @@ impl VmPtr {
                 self.0,
                 offset,
             );
-        } else {
+        }
+        else {
             builder.ins().store(
                 MemFlags::new().with_alias_region(Some(AliasRegion::Vmctx)).with_notrap(),
                 value,
@@ -277,7 +279,8 @@ impl VarState {
         clear_dirty_flag: bool,
     ) {
         for (i, value) in self.values.iter_mut().enumerate().rev() {
-            let Some(write) = value else {
+            let Some(write) = value
+            else {
                 continue;
             };
 
