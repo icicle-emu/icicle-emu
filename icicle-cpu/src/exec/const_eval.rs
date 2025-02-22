@@ -909,9 +909,13 @@ fn eval(op: pcode::Op, a: &[Bit], b: &[Bit], output: &mut [Bit]) {
         | Op::FloatToInt => output.fill(Bit::Unknown),
 
         // These expressions always result in an unknown output.
-        Op::TracerLoad(_) | Op::Load(_) | Op::PcodeOp(_) | Op::Hook(_) | Op::HookIf(_) => {
-            output.fill(Bit::Unknown)
-        }
+        Op::TracerLoad(_)
+        | Op::Load(_)
+        | Op::PcodeOp(_)
+        | Op::Hook(_)
+        | Op::HookIf(_)
+        | Op::MultiEqual
+        | Op::Indirect => output.fill(Bit::Unknown),
 
         // These expressions do not modify the output.
         Op::TracerStore(_)

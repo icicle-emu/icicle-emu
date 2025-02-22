@@ -577,6 +577,16 @@ pub enum Op {
     PcodeBranch(PcodeLabel),
     PcodeLabel(PcodeLabel),
 
+    /// Represents a copy from one or more possible locations.
+    /// When implementing Static Single Assignment this would be a Phi-Node.
+    ///
+    /// This should not be created in a context where the pcode will be explicitly executed.
+    MultiEqual,
+    /// Placeholder for indirect effects such as pointer aliasing.
+    ///
+    /// This should not be created in a context where the pcode will be explicitly executed.
+    Indirect,
+
     Arg(u16),
     PcodeOp(PcodeOpId),
     Hook(HookId),
@@ -704,7 +714,7 @@ impl Op {
             Op::PcodeLabel(_) => (NONE_SIZE, (NONE_SIZE, NONE_SIZE)),
 
             Op::Arg(_) => (NONE_SIZE, (INT_SIZES, NONE_SIZE)),
-            Op::PcodeOp(_) => (ALL_SIZES, (ALL_SIZES, ALL_SIZES)),
+            Op::PcodeOp(_) | Op::MultiEqual | Op::Indirect => (ALL_SIZES, (ALL_SIZES, ALL_SIZES)),
             Op::Hook(_) => (NONE_SIZE, (NONE_SIZE, NONE_SIZE)),
             Op::HookIf(_) => (NONE_SIZE, (BOOL_SIZE, NONE_SIZE)),
 

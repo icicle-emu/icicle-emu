@@ -2,8 +2,8 @@ use half::f16;
 use pcode::{MemId, Value, VarNode};
 
 use crate::{
-    regs::{resize_sxt, ValueSource},
     ExceptionCode,
+    regs::{ValueSource, resize_sxt},
 };
 
 pub trait PcodeExecutor: ValueSource {
@@ -545,7 +545,9 @@ where
             | Op::PcodeBranch(_)
             | Op::PcodeLabel(_)
             | Op::TracerLoad(_)
-            | Op::TracerStore(_),
+            | Op::TracerStore(_)
+            | Op::MultiEqual
+            | Op::Indirect,
             ..,
         ) => panic!("Unexpected operation in interpreter: {stmt:?}"),
     }
