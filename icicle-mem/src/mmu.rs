@@ -37,6 +37,10 @@ pub trait ReadAfterHook {
     fn read(&mut self, mem: &mut Mmu, addr: u64, value: &[u8]);
 }
 
+impl ReadAfterHook for () {
+    fn read(&mut self, _: &mut Mmu, _: u64, _: &[u8]) {}
+}
+
 pub trait WriteHook {
     fn write(&mut self, mem: &mut Mmu, addr: u64, value: &[u8]);
 }
@@ -253,6 +257,15 @@ impl Mmu {
 
         self.read_after_hooks.push(HookEntry { start, end, handler: hook, dead: false });
         Some(next_id)
+    }
+
+    pub fn remove_read_after_hook(&mut self, id: u32) -> bool {
+        // @todo: actually remove the hook.
+        let hook = &mut self.read_after_hooks[id as usize];
+        hook.handler = Box::new(());
+        hook.start = 0;
+        hook.end = 0;
+        true
     }
 
     pub fn clear(&mut self) {
