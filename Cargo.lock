@@ -517,6 +517,7 @@ dependencies = [
 name = "icicle-mem"
 version = "0.3.0"
 dependencies = [
+ "ahash",
  "tracing",
 ]
 
