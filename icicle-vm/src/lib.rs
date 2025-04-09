@@ -196,7 +196,13 @@ impl Vm {
                 self.cpu.update_fuel(instructions_to_exec);
 
                 self.run_block_jit();
-                if self.cpu.exception.code == ExceptionCode::InstructionLimit as u32 {
+
+                // At the beginning of a block we might decide that we need to switch to the
+                // interpreter. This happens if there is not enough fuel, or a breakpoint is set
+                // inside the block.
+                if self.cpu.exception
+                    == (ExceptionCode::InternalError, InternalError::SwitchToInterpreter).into()
+                {
                     self.run_block_interpreter();
                 }
 
@@ -446,8 +452,16 @@ impl Vm {
                     // the middle of a block).
                     self.cpu.write_pc(addr);
 
-                    // Raise the exception
-                    self.cpu.exception = Exception::new(ExceptionCode::from(e), addr);
+                    // Since the invalid instruction does not have a marker, we need to check if we
+                    // ran out of fuel and raise the appropriate exception first. The next step will
+                    // raise the actual exception related to the DecodeError.
+                    let code = if self.cpu.fuel.remaining == 0 {
+                        ExceptionCode::InstructionLimit
+                    }
+                    else {
+                        ExceptionCode::from(e)
+                    };
+                    self.cpu.exception = Exception::new(code, addr);
                     break;
                 }
             }
@@ -469,8 +483,8 @@ impl Vm {
 
     fn run_block_jit(&mut self) {
         if !self.can_enter_jit() {
-            self.cpu.exception.code = ExceptionCode::InstructionLimit as u32;
-            self.cpu.exception.value = 0;
+            self.cpu.exception =
+                (ExceptionCode::InternalError, InternalError::SwitchToInterpreter).into();
             return;
         }
 
@@ -654,7 +668,7 @@ impl Vm {
         // Check if there is a breakpoint set on any of the blocks in the group.
         for block in &self.code.blocks[group.range()] {
             if block.breakpoints > 0 {
-                return icicle_jit::runtime::block_contains_breakpoint;
+                return icicle_jit::runtime::switch_to_interpreter;
             }
         }
 

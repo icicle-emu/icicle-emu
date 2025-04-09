@@ -260,7 +260,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             }
 
             // Select operation (Icicle extension): input[0].size == input[1].size == output.size
-            pcode::Op::Select(_) => {
+            pcode::Op::Select(_) | pcode::Op::MultiEqual => {
                 self.set_size(&mut inputs[0], 1);
                 self.set_size_of_pair(&mut inputs[1], output.as_mut().unwrap());
             }
@@ -356,7 +356,10 @@ impl<'a, 'b> Builder<'a, 'b> {
             pcode::Op::PcodeLabel(_) | pcode::Op::InstructionMarker | pcode::Op::Invalid => {}
 
             // Internal operations not allowed in SLEIGH
-            pcode::Op::TracerLoad(_) | pcode::Op::TracerStore(_) | pcode::Op::Exception => {}
+            pcode::Op::TracerLoad(_)
+            | pcode::Op::TracerStore(_)
+            | pcode::Op::Exception
+            | pcode::Op::Indirect => {}
         }
     }
 

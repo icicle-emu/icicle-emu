@@ -354,6 +354,7 @@ impl From<DecodeError> for ExceptionCode {
 pub enum InternalError {
     CorruptedBlockMap,
     UnsupportedIsaMode,
+    SwitchToInterpreter,
 }
 
 pub fn read_value_zxt(cpu: &mut Cpu, value: pcode::Value) -> u64 {

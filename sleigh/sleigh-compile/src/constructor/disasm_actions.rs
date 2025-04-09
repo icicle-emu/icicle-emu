@@ -1,7 +1,5 @@
 use sleigh_parse::ast;
-use sleigh_runtime::{
-    semantics::Local, ContextModValue, DisasmConstantValue, Field, PatternExprOp,
-};
+use sleigh_runtime::{semantics::Local, ContextModValue, DisasmConstantValue, Field, PatternExprOp};
 
 use crate::{
     constructor::{resolve_pattern_expr, FieldIndex, ResolveIdent, Scope},

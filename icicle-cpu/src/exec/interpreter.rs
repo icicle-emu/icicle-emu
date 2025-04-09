@@ -2,8 +2,8 @@ use half::f16;
 use pcode::{MemId, Value, VarNode};
 
 use crate::{
-    regs::{resize_sxt, ValueSource},
     ExceptionCode,
+    regs::{ValueSource, resize_sxt},
 };
 
 pub trait PcodeExecutor: ValueSource {
@@ -99,7 +99,7 @@ where
         ($op:ty, $ty:ty) => {{
             let a: $ty = exec.read(a);
             let b: $ty = exec.read(b);
-            if b == 0 || (a == (1 << (<$ty>::BITS - 1)) && b == <$ty>::MAX){
+            if b == 0 || (a == (1 << (<$ty>::BITS - 1)) && b == <$ty>::MAX) {
                 exec.exception(ExceptionCode::DivisionException, 0);
                 return;
             }
@@ -545,7 +545,9 @@ where
             | Op::PcodeBranch(_)
             | Op::PcodeLabel(_)
             | Op::TracerLoad(_)
-            | Op::TracerStore(_),
+            | Op::TracerStore(_)
+            | Op::MultiEqual
+            | Op::Indirect,
             ..,
         ) => panic!("Unexpected operation in interpreter: {stmt:?}"),
     }
@@ -620,7 +622,8 @@ where
 fn load<E: PcodeExecutor>(exec: &mut E, id: MemId, dst: VarNode, addr: u64) {
     macro_rules! load {
         ($dst:expr, $addr:expr, $ty:ty) => {{
-            let Some(tmp) = exec.load_mem(id, $addr) else {
+            let Some(tmp) = exec.load_mem(id, $addr)
+            else {
                 return;
             };
             let value = match exec.is_big_endian() && id == pcode::RAM_SPACE {

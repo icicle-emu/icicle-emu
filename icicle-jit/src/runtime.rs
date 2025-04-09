@@ -1,4 +1,4 @@
-use icicle_cpu::{mem::perm, Cpu, ExceptionCode};
+use icicle_cpu::{mem::perm, Cpu, ExceptionCode, InternalError};
 
 pub unsafe extern "C" fn jit_compilation_error(cpu: *mut Cpu, addr: u64) -> u64 {
     (*cpu).exception.code = ExceptionCode::JitError as u32;
@@ -17,10 +17,8 @@ pub unsafe extern "C" fn address_not_translated(cpu: *mut Cpu, addr: u64) -> u64
     addr
 }
 
-pub unsafe extern "C" fn block_contains_breakpoint(cpu: *mut Cpu, addr: u64) -> u64 {
-    // Exit with the `InstructionLimit` exit code this results in us exiting to the interpreter
-    // which will single step the CPU until the correct instruction.
-    (*cpu).exception.code = ExceptionCode::InstructionLimit as u32;
+pub unsafe extern "C" fn switch_to_interpreter(cpu: *mut Cpu, addr: u64) -> u64 {
+    (*cpu).exception = (ExceptionCode::InternalError, InternalError::SwitchToInterpreter).into();
     addr
 }
 

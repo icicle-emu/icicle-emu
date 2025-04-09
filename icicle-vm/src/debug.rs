@@ -89,9 +89,9 @@ pub fn current_disasm(vm: &Vm) -> String {
     };
 
     let mut out = String::new();
-    
+
     let block = &vm.code.blocks[block_id as usize];
-    let pc_valid =  block.contains_addr(vm.cpu.read_pc());
+    let pc_valid = block.contains_addr(vm.cpu.read_pc());
     for (i, op) in block.pcode.instructions.iter().enumerate() {
         if matches!(op.op, pcode::Op::InstructionMarker) {
             let addr = op.inputs.first().as_u64();

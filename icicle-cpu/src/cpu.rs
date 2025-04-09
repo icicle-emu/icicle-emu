@@ -11,7 +11,7 @@ use crate::{
     lifter::{BlockExit, Target},
     regs::{RegValue, Regs, ValueSource},
     trace::{self, Trace},
-    ExceptionCode, InstHook, VarSource,
+    ExceptionCode, InstHook, InternalError, VarSource,
 };
 
 pub const SHADOW_STACK_SIZE: usize = 0x1000;
@@ -68,11 +68,23 @@ impl std::fmt::Debug for ShadowStackEntry {
     }
 }
 
-#[derive(Default, Debug, Copy, Clone)]
+#[derive(Default, Debug, Copy, Clone, PartialEq)]
 #[repr(C)]
 pub struct Exception {
     pub code: u32,
     pub value: u64,
+}
+
+impl From<(ExceptionCode, u64)> for Exception {
+    fn from((code, value): (ExceptionCode, u64)) -> Self {
+        Self::new(code, value)
+    }
+}
+
+impl From<(ExceptionCode, InternalError)> for Exception {
+    fn from((code, value): (ExceptionCode, InternalError)) -> Self {
+        Self::new(code, value as u64)
+    }
 }
 
 impl Exception {

@@ -14,13 +14,13 @@ use cranelift_jit::JITModule;
 use cranelift_module::{FuncId, Module};
 
 use icicle_cpu::{
+    Arch, Cpu, Exception, ExceptionCode, InternalError, Regs,
     cpu::{Fuel, JitContext},
     lifter::{Block as IcicleBlock, BlockExit, Target},
-    Arch, Cpu, Exception, ExceptionCode, Regs,
 };
 use memoffset::offset_of;
 
-use crate::{translate::ops::Ctx, CompilationTarget, MemHandler};
+use crate::{CompilationTarget, MemHandler, translate::ops::Ctx};
 
 impl MemHandler<FuncRef> {
     fn import(module: &mut JITModule, current: &mut Function, funcs: &MemHandler<FuncId>) -> Self {
@@ -1013,6 +1013,9 @@ impl<'a> Translator<'a> {
                     let value = ctx.trans.builder.ins().select(cond, a, b);
                     self.write(output, value);
                 }
+                Op::MultiEqual | Op::Indirect => {
+                    unreachable!("MultiEqual/Indirect ops should not reach the JIT");
+                }
             }
         }
 
@@ -1045,20 +1048,26 @@ impl<'a> Translator<'a> {
         // @fixme: make `fuel` a variable.
         let remaining_fuel = self.vm_ptr.load_fuel(&mut self.builder);
         let required_fuel = num_instructions as i64;
-        let insufficient_fuel =
-            self.builder.ins().icmp_imm(IntCC::SignedLessThan, remaining_fuel, required_fuel);
+        let switch_to_interpreter = self.builder.ins().icmp_imm(
+            IntCC::SignedLessThanOrEqual,
+            remaining_fuel,
+            required_fuel,
+        );
 
         let ok_block = self.builder.create_block();
         let err_block = self.builder.create_block();
         self.builder.set_cold_block(err_block);
 
-        self.builder.ins().brif(insufficient_fuel, err_block, &[], ok_block, &[]);
+        self.builder.ins().brif(switch_to_interpreter, err_block, &[], ok_block, &[]);
 
         // err:
         {
             self.builder.switch_to_block(err_block);
             self.builder.seal_block(err_block);
-            self.exit_with_exception(ExceptionCode::InstructionLimit, 0);
+            self.exit_with_exception(
+                ExceptionCode::InternalError,
+                InternalError::SwitchToInterpreter as u64,
+            );
         }
 
         // ok:
