@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use icicle_cpu::{cpu::CallCov, exec::helpers, lifter, Arch, Config, Cpu};
 use sleigh_compile::ldef::SleighLanguage;
 
@@ -37,7 +39,11 @@ impl std::fmt::Display for BuildError {
 impl std::error::Error for BuildError {}
 
 pub fn build(config: &Config) -> Result<Vm, BuildError> {
-    let mut lang = sleigh_init(&config.triple)?;
+    build_with_path(config, &get_default_processors_path())
+}
+
+pub fn build_with_path(config: &Config, processors: &Path) -> Result<Vm, BuildError> {
+    let mut lang = sleigh_init_with_path(&config.triple, processors)?;
 
     let reg_next_pc = lang
         .sleigh
@@ -203,6 +209,10 @@ fn get_boot_action(arch: target_lexicon::Architecture) -> fn(&mut Cpu, u64) {
 }
 
 pub fn sleigh_init(target: &target_lexicon::Triple) -> Result<SleighLanguage, BuildError> {
+    sleigh_init_with_path(target, &get_default_processors_path())
+}
+
+pub fn sleigh_init_with_path(target: &target_lexicon::Triple, processors: &Path) -> Result<SleighLanguage, BuildError> {
     use target_lexicon::{
         Aarch64Architecture, Architecture, ArmArchitecture, Mips32Architecture,
         Riscv32Architecture, Riscv64Architecture,
@@ -321,7 +331,7 @@ pub fn sleigh_init(target: &target_lexicon::Triple) -> Result<SleighLanguage, Bu
         _ => return Err(BuildError::UnsupportedArchitecture),
     };
 
-    let ldef_path = get_path_to_ghidra_file(ldef);
+    let ldef_path = processors.join(ldef);
     if !ldef_path.exists() {
         return Err(BuildError::SpecNotFound(ldef_path));
     }
@@ -331,11 +341,10 @@ pub fn sleigh_init(target: &target_lexicon::Triple) -> Result<SleighLanguage, Bu
         .map_err(|e| BuildError::SpecCompileError(e.to_string()))
 }
 
-fn get_path_to_ghidra_file(file: &str) -> std::path::PathBuf {
+fn get_default_processors_path() -> std::path::PathBuf {
     std::env::var_os("GHIDRA_SRC")
         .map_or_else(|| ".".into(), std::path::PathBuf::from)
         .join("Ghidra/Processors")
-        .join(file)
 }
 
 // @fixme: avoid making this pub when we refactor architecture specific CPU state.
