@@ -225,8 +225,8 @@ pub mod arm {
             injectors.insert(id, Box::new(sleep));
         }
 
-        let ex_addr = match cpu.arch.sleigh.get_reg("exclusive_addr") {
-            Some(reg) => reg.var,
+        let ex_addr = match cpu.arch.sleigh.get_varnode("exclusive_addr") {
+            Some(var) => var,
             None => cpu.arch.sleigh.add_custom_reg("exclusive_addr", 4).unwrap(),
         };
 

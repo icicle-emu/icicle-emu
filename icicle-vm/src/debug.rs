@@ -220,8 +220,8 @@ pub fn callstack_from_frame_pointer(vm: &mut Vm) -> Option<Vec<u64>> {
     let reg_sp = vm.cpu.arch.reg_sp;
     let reg_pc = vm.cpu.arch.reg_pc;
     let reg_bp = match vm.cpu.arch.triple.architecture {
-        target_lexicon::Architecture::X86_64 => vm.cpu.arch.sleigh.get_reg("RBP")?.var,
-        target_lexicon::Architecture::Arm(_) => vm.cpu.arch.sleigh.get_reg("r11")?.var,
+        target_lexicon::Architecture::X86_64 => vm.cpu.arch.sleigh.get_varnode("RBP")?,
+        target_lexicon::Architecture::Arm(_) => vm.cpu.arch.sleigh.get_varnode("r11")?,
         _ => return None,
     };
 
@@ -263,7 +263,7 @@ pub fn callstack_from_frame_pointer(vm: &mut Vm) -> Option<Vec<u64>> {
 
 fn get_link_register(vm: &Vm) -> Option<pcode::VarNode> {
     match vm.cpu.arch.triple.architecture {
-        target_lexicon::Architecture::Arm(_) => Some(vm.cpu.arch.sleigh.get_reg("lr")?.var),
+        target_lexicon::Architecture::Arm(_) => vm.cpu.arch.sleigh.get_varnode("lr"),
         // @todo: add other architectures.
         _ => None,
     }
@@ -363,7 +363,7 @@ pub fn get_debug_regs(cpu: &crate::Cpu) -> Vec<pcode::VarNode> {
         ][..],
         _ => &[][..],
     };
-    names.iter().map(|name| cpu.arch.sleigh.get_reg(name).unwrap().var).collect()
+    names.iter().map(|name| cpu.arch.sleigh.get_varnode(name).unwrap()).collect()
 }
 
 pub fn log_write(
@@ -398,8 +398,8 @@ pub fn log_regs(
     let regs: Vec<_> = reglist
         .iter()
         .map(AsRef::as_ref)
-        .flat_map(|reg| match vm.cpu.arch.sleigh.get_reg(reg) {
-            Some(reg) => Some(reg.var),
+        .flat_map(|reg| match vm.cpu.arch.sleigh.get_varnode(reg) {
+            Some(reg) => Some(reg),
             None => {
                 tracing::error!("Unknown register: {reg}");
                 None

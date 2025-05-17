@@ -394,7 +394,7 @@ impl Cpu {
     pub fn var_for_offset(&self, offset: u32, size: u8) -> Option<pcode::VarNode> {
         let (reg, reg_offset) = self.arch.sleigh.map_sleigh_reg(offset, size)?;
         // @todo: check behaviour of big-endian dynamic accesses.
-        reg.get_var(reg_offset, size)
+        reg.slice_var(reg_offset, size)
     }
 
     /// Reads the register represented by `var`. For special registers, this may perform additional

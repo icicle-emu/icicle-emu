@@ -71,16 +71,22 @@ impl VarNode {
     }
 
     #[inline]
-    pub fn slice(self, offset: VarOffset, size: VarSize) -> VarNode {
-        // @fixme: return an error here instead of panicking? This should be verified by the
-        // sleigh-compiler.
+    pub fn try_slice(self, offset: VarOffset, size: VarSize) -> Option<VarNode> {
         if offset + size > self.size {
-            panic!(
+            return None;
+        }
+        Some(VarNode { offset: self.offset + offset, size, ..self })
+    }
+
+    #[inline]
+    pub fn slice(self, offset: VarOffset, size: VarSize) -> VarNode {
+        match self.try_slice(offset, size) {
+            Some(node) => node,
+            None => panic!(
                 "VarNode::slice: {} (offset) + {} (size) > {} (self.size)",
                 offset, size, self.size
-            );
+            ),
         }
-        VarNode { offset: self.offset + offset, size, ..self }
     }
 
     #[inline]
@@ -325,7 +331,7 @@ impl Block {
             .iter()
             .take(offset)
             .filter(|x| matches!(x.op, Op::InstructionMarker))
-            .last()
+            .next_back()
             .map(|x| x.inputs.first().as_u64())
     }
 
