@@ -7,7 +7,7 @@ pub struct Aarch64 {
 
 impl Aarch64 {
     pub fn new(arch: &icicle_cpu::Arch) -> Self {
-        let r = |name: &str| arch.sleigh.get_reg(name).unwrap().var;
+        let r = |name: &str| arch.sleigh.get_varnode(name).unwrap();
         let args = [r("x8"), r("x0"), r("x1"), r("x2"), r("x3"), r("x4"), r("x5")];
         Self { args }
     }

@@ -46,6 +46,10 @@ pub struct CallingCov {
     pub float_args: Vec<pcode::VarNode>,
     /// Registers left unmodified after executing the function.
     pub unaffected: Vec<pcode::VarNode>,
+    /// Varnodes used to hold integer return values. (INVALID if not used)
+    pub int_return: pcode::VarNode,
+    /// Varnodes used to hold floating point return values. (INVALID if not used)
+    pub float_return: pcode::VarNode,
 }
 
 pub struct SleighLanguage {
@@ -75,9 +79,63 @@ pub fn build(
     cspec_id: Option<&str>,
     verbose: bool,
 ) -> Result<SleighLanguage, Error> {
-    let ldef = LanguageDef::from_xml(ldef_path)?;
+    let mut builder = SleighLanguageBuilder::new(ldef_path, lang_id).set_verbose(verbose);
+    if let Some(cspec_id) = cspec_id {
+        builder = builder.set_cspec_id(cspec_id)
+    }
+    builder.build()
+}
+
+pub struct SleighLanguageBuilder {
+    pub ldef_path: PathBuf,
+    pub lang_id: String,
+    pub cspec_id: Option<String>,
+    pub verbose: bool,
+    pub defines: Vec<String>,
+}
+
+impl SleighLanguageBuilder {
+    pub fn new(ldef_path: impl Into<PathBuf>, lang_id: impl Into<String>) -> Self {
+        Self {
+            ldef_path: ldef_path.into(),
+            lang_id: lang_id.into(),
+            cspec_id: None,
+            verbose: false,
+            defines: vec!["ICICLE".into()],
+        }
+    }
+
+    pub fn set_cspec_id(mut self, cspec_id: impl Into<String>) -> Self {
+        self.cspec_id = Some(cspec_id.into());
+        self
+    }
+
+    pub fn set_verbose(mut self, verbose: bool) -> Self {
+        self.verbose = verbose;
+        self
+    }
+
+    pub fn clear_defines(mut self) -> Self {
+        self.defines.clear();
+        self
+    }
+
+    pub fn define(mut self, define: impl Into<String>) -> Self {
+        self.defines.push(define.into());
+        self
+    }
+
+    pub fn build(self) -> Result<SleighLanguage, Error> {
+        build_inner(self)
+    }
+}
+
+fn build_inner(
+    SleighLanguageBuilder { ldef_path, lang_id, cspec_id, verbose, defines }: SleighLanguageBuilder,
+) -> Result<SleighLanguage, Error> {
+    let ldef = LanguageDef::from_xml(&ldef_path)?;
     let language =
-        ldef.find_match(lang_id).ok_or_else(|| Error::LanguageNotFound(lang_id.into()))?;
+        ldef.find_match(&lang_id).ok_or_else(|| Error::LanguageNotFound(lang_id.clone()))?;
 
     let pspec_path = language.pspec_path(&ldef_path).ok_or(Error::InvalidPath)?;
     let pspec: PSpec = serde_xml_rs::from_reader(BufReader::new(
@@ -87,9 +145,17 @@ pub fn build(
 
     let slaspec_path = language.slaspec_path(&ldef_path).ok_or(Error::InvalidPath)?;
 
-    let ast = sleigh_parse::Parser::from_path(&slaspec_path)
-        .map_err(|e| Error::ParseError(slaspec_path, e))?;
-    let sleigh = crate::build_inner(ast, verbose).map_err(Error::CompileError)?;
+    let root = slaspec_path.parent().ok_or(Error::InvalidPath)?;
+    let initial_file =
+        slaspec_path.file_name().and_then(|x| x.to_str()).ok_or(Error::InvalidPath)?;
+
+    let input_source = sleigh_parse::FileLoader::new(root.to_owned());
+
+    let mut parser = sleigh_parse::Parser::new(input_source, &defines);
+    if let Err(err) = parser.include_file(initial_file) {
+        return Err(Error::ParseError(slaspec_path, parser.error_formatter(err).to_string()));
+    }
+    let sleigh = crate::build_inner(parser, verbose).map_err(Error::CompileError)?;
 
     // Resolve the initial context using information from `context_data` in the processor
     // specification.
@@ -104,7 +170,7 @@ pub fn build(
     }
 
     let get_reg = |name: &str| {
-        Ok(sleigh.get_reg(name).ok_or_else(|| Error::UnknownRegister(name.to_string()))?.var)
+        sleigh.get_varnode(name).ok_or_else(|| Error::UnknownRegister(name.to_string()))
     };
 
     let pc = get_reg(&pspec.programcounter.register)?;
@@ -114,7 +180,7 @@ pub fn build(
     let mut default_calling_cov = CallingCov::default();
 
     let mut compiler = None;
-    if let Some((name, path)) = language.cspec_path(&ldef_path, cspec_id) {
+    if let Some((name, path)) = language.cspec_path(&ldef_path, cspec_id.as_deref()) {
         compiler = Some(name);
 
         // If we have a compiler spec, we can obtain additional information about the target
@@ -123,29 +189,10 @@ pub fn build(
             File::open(&path).map_err(|err| Error::Io(path.clone(), err))?,
         ))
         .map_err(|err| Error::ParseError(path, err.to_string()))?;
-
         sp = get_reg(&cspec.stackpointer.register)?;
 
         if let Some(proto) = cspec.default_proto {
-            for input in proto.prototype.input.pentry {
-                let Location::Register(reg) = input.location
-                else {
-                    // Non-register locations ignored for now.
-                    continue;
-                };
-                match input.metatype {
-                    MetaType::Int => default_calling_cov.int_args.push(get_reg(&reg.name)?),
-                    MetaType::Float => default_calling_cov.float_args.push(get_reg(&reg.name)?),
-                }
-            }
-            for location in proto.prototype.unaffected.location {
-                let Location::Register(reg) = location
-                else {
-                    // Non-register locations ignored for now.
-                    continue;
-                };
-                default_calling_cov.unaffected.push(get_reg(&reg.name)?);
-            }
+            default_calling_cov = map_calling_cov(proto.prototype, get_reg)?;
         }
     }
     else {
@@ -153,7 +200,7 @@ pub fn build(
         if let Some(expected_sp) =
             sleigh.named_registers.iter().find(|x| matches!(sleigh.get_str(x.name), "sp" | "SP"))
         {
-            sp = expected_sp.var;
+            sp = expected_sp.get_var().unwrap();
         }
     }
 
@@ -168,6 +215,52 @@ pub fn build(
         sp,
         default_calling_cov,
     })
+}
+
+fn map_calling_cov(
+    proto: Prototype,
+    get_reg: impl Fn(&str) -> Result<pcode::VarNode, Error>,
+) -> Result<CallingCov, Error> {
+    let mut cov = CallingCov::default();
+    for input in proto.input.pentry {
+        match input.location {
+            Location::Register(reg) => {
+                let reg = get_reg(&reg.name)?;
+                match input.metatype {
+                    MetaType::Int => cov.int_args.push(reg),
+                    MetaType::Float => cov.float_args.push(reg),
+                }
+            }
+            // Non-register locations ignored for now.
+            _ => {}
+        }
+    }
+
+    for output in proto.output.pentry {
+        match output.location {
+            Location::Register(reg) => {
+                let reg = get_reg(&reg.name)?;
+                match output.metatype {
+                    MetaType::Int => cov.int_return = reg,
+                    MetaType::Float => cov.float_return = reg,
+                }
+            }
+            // Non-register locations ignored for now.
+            _ => {}
+        }
+    }
+
+    for location in proto.unaffected.location {
+        match location {
+            Location::Register(reg) => {
+                cov.unaffected.push(get_reg(&reg.name)?);
+            }
+            // Non-register locations ignored for now.
+            _ => {}
+        }
+    }
+
+    Ok(cov)
 }
 
 #[derive(Debug, Deserialize)]
@@ -297,6 +390,8 @@ struct DefaultProto {
 #[derive(Debug, Deserialize)]
 pub struct CSpec {
     default_proto: Option<DefaultProto>,
+    #[allow(unused)]
+    returnaddress: Option<Location>,
     stackpointer: StackPointer,
 }
 
@@ -309,7 +404,7 @@ pub struct LanguageDef {
 impl LanguageDef {
     pub fn from_xml(path: &Path) -> Result<Self, Error> {
         serde_xml_rs::from_reader(BufReader::new(
-            File::open(&path).map_err(|err| Error::Io(path.into(), err))?,
+            File::open(path).map_err(|err| Error::Io(path.into(), err))?,
         ))
         .map_err(|err| Error::ParseError(path.into(), err.to_string()))
     }

@@ -69,7 +69,7 @@ impl crate::FuzzTarget for RandomIoTarget {
     }
 
     fn initialize_vm(&mut self, config: &FuzzConfig, vm: &mut icicle_vm::Vm) -> anyhow::Result<()> {
-        if let Some(var) = vm.cpu.arch.sleigh.get_reg("afl.prev_pc").map(|x| x.var) {
+        if let Some(var) = vm.cpu.arch.sleigh.get_varnode("afl.prev_pc") {
             let env = vm.env_mut::<Msp430>().unwrap();
             env.afl_prev_pc = Some(var);
         }

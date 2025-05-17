@@ -369,7 +369,7 @@ pub fn pipe_m<C: LinuxCpu>(ctx: &mut Ctx<C>) -> LinuxResult {
     };
 
     // This has a special calling convention on mips.
-    let v1 = ctx.cpu.sleigh().get_reg("v1").unwrap().var;
+    let v1 = ctx.cpu.sleigh().get_varnode("v1").unwrap();
     ctx.cpu.write_var(v1, fd1);
 
     Ok(fd0)
@@ -1475,12 +1475,12 @@ pub fn arch_prctl_x64<C: LinuxCpu>(ctx: &mut Ctx<C>, code: u64, addr: u64) -> Li
             Err(errno::EINVAL.into())
         }
         x86::arch::SET_FS => {
-            let fs_offset = ctx.cpu.sleigh().get_reg("FS_OFFSET").unwrap().var;
+            let fs_offset = ctx.cpu.sleigh().get_varnode("FS_OFFSET").unwrap();
             ctx.cpu.write_var(fs_offset, addr);
             Ok(0)
         }
         x86::arch::SET_GS => {
-            let gs_offset = ctx.cpu.sleigh().get_reg("GS_OFFSET").unwrap().var;
+            let gs_offset = ctx.cpu.sleigh().get_varnode("GS_OFFSET").unwrap();
             ctx.cpu.write_var(gs_offset, addr);
             Ok(0)
         }
@@ -1641,7 +1641,7 @@ pub fn set_tid_address<C: LinuxCpu>(_ctx: &mut Ctx<C>, _tidptr: u64) -> LinuxRes
 }
 
 pub fn set_thread_area_mips<C: LinuxCpu>(ctx: &mut Ctx<C>, addr: u64) -> LinuxResult {
-    let user_local = ctx.cpu.sleigh().get_reg("HW_ULR").unwrap().var;
+    let user_local = ctx.cpu.sleigh().get_varnode("HW_ULR").unwrap();
     ctx.cpu.write_var(user_local, addr);
     Ok(0)
 }
@@ -1666,7 +1666,7 @@ pub fn set_thread_area_x86<C: LinuxCpu>(ctx: &mut Ctx<C>, user_desc: u64) -> Lin
 
     // Write the entry to the GDT at position 12 (an arbitary position to use for now)
     let gdb_descriptor: u32 = 12;
-    let gdtr = ctx.cpu.sleigh().get_reg("GDTR").unwrap().var;
+    let gdtr = ctx.cpu.sleigh().get_varnode("GDTR").unwrap();
     let gdt_addr: u64 = ctx.cpu.read_var(gdtr);
     ctx.cpu.mem().write_bytes(gdt_addr + gdb_descriptor as u64 * 8, &entry.to_bytes())?;
 

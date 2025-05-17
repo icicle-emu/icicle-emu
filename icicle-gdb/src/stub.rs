@@ -396,8 +396,8 @@ impl<T: DynamicTarget> ext::monitor_cmd::MonitorCmd for VmState<T> {
             }
             Some("lookup-varnode") => {
                 if let Some(name) = parts.next() {
-                    match self.vm.cpu.arch.sleigh.get_reg(name) {
-                        Some(var) => gdbstub::outputln!(out, "{:?}", var.var),
+                    match self.vm.cpu.arch.sleigh.get_varnode(name) {
+                        Some(var) => gdbstub::outputln!(out, "{:?}", var),
                         None => gdbstub::outputln!(out, "unknown register"),
                     }
                 }
@@ -409,9 +409,9 @@ impl<T: DynamicTarget> ext::monitor_cmd::MonitorCmd for VmState<T> {
 
             Some("varnode") => {
                 if let Some(name) = parts.next() {
-                    match self.vm.cpu.arch.sleigh.get_reg(name) {
+                    match self.vm.cpu.arch.sleigh.get_varnode(name) {
                         Some(var) => {
-                            let value = self.vm.cpu.read_reg(var.var);
+                            let value = self.vm.cpu.read_reg(var);
                             gdbstub::outputln!(out, "{name} = {value:#x}")
                         }
                         None => gdbstub::outputln!(out, "unknown register"),

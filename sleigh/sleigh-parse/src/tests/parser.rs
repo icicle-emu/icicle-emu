@@ -23,6 +23,7 @@ where
     }
 }
 
+#[track_caller]
 fn parse<T: crate::parser::Parse>(input: &str) -> ParseResult<T> {
     let mut parser = Parser::from_str(input);
 
@@ -477,6 +478,37 @@ fn pcode_address_of() {
 }
 
 #[test]
+fn pcode_deref() {
+    let expr = parse::<ast::PcodeExpr>("*[ram]:4 (addr & ~1)");
+    assert_eq!(expr.ast, ast::PcodeExpr::Deref {
+        space: Some(expr.ident("ram")),
+        size: Some(4),
+        pointer: Box::new(ast::PcodeExpr::Op {
+            a: Box::new(ast::PcodeExpr::Ident { value: expr.ident("addr") }),
+            op: ast::PcodeOp::IntAnd,
+            b: Box::new(ast::PcodeExpr::Call(ast::PcodeCall {
+                name: expr.ident("~"),
+                args: vec![ast::PcodeExpr::Integer { value: 1 }]
+            }))
+        })
+    });
+
+    let expr = parse::<ast::PcodeExpr>("*[ram]:4 addr & ~1");
+    assert_eq!(expr.ast, ast::PcodeExpr::Op {
+        a: Box::new(ast::PcodeExpr::Deref {
+            space: Some(expr.ident("ram")),
+            size: Some(4),
+            pointer: Box::new(ast::PcodeExpr::Ident { value: expr.ident("addr") })
+        }),
+        op: ast::PcodeOp::IntAnd,
+        b: Box::new(ast::PcodeExpr::Call(ast::PcodeCall {
+            name: expr.ident("~"),
+            args: vec![ast::PcodeExpr::Integer { value: 1 }]
+        }))
+    });
+}
+
+#[test]
 fn pcode_statement() {
     let expr = parse::<ast::Statement>("return [0:1];");
     assert_eq!(expr.ast, ast::Statement::Branch {
@@ -497,6 +529,77 @@ fn macro_in_expr() {
 @define Carry "F[0,1]"
 r = (r << 1) | $(Carry);"#,
     );
+}
+
+#[test]
+fn keywords_as_identifiers() {
+    _ = parse::<ast::Constructor>(
+        "test: is pcodeop [ pcodeop=pcodeop; ] { pcodeop=1:1; export pcodeop; }",
+    );
+    _ = parse::<ast::Constructor>(
+        "test: is defined [ defined=defined; ] { defined=1:1; export defined; }",
+    );
+    _ = parse::<ast::Constructor>(
+        "test: is define [ define=define; ] { define=1:1; export define; }",
+    );
+    _ = parse::<ast::Constructor>(
+        "test: is alignment [ alignment=alignment; ] { alignment=1:1; export alignment; }",
+    );
+    _ = parse::<ast::Constructor>(
+        "test: is endianness [ endianness=endianness; ] { endianness=1:1; export endianness; }",
+    );
+    _ = parse::<ast::Constructor>(
+        "test: is bitrange [ bitrange=bitrange; ] { bitrange=1:1; export bitrange; }",
+    );
+    _ = parse::<ast::Constructor>("test: is space [ space=space; ] { space=1:1; export space;  }");
+    _ = parse::<ast::Constructor>(
+        "test: is default [ default=default; ] { default=1:1; export default; }",
+    );
+    _ = parse::<ast::Constructor>(
+        "test: is pcodeop [ pcodeop=pcodeop; ] { pcodeop=1:1; export pcodeop; }",
+    );
+    _ = parse::<ast::Constructor>(
+        "test: is attach [ attach=attach; ] { attach=1:1; export attach; }",
+    );
+    _ = parse::<ast::Constructor>("test: is token [ token=token; ] { token=1:1; export token; }");
+    _ = parse::<ast::Constructor>(
+        "test: is context [ context=context; ] { context=1:1; export context; }",
+    );
+    _ = parse::<ast::Constructor>(
+        "test: is variables [ variables=variables; ] { variables=1:1; export variables; }",
+    );
+    _ = parse::<ast::Constructor>("test: is names [ names=names; ] { names=1:1; export names; }");
+    _ = parse::<ast::Constructor>(
+        "test: is values [ values=values; ] { values=1:1; export values; }",
+    );
+    _ = parse::<ast::Constructor>(
+        "test: is signed [ signed=signed; ] { signed=1:1; export signed; }",
+    );
+    _ = parse::<ast::Constructor>("test: is hex [ hex=hex; ] { hex=1:1; export hex; }");
+    _ = parse::<ast::Constructor>("test: is dec [ dec=dec; ] { dec=1:1; export dec; }");
+    _ = parse::<ast::Constructor>(
+        "test: is noflow [ noflow=noflow; ] { noflow=1:1; export noflow; }",
+    );
+    _ = parse::<ast::Constructor>(
+        "test: is unimpl [ unimpl=unimpl; ] { unimpl=1:1; export unimpl; }",
+    );
+    _ = parse::<ast::Constructor>("test: is macro [ macro=macro; ] { macro=1:1; export macro; }");
+
+    // Slightly more restricted keywords.
+    _ = parse::<ast::Constructor>("test: is epsilon { globalset=1:1; export globalset; }");
+    _ = parse::<ast::Constructor>("test: is epsilon { is=1:1; export is; }");
+
+    // Allowed by Ghidra but not currently allowed by Icicle (unlikely to be used intentionally)
+    // _ = parse::<ast::Constructor>("test: is epsilon { export=1:1; export export; }");
+    // _ = parse::<ast::Constructor>("test: is epsilon { local=1:1; export local; }");
+    // _ = parse::<ast::Constructor>("test: is epsilon { build=1:1; export build; }");
+    // _ = parse::<ast::Constructor>("test: is epsilon { call=1:1; export call; }");
+    // _ = parse::<ast::Constructor>("test: is epsilon { goto=1:1; export goto; }");
+    // _ = parse::<ast::Constructor>("test: is epsilon { return=1:1; export return; }");
+
+    // Not allowed by both Ghidra and Icicle
+    // _ = parse::<ast::Constructor>("test: is epsilon { with=1:1; export with; }");
+    // _ = parse::<ast::Constructor>("test: is epsilon { if=1:1; export if; }");
 }
 
 #[test]

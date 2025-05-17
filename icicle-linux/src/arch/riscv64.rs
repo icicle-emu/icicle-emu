@@ -7,7 +7,7 @@ pub struct Riscv64 {
 
 impl Riscv64 {
     pub fn new(arch: &icicle_cpu::Arch) -> Self {
-        let r = |name: &str| arch.sleigh.get_reg(name).unwrap().var;
+        let r = |name: &str| arch.sleigh.get_varnode(name).unwrap();
         let args = [r("a7"), r("a0"), r("a1"), r("a2"), r("a3"), r("a4"), r("a5")];
         Self { args }
     }

@@ -162,7 +162,12 @@ impl Tester for icicle_vm::Vm {
                 let _ = self.cpu.mem.read_u8(*addr, perm::NONE)?;
             }
             &Assignment::Register { name, value } => {
-                let varnode = self.cpu.arch.sleigh.get_reg(name).unwrap().var;
+                let varnode = self
+                    .cpu
+                    .arch
+                    .sleigh
+                    .get_varnode(name)
+                    .ok_or_else(|| anyhow::format_err!("Register: {name} not found"))?;
                 // @fixme: make write_trunc work with reg handlers?
                 if varnode.size <= 8 {
                     self.cpu.write_reg(varnode, value as u64)
@@ -187,7 +192,12 @@ impl Tester for icicle_vm::Vm {
                 );
             }
             &Assignment::Register { name, value } => {
-                let varnode = self.cpu.arch.sleigh.get_reg(name).unwrap().var;
+                let varnode = self
+                    .cpu
+                    .arch
+                    .sleigh
+                    .get_varnode(name)
+                    .ok_or_else(|| anyhow::format_err!("Register: {name} not found"))?;
 
                 let tmp = if varnode.size <= 8 {
                     self.cpu.read_reg(varnode) as u128

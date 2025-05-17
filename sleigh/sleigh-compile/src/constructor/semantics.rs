@@ -452,7 +452,7 @@ impl<'a, 'b> Builder<'a, 'b> {
                     value.size = Some(size);
                     return;
                 }
-                self.error(format!("error setting size of {:?} to: {} (was: {})", value, size, x));
+                self.error(format!("error setting size of {value:?} to: {size} (was: {x})"));
             }
             value.size = Some(size);
             return;
@@ -530,7 +530,7 @@ impl<'a, 'b> Builder<'a, 'b> {
     fn fix_size(&mut self, mut value: Value) -> Value {
         match self.size_of(value).or_else(|| self.get_fallback_size(&value)) {
             Some(size) => value.size = Some(size),
-            None => self.error(format!("Unable to resolve size of value: {:?}", value)),
+            None => self.error(format!("Unable to resolve size of value: {value:?}")),
         }
         value
     }
@@ -671,6 +671,7 @@ impl<'a, 'b> Builder<'a, 'b> {
                         // Crate a new namespace to define macro identifiers inside of, then the
                         // macro's parameters to the arguments passed to the macro.
                         let old_mapping = std::mem::take(&mut self.scope.mapping);
+                        let old_labels = std::mem::take(&mut self.scope.labels);
                         let old_macro = std::mem::take(&mut self.macro_params);
                         for (param, arg) in macro_def.params.iter().zip(args) {
                             self.macro_params.insert(*param, arg);
@@ -681,6 +682,7 @@ impl<'a, 'b> Builder<'a, 'b> {
                         // Restore previous namespace
                         self.macro_params = old_macro;
                         self.scope.mapping = old_mapping;
+                        self.scope.labels = old_labels;
                     }
                     other => {
                         return Err(format!(
@@ -969,8 +971,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             ExprValue::AddressOf(value, size) => {
                 if value.offset != 0 {
                     return Err(format!(
-                        "{:?} unsupported base expression used in address-of operation",
-                        value
+                        "{value:?} unsupported base expression used in address-of operation",
                     ));
                 }
                 let output = out.unwrap_or_else(|| self.scope.add_tmp(size).into());
@@ -1033,7 +1034,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             SymbolKind::BitRange => {
                 let symbol = &self.scope.globals.bit_ranges[global.id as usize];
                 let source = Value::from(Local::Register(symbol.register));
-                Ok(ExprValue::BitRange(source, symbol.range).into())
+                Ok(ExprValue::BitRange(source, symbol.range))
             }
             _ => Err(format!(
                 "{:?}<{}> is not allowed in this scope",
@@ -1065,7 +1066,7 @@ impl<'a, 'b> Builder<'a, 'b> {
     ) -> Result<ExprValue, String> {
         let pointer = self.resolve_expr(pointer)?;
 
-        if space.as_ref().map_or(false, |&space| space == self.scope.globals.const_ident) {
+        if space.as_ref().is_some_and(|&space| space == self.scope.globals.const_ident) {
             return match pointer {
                 ExprValue::Local(value) => Ok(ExprValue::Local(value.maybe_set_size(size))),
                 ExprValue::Const(x, prev_size) => Ok(ExprValue::Const(x, size.or(prev_size))),
@@ -1081,7 +1082,7 @@ impl<'a, 'b> Builder<'a, 'b> {
         Ok(match space_id {
             pcode::REGISTER_SPACE => ExprValue::RegisterRef(pointer, size.unwrap_or(0)),
             pcode::RAM_SPACE => ExprValue::RamRef(pointer, size.unwrap_or(0)),
-            _ => panic!("unknown space_id: {}", space_id),
+            _ => panic!("unknown space_id: {space_id}"),
         })
     }
 

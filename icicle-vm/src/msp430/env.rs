@@ -99,8 +99,8 @@ impl Msp430 {
         Ok(Self {
             interrupts: Rc::new(interrupts(&mcu)),
             interrupt_rng: XorShiftRng::new(0x1234),
-            sp: cpu.arch.sleigh.get_reg("SP").unwrap().var,
-            sr: cpu.arch.sleigh.get_reg("SR").unwrap().var,
+            sp: cpu.arch.sleigh.get_varnode("SP").unwrap(),
+            sr: cpu.arch.sleigh.get_varnode("SR").unwrap(),
             afl_prev_pc: None,
             interrupt_interval: config.interrupt_interval,
             next_interrupt: config.interrupt_interval,

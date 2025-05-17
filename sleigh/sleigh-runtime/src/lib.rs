@@ -308,25 +308,36 @@ pub struct NamedRegister {
     /// The name of the register.
     pub name: StrIndex,
 
-    /// The register assigned by the runtime.
-    pub var: pcode::VarNode,
-
     /// The offset of this register in the original SLEIGH specification.
     pub offset: u32,
+
+    /// The register assigned by the runtime. Note: this value may include a register larger than
+    /// what is supported by the emulator.
+    #[deprecated(
+        note = "Using this field may result in emulation failures when the underlying register is >128-bits. Use `get_var` or `slice_var` instead."
+    )]
+    pub var: pcode::VarNode,
 }
 
 impl NamedRegister {
-    /// Get the varnode associated with a slice of the register. Handling cases where the VarId may
-    /// change because of SIMD register splitting.
-    pub fn get_var(
+    pub fn new(name: StrIndex, offset: u32, var: pcode::VarNode) -> Self {
+        #[allow(deprecated)]
+        Self { name, offset, var }
+    }
+
+    /// Get the varnode associated with a slice of the register. Handles cases where the VarId
+    /// changes because of SIMD register splitting.
+    #[allow(deprecated)]
+    pub fn slice_var(
         &self,
-        offset: pcode::VarOffset,
+        base_offset: pcode::VarOffset,
         size: pcode::VarSize,
     ) -> Option<pcode::VarNode> {
-        if offset + size > self.var.size {
+        if base_offset + size > self.var.size {
             return None;
         }
 
+        let offset = self.var.offset + base_offset;
         let (id_offset, var_offset) = (offset / MAX_REG_SIZE, offset % MAX_REG_SIZE);
         // Ensure that the access doesn't overlap with multiple sub-registers.
         if var_offset + size > MAX_REG_SIZE {
@@ -334,12 +345,23 @@ impl NamedRegister {
         }
 
         Some(
-            pcode::VarNode::new(
-                self.var.id + id_offset as i16,
-                self.var.size - id_offset * MAX_REG_SIZE,
-            )
-            .slice(var_offset, size),
+            pcode::VarNode::new(self.var.id + id_offset as i16, var_offset + size)
+                .slice(var_offset, size),
         )
+    }
+
+    /// Get the varnode associated with the full register. Returns `None` if the register is larger
+    /// than 128 bits.
+    pub fn get_var(&self) -> Option<pcode::VarNode> {
+        #[allow(deprecated)]
+        self.slice_var(0, self.var.size)
+    }
+
+    /// Get the raw underlying varnode. May cause emulation failures if the register is larger than
+    /// 128 bits.
+    pub fn get_raw_var(&self) -> pcode::VarNode {
+        #[allow(deprecated)]
+        self.var
     }
 }
 
@@ -451,10 +473,10 @@ pub struct SleighData {
     /// Instead of exposing a register_space/unique_space where values are index by an offset like
     /// Ghidra does, we instead map all global space offsets to local offsets within
     /// non-overlapping registers.
+    ///
+    /// Note: this mapping always corresponds to an offset within the largest overlapping register
+    /// and should be sliced appropriately.
     pub register_mapping: HashMap<u32, (NamedRegIndex, pcode::VarOffset)>,
-
-    /// Varnodes reserved for temporaries that live across internal block boundaries.
-    pub saved_tmps: Vec<pcode::VarNode>,
 
     pub debug_info: DebugInfo,
 
@@ -513,12 +535,21 @@ impl SleighData {
 
     /// Lookup a context field
     pub fn get_context_field(&self, name: &str) -> Option<ContextField> {
-        self.context_field_mapping.get(name).map(|x| self.context_fields[*x as usize])
+        self.context_field_mapping.get(name).map(|x| self.context_fields[*x])
     }
 
-    /// Get the register for a given name.
+    /// Get the metadata about a register for a given name.
     pub fn get_reg(&self, name: &str) -> Option<&NamedRegister> {
         self.register_name_mapping.get(name).map(|x| &self.named_registers[*x as usize])
+    }
+
+    /// Get the varnode associated with a register name.
+    //
+    /// Note: Returns `None` if the varnode is larger than 128-bits. To access bits within larger
+    /// varnodes, use [SleighData::get_reg] to get the register metadata and slice the varnode
+    /// manually using the [NamedRegister::slice].
+    pub fn get_varnode(&self, name: &str) -> Option<pcode::VarNode> {
+        self.get_reg(name)?.get_var()
     }
 
     /// Given a runtime varnode, attempt to find the best matching register name from the original
@@ -551,6 +582,7 @@ impl SleighData {
         self.registers.push(RegisterInfo { name, size, offset: 0xfff000, aliases: vec![] });
 
         let var = pcode::VarNode::new(id, size);
+        #[allow(deprecated)]
         self.named_registers.push(NamedRegister { name, var, offset: 0xfff000 });
 
         Some(var)
@@ -560,6 +592,7 @@ impl SleighData {
     pub fn map_sleigh_reg(&self, offset: u32, size: u8) -> Option<(&NamedRegister, u8)> {
         let &(idx, varnode_offset) = self.register_mapping.get(&offset)?;
         let parent_reg = &self.named_registers[idx as usize];
+        #[allow(deprecated)]
         if varnode_offset + size > parent_reg.var.size {
             // Attempted to access bytes outside of the register.
             return None;
