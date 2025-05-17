@@ -40,7 +40,7 @@ impl CustomSetup {
                     cpu.exception = Exception::new(ExceptionCode::ExecViolation, addr);
                 }),
                 Hooks::PrintChar(reg) => {
-                    let reg = vm.cpu.arch.sleigh.get_reg(reg).unwrap().var;
+                    let reg = vm.cpu.arch.sleigh.get_varnode(reg).unwrap();
                     vm.hook_address(addr, move |cpu: &mut icicle_vm::cpu::Cpu, _| {
                         let char = cpu.read_var::<u32>(reg);
                         print!("{}", char as u8 as char);
@@ -48,8 +48,8 @@ impl CustomSetup {
                     });
                 }
                 Hooks::PrintStrSlice(data_reg, len_reg) => {
-                    let data = vm.cpu.arch.sleigh.get_reg(data_reg).unwrap().var;
-                    let len = vm.cpu.arch.sleigh.get_reg(len_reg).unwrap().var;
+                    let data = vm.cpu.arch.sleigh.get_varnode(data_reg).unwrap();
+                    let len = vm.cpu.arch.sleigh.get_varnode(len_reg).unwrap();
 
                     let mut buf = vec![];
                     vm.hook_address(addr, move |cpu: &mut icicle_vm::cpu::Cpu, _| {
@@ -62,7 +62,7 @@ impl CustomSetup {
                     });
                 }
                 Hooks::PrintCstr(reg) => {
-                    let reg = vm.cpu.arch.sleigh.get_reg(reg).unwrap().var;
+                    let reg = vm.cpu.arch.sleigh.get_varnode(reg).unwrap();
                     let mut buf = [0; 64];
                     vm.hook_address(addr, move |cpu: &mut icicle_vm::cpu::Cpu, _| {
                         let ptr = cpu.read_var::<u32>(reg) as u64;
@@ -71,7 +71,7 @@ impl CustomSetup {
                     });
                 }
                 Hooks::PrintLnCstr(reg) => {
-                    let reg = vm.cpu.arch.sleigh.get_reg(reg).unwrap().var;
+                    let reg = vm.cpu.arch.sleigh.get_varnode(reg).unwrap();
                     let mut buf = [0; 64];
                     vm.hook_address(addr, move |cpu: &mut icicle_vm::cpu::Cpu, _| {
                         let ptr = cpu.read_var::<u32>(reg) as u64;
@@ -96,9 +96,8 @@ impl CustomSetup {
                     .cpu
                     .arch
                     .sleigh
-                    .get_reg(name)
-                    .ok_or_else(|| anyhow::format_err!("unknown register: {name}"))?
-                    .var;
+                    .get_varnode(name)
+                    .ok_or_else(|| anyhow::format_err!("unknown register: {name}"))?;
                 entry.location = Location::VarNode(var);
             }
             if let Location::Symbol(sym) = &entry.location {

@@ -42,7 +42,7 @@ pub mod x64 {
 
     impl X64 {
         pub fn new(arch: &icicle_cpu::Arch) -> Self {
-            let r = |name: &str| arch.sleigh.get_reg(name).unwrap().var;
+            let r = |name: &str| arch.sleigh.get_varnode(name).unwrap();
             Self {
                 rax: r("RAX"),
                 rdi: r("RDI"),
@@ -101,7 +101,7 @@ pub mod i386 {
 
     impl I386 {
         pub fn new(arch: &icicle_cpu::Arch) -> Self {
-            let r = |name: &str| arch.sleigh.get_reg(name).unwrap().var;
+            let r = |name: &str| arch.sleigh.get_varnode(name).unwrap();
             Self {
                 eax: r("EAX"),
                 ebx: r("EBX"),

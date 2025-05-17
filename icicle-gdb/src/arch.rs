@@ -41,7 +41,7 @@ impl DynamicTarget for IcicleX64 {
 
     #[rustfmt::skip]
     fn new(cpu: &Cpu) -> Self {
-        let r = |name: &str| cpu.arch.sleigh.get_reg(name).unwrap().var;
+        let r = |name: &str| cpu.arch.sleigh.get_varnode(name).unwrap();
         Self {
             regs: [
                 r("RAX"), r("RBX"), r("RCX"), r("RDX"), r("RSI"), r("RDI"),
@@ -110,7 +110,7 @@ impl DynamicTarget for IcicleMips32 {
 
     #[rustfmt::skip]
     fn new(cpu: &Cpu) -> Self {
-        let r = |name: &str| cpu.arch.sleigh.get_reg(name).unwrap().var;
+        let r = |name: &str| cpu.arch.sleigh.get_varnode(name).unwrap();
         Self {
             r: [
                 r("zero"), r("at"), r("v0"), r("v1"),
@@ -167,7 +167,7 @@ impl DynamicTarget for IcicleArm {
 
     #[rustfmt::skip]
     fn new(cpu: &Cpu) -> Self {
-        let r = |name: &str| cpu.arch.sleigh.get_reg(name).unwrap().var;
+        let r = |name: &str| cpu.arch.sleigh.get_varnode(name).unwrap();
         Self {
             r: [
                 r("r0"), r("r1"), r("r2"), r("r3"), r("r4"), r("r5"), r("r6"), r("r7"),
@@ -206,7 +206,7 @@ impl DynamicTarget for IcicleMsp430 {
 
     #[rustfmt::skip]
     fn new(cpu: &Cpu) -> Self {
-        let r = |name: &str| cpu.arch.sleigh.get_reg(name).unwrap().var;
+        let r = |name: &str| cpu.arch.sleigh.get_varnode(name).unwrap();
         Self {
             pc: r("PC"),
             sp: r("SP"),

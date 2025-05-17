@@ -23,7 +23,7 @@ pub struct StatusRegHandler {
 
 impl StatusRegHandler {
     pub fn new(sleigh: &SleighData) -> Self {
-        let r = |name: &str| sleigh.get_reg(name).unwrap().var;
+        let r = |name: &str| sleigh.get_varnode(name).unwrap();
         Self { cf: r("CF"), zf: r("ZF"), sf: r("SF"), of: r("OF"), ie: r("IE"), sr: r("SR") }
     }
 }
