@@ -6,9 +6,9 @@ use ahash::AHashMap as HashMap;
 
 use pcode::PcodeDisplay;
 
-use crate::{cpu::Arch, lifter::optimize::Optimizer, BlockTable};
+use crate::{BlockTable, cpu::Arch, lifter::optimize::Optimizer};
 
-pub use self::pcodeops::{get_injectors, PcodeOpInjector};
+pub use self::pcodeops::{PcodeOpInjector, get_injectors};
 
 pub trait InstructionSource {
     fn arch(&self) -> &Arch;
@@ -725,7 +725,7 @@ impl BlockLifter {
         if group_start == group_end {
             return match exit_target {
                 Target::Invalid(e, _) => Err(e),
-                target => panic!("Expected Target::Invalid, got {:?}", target),
+                target => panic!("Expected Target::Invalid, got {target:?}"),
             };
         }
 
@@ -754,10 +754,17 @@ impl BlockLifter {
             match stmt.op {
                 pcode::Op::Branch(pcode::BranchHint::Jump) => {
                     let [cond, target] = stmt.inputs.get();
+                    if cond.const_eq(0) {
+                        // Skip branches that are never taken.
+                        continue;
+                    }
 
                     if target.const_eq(next_vaddr) {
-                        // Treat a branch to the next address as an internal branch (this
-                        // is used for the pcode encoding of instructions like CMOV).
+                        // Treat a branch to the next address as an internal branch (this is used
+                        // for the pcode encoding of instructions like CMOV).
+                        //
+                        // @checkme: this is already done in the sleigh-lifter, so we might not need
+                        // to do it here.
                         self.current.forward_jumps.push((ctx.current_block_id(), NEXT_ADDR_LABEL));
                         label_to_next = true;
 
@@ -791,6 +798,12 @@ impl BlockLifter {
                     block_exit = true;
                 }
                 pcode::Op::PcodeBranch(label) => {
+                    let cond = stmt.inputs.first();
+                    if cond.const_eq(0) {
+                        // Skip branches that are never taken.
+                        continue;
+                    }
+
                     let label_block = match self.current.labels.get(&label) {
                         Some(block) => *block,
                         None => {
@@ -798,7 +811,6 @@ impl BlockLifter {
                             UNKNOWN_BLOCK
                         }
                     };
-                    let cond = stmt.inputs.first();
                     let target = Target::Internal(label_block);
                     let fallthrough = ctx.next_block();
                     ctx.finalize_block(
@@ -853,6 +865,7 @@ impl BlockLifter {
         // Resolve any forward jumps.
         for (src_block, label) in self.current.forward_jumps.drain(..) {
             if let Some(target) = ctx.code.blocks[src_block].exit.target_mut() {
+                assert!(matches!(target, Target::Internal(UNKNOWN_BLOCK)));
                 *target = Target::Internal(self.current.labels[&label]);
             }
         }
@@ -918,8 +931,8 @@ where
 {
     fn fmt(&self, f: &mut std::fmt::Formatter, ctx: &T) -> std::fmt::Result {
         match self {
-            Self::Invalid(e, addr) => write!(f, "<INVALID {:?} {:#x}>", e, addr),
-            Self::Internal(block) => write!(f, "<L{}>", block),
+            Self::Invalid(e, addr) => write!(f, "<INVALID {e:?} {addr:#x}>"),
+            Self::Internal(block) => write!(f, "<L{block}>"),
             Self::External(value) => write!(f, "{}", value.display(ctx)),
         }
     }
@@ -1030,7 +1043,7 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter, ctx: &T) -> std::fmt::Result {
         match self {
             Self::Jump { target: Target::Invalid(e, addr) } => {
-                write!(f, "invalid_instruction {:?} {:#x}", e, addr)
+                write!(f, "invalid_instruction {e:?} {addr:#x}")
             }
             Self::Jump { target } => write!(f, "jump {}", target.display(ctx)),
             Self::Branch { cond, target, .. } => {

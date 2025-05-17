@@ -15,12 +15,17 @@ pub struct ConstEval {
     pub inputs: HashMap<i16, usize>,
 
     /// Keeps track which values are already stored in VarNodes.
-    pub results: HashMap<Value, pcode::VarNode>,
+    results: HashMap<Value, pcode::VarNode>,
 }
 
 impl ConstEval {
     pub fn new() -> Self {
         Self { inputs: HashMap::new(), values: vec![], results: HashMap::new() }
+    }
+
+    pub fn purge_temporaries(&mut self, is_temporary: impl Fn(pcode::VarId) -> bool) {
+        self.results.clear();
+        self.inputs.retain(|id, _| is_temporary(*id));
     }
 
     pub fn eval(&mut self, stmt: pcode::Instruction) -> OutputExprId {
@@ -40,9 +45,9 @@ impl ConstEval {
         eval(stmt.op, &a, &b, out);
 
         if DEBUG && !out.is_empty() {
-            eprintln!("a = {} {:?}", a, a);
+            eprintln!("a = {a} {a:?}");
             if !b.is_empty() {
-                eprintln!("b = {} {:?}", b, b);
+                eprintln!("b = {b} {b:?}");
             }
             eprintln!("x = {} {:?}", out.display(), out.display());
         }
@@ -943,7 +948,7 @@ fn display_bits(bits: &[Bit], f: &mut std::fmt::Formatter) -> std::fmt::Result {
             Bit::Zero => '0',
             Bit::One => '1',
         };
-        write!(f, "{}", x)?;
+        write!(f, "{x}")?;
     }
 
     Ok(())
@@ -955,7 +960,7 @@ fn debug_bits(bits: &[Bit], f: &mut std::fmt::Formatter) -> std::fmt::Result {
     }
 
     if let Some(x) = bits.get_const() {
-        write!(f, " ({:#0x})", x)?;
+        write!(f, " ({x:#0x})")?;
     }
     else {
         write!(f, " (")?;
