@@ -139,18 +139,59 @@ impl DynamicTarget for IcicleMips32 {
     }
 
     fn read_registers(&self, cpu: &Cpu, regs: &mut MipsCoreRegs<u32>) {
-        regs.r.iter_mut().zip(&self.r).for_each(|(dst, var)| *dst = cpu.read_var(*var));
-        regs.lo = cpu.read_var(self.lo);
-        regs.hi = cpu.read_var(self.hi);
-        regs.pc = cpu.read_var(self.pc);
-        regs.fpu.r.iter_mut().zip(&self.fpu_r).for_each(|(dst, var)| *dst = cpu.read_var(*var));
-        regs.fpu.fcsr = cpu.read_var(self.fcsr);
-        regs.fpu.fir = cpu.read_var(self.fir);
+        if cpu.arch.sleigh.big_endian {
+            regs.r
+                .iter_mut()
+                .zip(&self.r)
+                .for_each(|(dst, var)| *dst = u32::to_be(cpu.read_var(*var)));
+            regs.lo = u32::to_be(cpu.read_var(self.lo));
+            regs.hi = u32::to_be(cpu.read_var(self.hi));
+            regs.pc = u32::to_be(cpu.read_var(self.pc));
+            regs.fpu
+                .r
+                .iter_mut()
+                .zip(&self.fpu_r)
+                .for_each(|(dst, var)| *dst = u32::to_be(cpu.read_var(*var)));
+            regs.fpu.fcsr = u32::to_be(cpu.read_var(self.fcsr));
+            regs.fpu.fir = u32::to_be(cpu.read_var(self.fir));
+        }
+        else {
+            regs.r.iter_mut().zip(&self.r).for_each(|(dst, var)| *dst = cpu.read_var(*var));
+            regs.lo = cpu.read_var(self.lo);
+            regs.hi = cpu.read_var(self.hi);
+            regs.pc = cpu.read_var(self.pc);
+            regs.fpu.r.iter_mut().zip(&self.fpu_r).for_each(|(dst, var)| *dst = cpu.read_var(*var));
+            regs.fpu.fcsr = cpu.read_var(self.fcsr);
+            regs.fpu.fir = cpu.read_var(self.fir);
+        }
     }
 
     fn write_registers(&self, cpu: &mut Cpu, regs: &MipsCoreRegs<u32>) {
-        let _cpu = cpu;
-        let _regs = regs;
+        if cpu.arch.sleigh.big_endian {
+            regs.r
+                .iter()
+                .zip(&self.r)
+                .for_each(|(dst, var)| cpu.write_var(*var, u32::from_be(*dst)));
+            cpu.write_var(self.lo, u32::from_be(regs.lo));
+            cpu.write_var(self.hi, u32::from_be(regs.hi));
+            cpu.write_var(self.pc, u32::from_be(regs.pc));
+            regs.fpu
+                .r
+                .iter()
+                .zip(&self.fpu_r)
+                .for_each(|(dst, var)| cpu.write_var(*var, u32::from_be(*dst)));
+            cpu.write_var(self.fcsr, u32::from_be(regs.fpu.fcsr));
+            cpu.write_var(self.fir, u32::from_be(regs.fpu.fir));
+        }
+        else {
+            regs.r.iter().zip(&self.r).for_each(|(dst, var)| cpu.write_var(*var, *dst));
+            cpu.write_var(self.lo, regs.lo);
+            cpu.write_var(self.hi, regs.hi);
+            cpu.write_var(self.pc, regs.pc);
+            regs.fpu.r.iter().zip(&self.fpu_r).for_each(|(dst, var)| cpu.write_var(*var, *dst));
+            cpu.write_var(self.fcsr, regs.fpu.fcsr);
+            cpu.write_var(self.fir, regs.fpu.fir);
+        }
     }
 }
 
@@ -159,12 +200,13 @@ pub struct IcicleArm {
     pub sp: VarNode,
     pub lr: VarNode,
     pub pc: VarNode,
+    pub f: [VarNode; 8],
+    pub fps: VarNode,
     pub cpsr: VarNode,
+    pub thumb: VarNode,
 }
 
-impl DynamicTarget for IcicleArm {
-    type Arch = gdbstub_arch::arm::Armv4t;
-
+impl IcicleArm {
     #[rustfmt::skip]
     fn new(cpu: &Cpu) -> Self {
         let r = |name: &str| cpu.arch.sleigh.get_varnode(name).unwrap();
@@ -176,16 +218,44 @@ impl DynamicTarget for IcicleArm {
             sp: r("sp"),
             lr: r("lr"),
             pc: r("pc"),
+            f: [
+                r("fp0"), r("fp1"), r("fp2"), r("fp3"),
+                r("fp4"), r("fp5"), r("fp6"), r("fp7"),
+            ],
+            fps: r("fpsr"),
             cpsr: r("cpsr"),
+            thumb: r("TB"),
         }
     }
 
-    fn read_registers(&self, cpu: &Cpu, regs: &mut ArmCoreRegs) {
+    fn read_core_regs(&self, cpu: &Cpu, regs: &mut ArmCoreRegs) {
         regs.r.iter_mut().zip(&self.r).for_each(|(dst, var)| *dst = cpu.read_var(*var));
         regs.sp = cpu.read_var(self.sp);
         regs.lr = cpu.read_var(self.lr);
         regs.pc = cpu.read_var(self.pc);
+
+        regs.f.iter_mut().zip(&self.f).for_each(|(dst, var)| {
+            dst[..10].copy_from_slice(&cpu.read_var::<[u8; 10]>(*var));
+            dst[10..].fill(0);
+        });
+        regs.fps = cpu.read_var(self.fps);
+
+        let thumb = cpu.read_var::<u8>(self.thumb) as u32;
         regs.cpsr = cpu.read_var(self.cpsr);
+        regs.cpsr = (regs.cpsr & !(1 << 5)) | (thumb << 5);
+    }
+}
+
+impl DynamicTarget for IcicleArm {
+    type Arch = gdbstub_arch::arm::Armv4t;
+
+    #[rustfmt::skip]
+    fn new(cpu: &Cpu) -> Self {
+        IcicleArm::new(cpu)
+    }
+
+    fn read_registers(&self, cpu: &Cpu, regs: &mut ArmCoreRegs) {
+        self.read_core_regs(cpu, regs);
     }
 
     fn write_registers(&self, cpu: &mut Cpu, regs: &ArmCoreRegs) {

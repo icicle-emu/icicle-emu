@@ -72,11 +72,11 @@ fn start(target: &str, args: &[String]) -> anyhow::Result<()> {
         }
 
         match target.architecture {
-            Architecture::X86_64 => run(stream, &mut icicle_gdb::X64Stub::new(vm))?,
+            Architecture::X86_64 => run(stream, &mut icicle_gdb::X64Stub::new(&mut vm))?,
             Architecture::Mips32(target_lexicon::Mips32Architecture::Mipsel) => {
-                run(stream, &mut icicle_gdb::Mips32Stub::new(vm))?
+                run(stream, &mut icicle_gdb::Mips32Stub::new(&mut vm))?
             }
-            Architecture::Msp430 => run(stream, &mut icicle_gdb::Msp430Stub::new(vm))?,
+            Architecture::Msp430 => run(stream, &mut icicle_gdb::Msp430Stub::new(&mut vm))?,
             other => anyhow::bail!("Unsupported architecture: {}", other),
         }
     }

@@ -144,7 +144,7 @@ pub fn run_without_parent<T: FuzzTarget>(
     }
 
     if let Ok(addr) = std::env::var("GDB_BIND") {
-        icicle_gdb::listen_auto(&addr, vm)?;
+        icicle_gdb::listen_auto(&addr, &mut vm)?;
         return Ok(());
     }
 

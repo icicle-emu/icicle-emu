@@ -9,7 +9,7 @@ anyhow = { workspace = true }
 pcode = { workspace = true }
 target-lexicon = { workspace = true }
 tracing = { workspace = true }
-gdbstub = "0.7.1"
-gdbstub_arch = "0.3.0"
+gdbstub = { git = "https://github.com/mchesser/gdbstub/" }
+gdbstub_arch = { git = "https://github.com/mchesser/gdbstub/" }
 num-traits = "0.2.18"
 tracing-subscriber = { version = "0.3.18", default-features = false, features = ["fmt", "tracing-log", "env-filter", "ansi"] }
