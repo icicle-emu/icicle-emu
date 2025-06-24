@@ -1,13 +1,13 @@
 //! Code for loading SLEIGH specifications using ldefs
 
+use bincode::{Decode, Encode};
+use serde_derive::Deserialize;
+use sleigh_runtime::SleighData;
 use std::{
     fs::File,
     io::BufReader,
     path::{Path, PathBuf},
 };
-
-use serde_derive::Deserialize;
-use sleigh_runtime::SleighData;
 
 #[derive(Debug)]
 pub enum Error {
@@ -38,7 +38,7 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-#[derive(Default)]
+#[derive(Default, Encode, Decode)]
 pub struct CallingCov {
     /// Varnodes of integer arguments for the calling convention.
     pub int_args: Vec<pcode::VarNode>,
@@ -48,6 +48,7 @@ pub struct CallingCov {
     pub unaffected: Vec<pcode::VarNode>,
 }
 
+#[derive(Encode, Decode)]
 pub struct SleighLanguage {
     /// Processor name.
     pub processor: String,
@@ -67,6 +68,16 @@ pub struct SleighLanguage {
     pub sp: pcode::VarNode,
     /// The default calling convention.
     pub default_calling_cov: CallingCov,
+}
+
+impl SleighLanguage {
+    pub fn as_bytes(&self) -> Result<Vec<u8>, bincode::error::EncodeError> {
+        bincode::encode_to_vec(self, bincode::config::standard())
+    }
+
+    pub fn from_slice(data: impl AsRef<[u8]>) -> Result<Self, bincode::error::DecodeError> {
+        bincode::decode_from_slice(data.as_ref(), bincode::config::standard()).map(|(sleigh, _)| sleigh)
+    }
 }
 
 pub fn build(
@@ -403,7 +414,7 @@ impl LanguageDesc {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Encode, Decode)]
 #[serde(rename_all = "lowercase")]
 pub enum Endianness {
     Little,

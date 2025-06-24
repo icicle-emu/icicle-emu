@@ -6,3 +6,4 @@ edition = "2021"
 [dependencies]
 pcode = { path = "../pcode" }
 sleigh-parse = { path = "../sleigh-parse" }
+bincode = "2.0.1"

@@ -42,9 +42,7 @@ pub fn build(config: &Config) -> Result<Vm, BuildError> {
     build_with_path(config, &get_default_processors_path())
 }
 
-pub fn build_with_path(config: &Config, processors: &Path) -> Result<Vm, BuildError> {
-    let mut lang = sleigh_init_with_path(&config.triple, processors)?;
-
+pub fn build_with_lang(config: &Config, mut lang: SleighLanguage) -> Result<Vm, BuildError> {
     let reg_next_pc = lang
         .sleigh
         .add_custom_reg("NEXT_PC", 8)
@@ -96,6 +94,12 @@ pub fn build_with_path(config: &Config, processors: &Path) -> Result<Vm, BuildEr
     };
 
     build_vm(config, arch)
+}
+
+
+pub fn build_with_path(config: &Config, processors: &Path) -> Result<Vm, BuildError> {
+    let lang = sleigh_init_with_path(&config.triple, processors)?;
+    build_with_lang(config, lang)
 }
 
 fn build_vm(config: &Config, arch: Arch) -> Result<Vm, BuildError> {
