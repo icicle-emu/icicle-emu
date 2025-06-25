@@ -1,5 +1,5 @@
 use std::fmt::Display;
-
+use bincode::{Decode, Encode};
 use crate::PcodeDisplay;
 
 /// An identifier associated with a VarNode. 0 is reserved for invalid (or unused) variables.
@@ -36,7 +36,7 @@ pub const REGISTER_SPACE: MemId = 1;
 pub const RESERVED_SPACE_END: MemId = 2;
 
 /// Represents a reference to a slice of a P-code variable.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
 pub struct VarNode {
     pub id: VarId,
     pub offset: VarOffset,
@@ -508,7 +508,7 @@ impl From<Op> for Instruction {
 }
 
 /// P-code operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Encode, Decode)]
 pub enum Op {
     Copy,
     Select(VarId),
@@ -734,7 +734,7 @@ impl Op {
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Encode, Decode)]
 pub enum BranchHint {
     Jump,
     Call,

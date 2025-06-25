@@ -1,3 +1,4 @@
+use bincode::{Decode, Encode};
 use crate::parser::StrIndex;
 pub use crate::Span;
 
@@ -58,7 +59,7 @@ impl ParserDisplay for Item {
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Encode, Decode)]
 pub struct Ident(pub StrIndex);
 
 impl ParserDisplay for Ident {
@@ -318,7 +319,7 @@ impl ParserDisplay for ConstraintExpr {
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Encode, Decode)]
 pub enum ConstraintCmp {
     Equal,
     NotEqual,
@@ -428,7 +429,7 @@ impl ParserDisplay for PatternExpr {
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Encode, Decode)]
 pub enum PatternOp {
     Add,
     Sub,

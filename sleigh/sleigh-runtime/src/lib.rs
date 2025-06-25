@@ -9,7 +9,7 @@ pub mod matcher;
 pub mod semantics;
 
 use std::{collections::HashMap, fmt::Display};
-
+use bincode::{Decode, Encode};
 pub use crate::{
     decoder::{ContextModValue, Decoder, DisasmConstantValue, Instruction, SubtableCtx},
     expr::PatternExprOp,
@@ -117,7 +117,7 @@ pub type TableId = u32;
 pub type ConstructorId = u32;
 pub type AttachmentId = u32;
 
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, Encode, Decode)]
 pub struct Token {
     /// Token could overwrite the global endian
     pub big_endian: bool,
@@ -141,7 +141,7 @@ impl Token {
     }
 }
 
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, Encode, Decode)]
 pub struct Field {
     /// The bit offset of the field within the parent value.
     pub offset: u16,
@@ -205,7 +205,7 @@ impl TokenField {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Encode, Decode)]
 pub struct ContextField {
     /// Describes how the field is encoded within the context register.
     pub field: Field,
@@ -219,11 +219,13 @@ pub type LocalIndex = u32;
 pub type SubtableIndex = u32;
 
 /// Represents a group of constructors that are disambiguated by constraint expression.
+#[derive(Encode, Decode)]
 pub struct Table {
     /// The index of the initial matcher to use.
     pub matcher: MatcherIndex,
 }
 
+#[derive(Encode, Decode)]
 pub struct Constructor {
     /// The ID of the table that this constructor belongs to.
     pub table: TableId,
@@ -262,14 +264,14 @@ pub struct Constructor {
     pub num_labels: u32,
 }
 
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, Encode, Decode)]
 pub enum EvalKind {
     ContextField(Field),
     TokenField(Token, Field),
 }
 
 /// An action for the decoder to perform.
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Encode, Decode)]
 pub enum DecodeAction {
     /// Modifies the context register.
     ModifyContext(Field, PatternExprRange),
@@ -303,7 +305,7 @@ pub enum DecodeAction {
 pub type RegId = u32;
 pub type NamedRegIndex = u32;
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Encode, Decode)]
 pub struct NamedRegister {
     /// The name of the register.
     pub name: StrIndex,
@@ -365,7 +367,7 @@ impl NamedRegister {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Encode, Decode)]
 pub struct RegisterAlias {
     /// The offset (in bytes) from the start of the full-register.
     pub offset: u16,
@@ -375,6 +377,7 @@ pub struct RegisterAlias {
     pub name: StrIndex,
 }
 
+#[derive(Encode, Decode)]
 pub struct RegisterInfo {
     /// The name of the full-register used as a fallback if there is no exact match.
     pub name: StrIndex,
@@ -389,20 +392,21 @@ pub struct RegisterInfo {
     pub aliases: Vec<RegisterAlias>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Encode, Decode)]
 pub enum DisplaySegment {
     Literal(StrIndex),
     Field(LocalIndex),
     Subtable(LocalIndex),
 }
 
+#[derive(Encode, Decode)]
 pub enum AttachmentIndex {
     Register((u32, u32), ValueSize),
     Name((u32, u32)),
     Value((u32, u32)),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Encode, Decode)]
 pub struct RegisterAttachment {
     pub name: StrIndex,
     pub offset: u32,
@@ -414,11 +418,12 @@ pub enum AttachmentRef<'a> {
     Register(&'a [Option<RegisterAttachment>], ValueSize),
 }
 
+#[derive(Encode, Decode)]
 pub struct ConstructorDebugInfo {
     pub line: String,
 }
 
-#[derive(Default)]
+#[derive(Default, Encode, Decode)]
 pub struct DebugInfo {
     pub subtable_names: Vec<StrIndex>,
     pub constructors: Vec<ConstructorDebugInfo>,
@@ -433,7 +438,7 @@ impl DebugInfo {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Encode, Decode)]
 pub struct SleighData {
     pub strings: String,
 
