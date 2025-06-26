@@ -842,7 +842,7 @@ macro_rules! impl_eval_int_single_op {
     };
 }
 
-impl_eval_int_single_op! { IntNegate, (a, (a.to_signed().wrapping_neg()).to_unsigned()) }
+impl_eval_int_single_op! { IntNegate, (a, a.wrapping_neg()) }
 impl_eval_int_single_op! { IntNot, (a, !a) }
 
 /// Represents an operation taking two inputs of the same size producing a boolean output
