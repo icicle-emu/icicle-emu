@@ -1,5 +1,5 @@
 use std::fmt::Display;
-
+use bincode::{Decode, Encode};
 use crate::PcodeDisplay;
 
 /// An identifier associated with a VarNode. 0 is reserved for invalid (or unused) variables.
@@ -36,7 +36,7 @@ pub const REGISTER_SPACE: MemId = 1;
 pub const RESERVED_SPACE_END: MemId = 2;
 
 /// Represents a reference to a slice of a P-code variable.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
 pub struct VarNode {
     pub id: VarId,
     pub offset: VarOffset,
@@ -71,22 +71,16 @@ impl VarNode {
     }
 
     #[inline]
-    pub fn try_slice(self, offset: VarOffset, size: VarSize) -> Option<VarNode> {
-        if offset + size > self.size {
-            return None;
-        }
-        Some(VarNode { offset: self.offset + offset, size, ..self })
-    }
-
-    #[inline]
     pub fn slice(self, offset: VarOffset, size: VarSize) -> VarNode {
-        match self.try_slice(offset, size) {
-            Some(node) => node,
-            None => panic!(
+        // @fixme: return an error here instead of panicking? This should be verified by the
+        // sleigh-compiler.
+        if offset + size > self.size {
+            panic!(
                 "VarNode::slice: {} (offset) + {} (size) > {} (self.size)",
                 offset, size, self.size
-            ),
+            );
         }
+        VarNode { offset: self.offset + offset, size, ..self }
     }
 
     #[inline]
@@ -331,7 +325,7 @@ impl Block {
             .iter()
             .take(offset)
             .filter(|x| matches!(x.op, Op::InstructionMarker))
-            .next_back()
+            .last()
             .map(|x| x.inputs.first().as_u64())
     }
 
@@ -508,7 +502,7 @@ impl From<Op> for Instruction {
 }
 
 /// P-code operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Encode, Decode)]
 pub enum Op {
     Copy,
     Select(VarId),
@@ -734,7 +728,7 @@ impl Op {
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Encode, Decode)]
 pub enum BranchHint {
     Jump,
     Call,

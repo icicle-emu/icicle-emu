@@ -42,15 +42,13 @@ pub fn build(config: &Config) -> Result<Vm, BuildError> {
     build_with_path(config, &get_default_processors_path())
 }
 
-pub fn build_with_path(config: &Config, processors: &Path) -> Result<Vm, BuildError> {
-    let mut lang = sleigh_init_with_path(&config.triple, processors)?;
-
+pub fn build_with_lang(config: &Config, mut lang: SleighLanguage) -> Result<Vm, BuildError> {
     let reg_next_pc = lang
         .sleigh
         .add_custom_reg("NEXT_PC", 8)
         .ok_or(BuildError::SpecCompileError("failed to add varnode for `NEXT_PC`".into()))?;
 
-    let reg_isa_mode = lang.sleigh.get_varnode("ISAModeSwitch");
+    let reg_isa_mode = lang.sleigh.get_reg("ISAModeSwitch").map(|x| x.var);
 
     // Set initial context values for architectures that support mode switching.
     //
@@ -64,7 +62,8 @@ pub fn build_with_path(config: &Config, processors: &Path) -> Result<Vm, BuildEr
         _ => vec![lang.initial_ctx],
     };
 
-    let get_reg = |name: &str| lang.sleigh.get_varnode(name).ok_or(BuildError::InvalidConfig);
+    let get_reg =
+        |name: &str| lang.sleigh.get_reg(name).ok_or(BuildError::InvalidConfig).map(|reg| reg.var);
 
     let mut reg_init = vec![];
     for &(name, value) in get_boot_values(config.triple.architecture) {
@@ -95,6 +94,12 @@ pub fn build_with_path(config: &Config, processors: &Path) -> Result<Vm, BuildEr
     };
 
     build_vm(config, arch)
+}
+
+
+pub fn build_with_path(config: &Config, processors: &Path) -> Result<Vm, BuildError> {
+    let lang = sleigh_init_with_path(&config.triple, processors)?;
+    build_with_lang(config, lang)
 }
 
 fn build_vm(config: &Config, arch: Arch) -> Result<Vm, BuildError> {
@@ -183,9 +188,7 @@ fn get_temporary_varnodes(arch: target_lexicon::Architecture) -> &'static [&'sta
             "mult_dat8",
             "mult_dat16",
         ],
-        Architecture::Aarch64(_) => {
-            &["tmpCY", "tmpOV", "tmpNG", "tmpZR", "shift_carry", "tmp_ldXn", "TMPS1", "TMPD1"]
-        }
+        Architecture::Aarch64(_) => &["tmpCY", "tmpOV", "tmpNG", "tmpZR", "shift_carry"],
         Architecture::X86_32(_) | Architecture::X86_64 | Architecture::X86_64h => {
             &["xmmTmp1", "xmmTmp2"]
         }
@@ -337,13 +340,9 @@ pub fn sleigh_init_with_path(target: &target_lexicon::Triple, processors: &Path)
         return Err(BuildError::SpecNotFound(ldef_path));
     }
 
-    let mut builder = sleigh_compile::SleighLanguageBuilder::new(ldef_path, id);
-    if matches!(target.architecture, Architecture::Msp430) {
-        builder = builder.define("SPLITFLAGS");
-    }
-
     // @todo: use compiler specific variants for cspec when available.
-    builder.build().map_err(|e| BuildError::SpecCompileError(e.to_string()))
+    sleigh_compile::ldef::build(&ldef_path, id, None, false)
+        .map_err(|e| BuildError::SpecCompileError(e.to_string()))
 }
 
 fn get_default_processors_path() -> std::path::PathBuf {
@@ -388,7 +387,7 @@ pub mod x86 {
     #[allow(clippy::erasing_op, clippy::identity_op)]
     pub fn eflags(cpu: &icicle_cpu::Cpu) -> u32 {
         let read_bit = |name: &str| {
-            let var = cpu.arch.sleigh.get_varnode(name).unwrap();
+            let var = cpu.arch.sleigh.get_reg(name).unwrap().var;
             (cpu.read_var::<u8>(var) as u32) & 0x1
         };
 
@@ -442,7 +441,7 @@ pub mod x86 {
         let extract_bit = |field: u32| ((eflags >> field.trailing_zeros()) & 0x1) as u8;
 
         let mut write = |name: &str, value: u8| {
-            cpu.write_var(cpu.arch.sleigh.get_varnode(name).unwrap(), value);
+            cpu.write_var(cpu.arch.sleigh.get_reg(name).unwrap().var, value);
         };
 
         write("CF", extract_bit(0x0001));

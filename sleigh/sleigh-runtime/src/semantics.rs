@@ -1,6 +1,8 @@
+use bincode::{Decode, Encode};
+
 pub type ValueSize = u16;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Encode, Decode)]
 pub enum SemanticAction {
     Op { op: pcode::Op, inputs: Vec<Value>, output: Option<Value> },
     AddressOf { output: Value, base: Local },
@@ -10,7 +12,7 @@ pub enum SemanticAction {
     Build(u32),
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct Value {
     /// The underlying local variable that the value is derived from.
     pub local: Local,
@@ -48,7 +50,7 @@ impl From<Local> for Value {
 }
 
 /// Encodes the value exported by the constructor.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum Export {
     /// A statically computed value.
     Value(Value),
@@ -70,13 +72,13 @@ impl Export {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Encode, Decode)]
 pub struct PcodeTmp {
     pub name: Option<sleigh_parse::ast::Ident>,
     pub size: Option<ValueSize>,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum Local {
     /// The address of the current instruction.
     InstStart,

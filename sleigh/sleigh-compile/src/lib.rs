@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::Path};
 
-use sleigh_parse::{Parser, ast};
+use sleigh_parse::{ast, Parser};
 use sleigh_runtime::{
     AttachmentIndex, Constructor, ConstructorDebugInfo, DecodeAction, DisplaySegment,
     NamedRegister, RegisterAlias, RegisterAttachment, SleighData, StrIndex,
@@ -16,9 +16,6 @@ mod symbols;
 
 #[cfg(feature = "ldefs")]
 pub mod ldef;
-
-#[cfg(feature = "ldefs")]
-pub use crate::ldef::SleighLanguageBuilder;
 
 #[cfg(feature = "ldefs")]
 pub fn from_ldef_path(
@@ -129,65 +126,69 @@ pub fn build_inner(mut parser: Parser, verbose: bool) -> Result<SleighData, Stri
             // Fix offsets for big-endian registers.
             let mut offset = reg.offset;
             if ctx.data.big_endian {
-                local_offset = parent_reg.get_raw_var().size - local_offset - reg.size as u8;
+                local_offset = parent_reg.var.size - local_offset - reg.size as u8;
                 offset = parent_reg.offset + local_offset as u32;
             }
 
-            // Map varnodes refering to the current register to the subslice of the parent
-            // register that this register overlaps.
-            let var = parent_reg.get_raw_var().try_slice(local_offset, reg.size as u8).ok_or_else(
-                || {
-                    format!(
-                        "{name_str} partially overlaps with {}",
-                        ctx.data.get_str(parent_reg.name)
-                    )
-                },
-            )?;
-            ctx.data.named_registers[idx] = NamedRegister::new(name, offset, var);
+            // Map varnodes refering to the current register to the subslice of the parent register
+            // that this register overlaps.
+            let var = parent_reg
+                .get_var(local_offset, reg.size as u8)
+                .ok_or_else(|| format!("Internal error: {name_str} crosses 128-bit boundary"))?;
+            ctx.data.named_registers[idx] = NamedRegister { name, var, offset };
 
             // Add the current register as an alias in the parent register (used for the display
-            // implementation of individual varnodes). Values larger than 128 bits (the `None`
-            // case) can never be stored in a single register so are never added as aliases.
-            if let Some(var) = ctx.data.named_registers[idx].get_var() {
-                ctx.data.registers[var.id as usize].aliases.push(RegisterAlias {
-                    offset: var.offset as u16,
-                    size: var.size as u16,
-                    name,
-                });
-            }
+            // implementation)
+            ctx.data.registers[var.id as usize].aliases.push(RegisterAlias {
+                offset: var.offset as u16,
+                size: reg.size,
+                name,
+            });
+            continue;
         }
-        else {
-            // Note: `reg.size` can be larger than 128 bits which is larger than the emulator
-            // supports we handle this by creating new registers for each 128-bit slice (see below)
-            // and fix up the IDs when extracting subslices (see: NamedRegister::get_var).
-            let reg_id = ctx.data.registers.len().try_into().unwrap();
-            ctx.data.named_registers[idx] =
-                NamedRegister::new(name, reg.offset, pcode::VarNode::new(reg_id, reg.size as u8));
 
-            // Map all the bytes within this range to the register.
-            for byte in 0..reg.size {
-                let varnode_offset = reg.offset + byte as u32;
-                ctx.data.register_mapping.insert(varnode_offset, (idx as u32, byte as u8));
-            }
+        // Note: `reg.size` can be larger than 128 bits which is larger than the emulator supports
+        // we handle this by creating new registers for each 128-bit slice (see below) and fix up
+        // the IDs when extracting subslices (see: NamedRegister::get_var).
+        let reg_id = ctx.data.registers.len().try_into().unwrap();
+        ctx.data.named_registers[idx] = NamedRegister {
+            name,
+            var: pcode::VarNode::new(reg_id, reg.size as u8),
+            offset: reg.offset,
+        };
 
-            // We only support operating on registers that are at most 128-bits. This is only an
-            // issue when dealing with vector operations (e.g. AVX, NEON). To handle
-            // this we need to split the register into multiple smaller registers.
-            for i in (0..reg.size).step_by(16) {
-                let size = std::cmp::min(reg.size - i, 16) as u8;
-
-                if i != 0 {
-                    name = ctx.add_string(&format!("{name_str}_{i}"));
-                }
-
-                ctx.data.registers.push(sleigh_runtime::RegisterInfo {
-                    name,
-                    size,
-                    offset: reg.offset + i as u32,
-                    aliases: vec![],
-                });
-            }
+        // Map all the bytes within this range to the register.
+        for byte in 0..reg.size {
+            let varnode_offset = reg.offset + byte as u32;
+            ctx.data.register_mapping.insert(varnode_offset, (idx as u32, byte as u8));
         }
+
+        // We only support operating on registers that are at most 128-bits. This is only an issue
+        // when dealing with vector operations (e.g. AVX, NEON). To handle this we need to split the
+        // register into multiple smaller registers.
+        for i in (0..reg.size).step_by(16) {
+            let size = std::cmp::min(reg.size - i, 16) as u8;
+
+            if i != 0 {
+                name = ctx.add_string(&format!("{}_{}", name_str, i));
+            }
+
+            ctx.data.registers.push(sleigh_runtime::RegisterInfo {
+                name,
+                size,
+                offset: reg.offset + i as u32,
+                aliases: vec![],
+            });
+        }
+    }
+
+    // Register additional varnodes for saved temporaries
+    for i in 0..8 {
+        let var = ctx
+            .data
+            .add_custom_reg(&format!("$tmp{i}"), 16)
+            .ok_or_else(|| format!("failed to reserve varnode for temporary"))?;
+        ctx.data.saved_tmps.push(var);
     }
 
     for attachment in &symbols.attachments {
@@ -217,7 +218,7 @@ pub fn build_inner(mut parser: Parser, verbose: bool) -> Result<SleighData, Stri
             }
             symbols::Attachment::Value(values) => {
                 let start = ctx.data.attached_values.len() as u32;
-                ctx.data.attached_values.extend(values.iter().copied());
+                ctx.data.attached_values.extend(values.iter().map(|v| *v as i64));
                 let end = ctx.data.attached_values.len() as u32;
                 ctx.data.attachments.push(AttachmentIndex::Value((start, end)));
             }
@@ -350,7 +351,7 @@ fn resolve_item(ctx: &mut Context, syms: &mut SymbolTable, item: ast::Item) -> R
 
             if let Err(e) = syms.define_constructor(ctx, &constructor) {
                 if ctx.verbose {
-                    eprintln!("[WARNING] {e}");
+                    eprintln!("[WARNING] {}", e);
                 }
             }
         }

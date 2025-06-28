@@ -1,11 +1,10 @@
 use std::collections::{HashMap, VecDeque};
 
 use crate::{
-    Error, ErrorExt, Span,
     ast::{self, ExprTable, VarSize},
     input::Input,
     lexer::{self, Lexer, SourceId, Token, TokenKind},
-    preprocessor,
+    preprocessor, Error, ErrorExt, Span,
 };
 
 /// Limits the maximum macro expansion depth (used to detect cycles).
@@ -98,7 +97,7 @@ pub struct Parser {
 }
 
 impl Parser {
-    pub fn new<I: Input + 'static>(input: I, defines: &[impl AsRef<str>]) -> Self {
+    fn new<I: Input + 'static>(input: I, defines: &[impl AsRef<str>]) -> Self {
         let mut parser = Self {
             input: Box::new(input),
             sources: vec![],
@@ -366,7 +365,7 @@ impl Parser {
         let content = self
             .input
             .open(&name)
-            .map_err(|e| self.error(format!("failed to open `{name}`: {e}")))?;
+            .map_err(|e| self.error(format!("failed to open `{}`: {}", name, e)))?;
         let file = self.load_content(name, content);
 
         self.expand_here(file)
@@ -455,7 +454,7 @@ impl Parser {
     pub(crate) fn parse_size(&mut self) -> Result<VarSize, Error> {
         let token = self.expect(TokenKind::Number)?;
         let value = self.get_str(token);
-        value.parse().map_err(|e| self.error(format!("invalid u8: {e}")))
+        value.parse().map_err(|e| self.error(format!("invalid u8: {}", e)))
     }
 
     /// Parses an integer used for defining the size of a field or space. Unlike `parse_size` this
@@ -497,8 +496,8 @@ impl<'a> std::fmt::Display for ErrorFormatter<'a> {
         writeln!(f, "{}:{}:{} error: {}", src.name, line + 1, col, self.error.message)?;
 
         let mut span_str = String::new();
-        span_str.extend(iter::repeat_n(' ', span.start as usize - line_start));
-        span_str.extend(iter::repeat_n('^', self.error.span.len().min(line_end - line_start)));
+        span_str.extend(iter::repeat(' ').take(span.start as usize - line_start));
+        span_str.extend(iter::repeat('^').take(self.error.span.len().min(line_end - line_start)));
 
         writeln!(f, "{}\n{}", &src.content[line_start..line_end], span_str)?;
 
@@ -581,7 +580,7 @@ impl Parse for u64 {
 
         Ok(Some(
             u64::from_str_radix(value, radix)
-                .map_err(|e| token.error(format!("invalid number: {e}")))?,
+                .map_err(|e| token.error(format!("invalid number: {}", e)))?,
         ))
     }
 }
@@ -594,46 +593,6 @@ impl Parse for ast::Ident {
             Some(token) => Ok(Some(Self(p.intern_token(token)))),
             None => Ok(None),
         }
-    }
-}
-
-/// Keywords are often contextual in SLEIGH, so in many cases we allow both identifiers and
-/// keywords.
-pub fn parse_ident_or_keyword(p: &mut Parser) -> Result<Option<ast::Ident>, Error> {
-    let token = p.peek();
-    match token.kind {
-        TokenKind::Ident => {
-            _ = p.next();
-            Ok(Some(ast::Ident(p.intern_token(token))))
-        }
-
-        TokenKind::Defined
-        | TokenKind::Define
-        | TokenKind::Alignment
-        | TokenKind::Endian
-        | TokenKind::BitRange
-        | TokenKind::Space
-        | TokenKind::Default
-        | TokenKind::PcodeOp
-        | TokenKind::Attach
-        | TokenKind::Token
-        | TokenKind::Context
-        | TokenKind::Variables
-        | TokenKind::Names
-        | TokenKind::Values
-        | TokenKind::Signed
-        | TokenKind::Hex
-        | TokenKind::Dec
-        | TokenKind::NoFlow
-        | TokenKind::Unimpl
-        // | TokenKind::With // Not allowed by Ghidra
-        | TokenKind::Macro
-        | TokenKind::GlobalSet
-        | TokenKind::Is => {
-            _ = p.next();
-            Ok(Some(ast::Ident(p.intern_token(token))))
-        }
-        _ => Ok(None),
     }
 }
 
@@ -708,7 +667,7 @@ impl Parse for ast::EndianKind {
         let ast::Ident(ident) = parse_kw_value(p, TokenKind::Endian)?;
         let str = p.interner.get(ident);
         Some(str.parse().map_err(|_| Error {
-            message: format!("Unexpected endian kind: {str}"),
+            message: format!("Unexpected endian kind: {}", str),
             span: Span::new(start, p.current_span()),
             cause: None,
         }))
@@ -764,7 +723,7 @@ impl Parse for ast::SpaceKind {
             "ram_space" => Ok(Some(Self::RamSpace)),
             "rom_space" => Ok(Some(Self::RomSpace)),
             "register_space" => Ok(Some(Self::RegisterSpace)),
-            other => Err(p.error(format!("invalid space type: {other}"))),
+            other => Err(p.error(format!("invalid space type: {}", other))),
         }
     }
 }
@@ -990,7 +949,20 @@ impl Parse for ast::Constructor {
         let constraint = p.parse()?;
         let disasm_actions = p.try_parse::<BrackedList<_>>()?.map_or(vec![], |x| x.0);
 
-        let semantics = parse_semantics_section(p)?;
+        let token = p.peek();
+        let semantics = match token.kind {
+            TokenKind::Unimpl => {
+                p.expect(TokenKind::Unimpl)?;
+                vec![ast::Statement::Unimplemented]
+            }
+            TokenKind::LeftBrace => {
+                p.expect(TokenKind::LeftBrace)?;
+                let statements = parse_sequence_until_v2(p, TokenKind::RightBrace)?;
+                p.expect(TokenKind::RightBrace)?;
+                statements
+            }
+            _ => return Err(p.error_unexpected(token, &[TokenKind::Unimpl, TokenKind::LeftBrace])),
+        };
 
         Ok(Some(ast::Constructor {
             table,
@@ -1001,23 +973,6 @@ impl Parse for ast::Constructor {
             semantics,
             span: Span::new(start, p.current_span()),
         }))
-    }
-}
-
-fn parse_semantics_section(p: &mut Parser) -> Result<Vec<ast::Statement>, Error> {
-    let token = p.peek();
-    match token.kind {
-        TokenKind::Unimpl => {
-            p.expect(TokenKind::Unimpl)?;
-            Ok(vec![ast::Statement::Unimplemented])
-        }
-        TokenKind::LeftBrace => {
-            p.expect(TokenKind::LeftBrace)?;
-            let statements = parse_sequence_until_v2(p, TokenKind::RightBrace)?;
-            p.expect(TokenKind::RightBrace)?;
-            Ok(statements)
-        }
-        _ => Err(p.error_unexpected(token, &[TokenKind::Unimpl, TokenKind::LeftBrace])),
     }
 }
 
@@ -1073,22 +1028,8 @@ fn parse_constraint(p: &mut Parser) -> Result<ast::ConstraintExpr, Error> {
             ast::ConstraintExpr::ExtendLeft(Box::new(parse_constraint(p)?))
         }
 
-        TokenKind::LeftParen => {
-            p.expect(TokenKind::LeftParen)?;
-            let inner = parse_constraint_expr_bp(p, 0)?;
-            p.expect(TokenKind::RightParen)?;
-            inner
-        }
-
-        _ => {
-            let Some(ident) = parse_ident_or_keyword(p)?
-            else {
-                return Err(p.error_unexpected(token, &[
-                    TokenKind::Ident,
-                    TokenKind::TripleDot,
-                    TokenKind::LeftParen,
-                ]));
-            };
+        TokenKind::Ident => {
+            let ident = p.parse::<ast::Ident>()?;
             match p.peek().kind {
                 TokenKind::ExclamationMark => {
                     p.expect(TokenKind::ExclamationMark)?;
@@ -1122,6 +1063,15 @@ fn parse_constraint(p: &mut Parser) -> Result<ast::ConstraintExpr, Error> {
                 _ => ast::ConstraintExpr::Ident(ident),
             }
         }
+
+        TokenKind::LeftParen => {
+            p.expect(TokenKind::LeftParen)?;
+            let inner = parse_constraint_expr_bp(p, 0)?;
+            p.expect(TokenKind::RightParen)?;
+            inner
+        }
+
+        _ => return Err(p.error_unexpected(token, &[TokenKind::Ident, TokenKind::LeftParen])),
     };
 
     if p.check(TokenKind::TripleDot) {
@@ -1234,18 +1184,21 @@ impl Parse for ast::Statement {
                 ast::Statement::Branch { dst: p.parse()?, hint: ast::BranchHint::Return }
             }
             TokenKind::LessThan => {
-                let label = parse_label(p)?;
+                p.expect(TokenKind::LessThan)?;
+                let label = p.parse()?;
+                p.expect(TokenKind::GreaterThan)?;
                 // Labels do not end with a semi-colon so exit early here
                 return Ok(Some(ast::Statement::Label { label }));
             }
-            _ => match parse_pcode_term(p)? {
-                ast::PcodeExpr::Call(pcode_call) => ast::Statement::Call(pcode_call),
-                lhs => {
-                    p.expect(TokenKind::Equal)?;
-                    let rhs = p.parse()?;
-                    ast::Statement::Copy { to: lhs, from: rhs }
-                }
-            },
+            TokenKind::Ident if p.check_nth(1, TokenKind::LeftParen) => {
+                ast::Statement::Call(p.parse()?)
+            }
+            _ => {
+                let lhs = parse_pcode_term(p)?;
+                p.expect(TokenKind::Equal)?;
+                let rhs = p.parse()?;
+                ast::Statement::Copy { to: lhs, from: rhs }
+            }
         };
         p.expect(TokenKind::SemiColon)?;
         Ok(Some(stmt))
@@ -1269,23 +1222,28 @@ fn parse_deref(
     Ok((space, size, pointer))
 }
 
-fn parse_call_args(p: &mut Parser) -> Result<Vec<ast::PcodeExpr>, Error> {
-    p.expect(TokenKind::LeftParen)?;
+impl Parse for ast::PcodeCall {
+    const NAME: &'static str = "Call";
 
-    let mut prev_comma = true;
-    let args = parse_sequence(p, |p| {
-        if !prev_comma || p.check(TokenKind::RightParen) {
-            return Ok(None);
-        }
+    fn try_parse(p: &mut Parser) -> Result<Option<Self>, Error> {
+        let name = p.parse()?;
+        p.expect(TokenKind::LeftParen)?;
 
-        let expr = p.parse()?;
-        prev_comma = p.bump_if(TokenKind::Comma)?.is_some();
+        let mut prev_comma = true;
+        let args = parse_sequence(p, |p| {
+            if !prev_comma || p.check(TokenKind::RightParen) {
+                return Ok(None);
+            }
 
-        Ok(Some(expr))
-    })?;
-    p.expect(TokenKind::RightParen)?;
+            let expr = p.parse()?;
+            prev_comma = p.bump_if(TokenKind::Comma)?.is_some();
 
-    Ok(args)
+            Ok(Some(expr))
+        })?;
+        p.expect(TokenKind::RightParen)?;
+
+        Ok(Some(ast::PcodeCall { name, args }))
+    }
 }
 
 impl Parse for ast::BranchDst {
@@ -1300,22 +1258,15 @@ impl Parse for ast::BranchDst {
                 p.expect(TokenKind::RightBracket)?;
                 Some(ast::BranchDst::Indirect(offset))
             }
-            TokenKind::LessThan => Some(ast::BranchDst::Label(parse_label(p)?)),
+            TokenKind::LessThan => {
+                p.expect(TokenKind::LessThan)?;
+                let label = p.parse()?;
+                p.expect(TokenKind::GreaterThan)?;
+                Some(ast::BranchDst::Label(label))
+            }
             _ => None,
         })
     }
-}
-
-/// Since labels are essentially "quoted" values we basically allow anything between a `<` and `>`.
-fn parse_label(p: &mut Parser) -> Result<ast::Ident, Error> {
-    p.expect(TokenKind::LessThan)?;
-    let label_token = p.next();
-    if matches!(label_token.kind, TokenKind::GreaterThan | TokenKind::Eof) {
-        return Err(p.error("expected label name"));
-    }
-    let label = ast::Ident(p.intern_token(label_token));
-    p.expect(TokenKind::GreaterThan)?;
-    Ok(label)
 }
 
 impl Parse for ast::JumpLabel {
@@ -1450,6 +1401,12 @@ fn parse_pcode_term(p: &mut Parser) -> Result<ast::PcodeExpr, Error> {
         TokenKind::Tilde => return prefix_op!(TokenKind::Tilde, "~"),
         TokenKind::Minus => return prefix_op!(TokenKind::Minus, "-"),
         TokenKind::FMinus => return prefix_op!(TokenKind::FMinus, "f-"),
+        TokenKind::Ident => {
+            if p.check_nth(1, TokenKind::LeftParen) {
+                return Ok(ast::PcodeExpr::Call(p.parse()?));
+            }
+            ast::PcodeExpr::Ident { value: p.parse()? }
+        }
         TokenKind::Number => ast::PcodeExpr::Integer { value: p.parse()? },
         TokenKind::LeftParen => {
             p.expect(TokenKind::LeftParen)?;
@@ -1458,24 +1415,14 @@ fn parse_pcode_term(p: &mut Parser) -> Result<ast::PcodeExpr, Error> {
             inner
         }
         _ => {
-            let Some(ident) = parse_ident_or_keyword(p)?
-            else {
-                use TokenKind::*;
-                return Err(Error {
-                    message: "Error parsing: Pcode terminal expression".to_string(),
-                    span: Span::new(token.span, p.current_span()),
-                    cause: Some(Box::new(p.error_unexpected(token, &[
-                        Ampersand, Star, Minus, Ident, Number, LeftParen,
-                    ]))),
-                });
-            };
-            match p.peek().kind {
-                TokenKind::LeftParen => {
-                    let args = parse_call_args(p)?;
-                    ast::PcodeExpr::Call(ast::PcodeCall { name: ident, args })
-                }
-                _ => ast::PcodeExpr::Ident { value: ident },
-            }
+            use TokenKind::*;
+            return Err(Error {
+                message: "Error parsing: Pcode terminal expression".to_string(),
+                span: Span::new(token.span, p.current_span()),
+                cause: Some(Box::new(
+                    p.error_unexpected(token, &[Ampersand, Star, Minus, Ident, Number, LeftParen]),
+                )),
+            });
         }
     };
 
@@ -1498,6 +1445,13 @@ impl Parse for ast::DisasmAction {
 
     fn try_parse(p: &mut Parser) -> Result<Option<Self>, Error> {
         Ok(match p.peek().kind {
+            TokenKind::Ident => {
+                let ident = p.parse()?;
+                p.expect(TokenKind::Equal)?;
+                let expr = parse_disasm_expr(p)?;
+                p.expect(TokenKind::SemiColon)?;
+                Some(ast::DisasmAction::Assignment { ident, expr })
+            }
             TokenKind::GlobalSet => {
                 p.expect(TokenKind::GlobalSet)?;
                 p.expect(TokenKind::LeftParen)?;
@@ -1508,15 +1462,7 @@ impl Parse for ast::DisasmAction {
                 p.expect(TokenKind::SemiColon)?;
                 Some(ast::DisasmAction::GlobalSet { start_sym, context_sym })
             }
-            _ => match parse_ident_or_keyword(p)? {
-                Some(ident) => {
-                    p.expect(TokenKind::Equal)?;
-                    let expr = parse_disasm_expr(p)?;
-                    p.expect(TokenKind::SemiColon)?;
-                    Some(ast::DisasmAction::Assignment { ident, expr })
-                }
-                _ => None,
-            },
+            _ => None,
         })
     }
 }
@@ -1591,6 +1537,7 @@ fn parse_pattern_expr_b(
 fn parse_disasm_term(p: &mut Parser, allow_symbols: bool) -> Result<ast::PatternExpr, Error> {
     let token = p.peek();
     match token.kind {
+        TokenKind::Ident => Ok(ast::PatternExpr::Ident(p.parse()?)),
         TokenKind::Number => Ok(ast::PatternExpr::Integer(p.parse()?)),
         TokenKind::Minus => {
             p.expect(TokenKind::Minus)?;
@@ -1609,13 +1556,8 @@ fn parse_disasm_term(p: &mut Parser, allow_symbols: bool) -> Result<ast::Pattern
             Ok(inner)
         }
         _ => {
-            let Some(ident) = parse_ident_or_keyword(p)?
-            else {
-                use TokenKind::*;
-                return Err(p.error_unexpected(token, &[Ident, Number, Tilde, LeftParen]));
-            };
-
-            Ok(ast::PatternExpr::Ident(ident))
+            use TokenKind::*;
+            Err(p.error_unexpected(token, &[Ident, Number, Tilde, LeftParen]))
         }
     }
 }

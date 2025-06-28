@@ -40,7 +40,6 @@ pub fn const_eval(dst: pcode::VarNode, op: pcode::Op, inputs: &pcode::Inputs) ->
             Some(a.wrapping_mul(b) & pcode::mask(size as u64 * 8))
         }
         (pcode::Op::IntAnd, [pcode::Value::Const(a, _), pcode::Value::Const(b, _)]) => Some(a & b),
-        (pcode::Op::IntOr, [pcode::Value::Const(a, _), pcode::Value::Const(b, _)]) => Some(a | b),
         (pcode::Op::IntEqual, [pcode::Value::Const(a, _), pcode::Value::Const(b, _)]) => {
             Some(if a == b { 1 } else { 0 })
         }

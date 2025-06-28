@@ -1,9 +1,10 @@
 pub type PatternExprRange = (u32, u32);
 
+use bincode::{Decode, Encode};
 pub use sleigh_parse::ast::PatternOp;
 
 /// Encodes an operation that is part of a pattern expression.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
 pub enum PatternExprOp<T> {
     Value(T),
     Constant(u64),

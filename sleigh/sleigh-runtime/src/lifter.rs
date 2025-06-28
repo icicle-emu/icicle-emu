@@ -310,8 +310,6 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
                         resolved_inputs.push(self.resolve_value(*input)?);
                     }
 
-                    // Convert branch operations that target the next instruction to an internal
-                    // branch to the end of the block.
                     let inst_next = self.subtable.inst_next;
                     if matches!(op, pcode::Op::Branch(_)) && resolved_inputs[1].const_eq(inst_next)
                     {
@@ -392,7 +390,7 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
                             }
                         },
                         Output::Pointer(addr, offset, size) => {
-                            self.emit_store(addr, offset, reg_ptr.slice(0, size))?;
+                            self.emit_store(addr, offset, reg_ptr.slice(0, size).into())?;
                         }
                     }
                 }
@@ -402,7 +400,7 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
                     match self.get_runtime_value(reg_ptr)? {
                         pcode::Value::Const(offset, _) => {
                             let var = VarNode::register(offset as u32, *size);
-                            self.emit_copy(value, var)?
+                            self.emit_copy(value, var.into())?
                         }
                         reg => {
                             let value = self.get_runtime_value(value)?;
@@ -456,7 +454,7 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
 
         match self.subtable.data.map_sleigh_reg(var.offset, var.size as u8) {
             Some((reg, offset)) => {
-                reg.slice_var(offset, size).ok_or(Error::UnknownVarNode(var.offset, size))
+                reg.get_var(offset, size).ok_or(Error::UnknownVarNode(var.offset, size))
             }
             None => Err(Error::UnknownVarNode(var.offset, size)),
         }
@@ -508,10 +506,6 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
             Local::InstNext => constant!(self.subtable.inst.inst_next),
             Local::Register(id) => {
                 let base = &self.subtable.data.named_registers[id as usize];
-
-                #[allow(deprecated)]
-                // We are deriving a new VarNode from the offset (which avoids the issues with using
-                // var directly).
                 VarNode::register(base.offset, base.var.size as u16)
                     .slice(value_offset, value_size)
                     .into()

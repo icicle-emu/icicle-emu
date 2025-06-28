@@ -1,3 +1,4 @@
+use bincode::{Decode, Encode};
 use crate::{
     semantics::{PcodeTmp, SemanticAction},
     Constructor, DecodeAction, DisplaySegment, EvalKind, LocalIndex, SleighData, DEBUG,
@@ -581,7 +582,7 @@ impl<'a, 'b> SubtableCtxMut<'a, 'b> {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Encode, Decode)]
 pub enum ContextModValue {
     TokenField(Token, Field),
     ContextField(Field),
@@ -600,7 +601,7 @@ impl EvalPatternValue for &'_ Decoder {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Encode, Decode)]
 pub enum DisasmConstantValue {
     LocalField(u32),
     ContextField(Field),

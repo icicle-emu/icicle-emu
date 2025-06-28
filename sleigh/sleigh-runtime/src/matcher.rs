@@ -1,3 +1,4 @@
+use bincode::{Decode, Encode};
 use crate::{
     decoder::Decoder,
     expr::{eval_pattern_expr, EvalPatternValue, PatternExprOp},
@@ -19,6 +20,7 @@ pub type Matcher = SequentialMatcher;
 ///
 /// Note: The matcher checks constructor constraints in the order they are defined, therefore if
 /// there are multiple matching constructors the most specific one should be ordered first.
+#[derive(Encode, Decode)]
 pub struct SequentialMatcher {
     /// The set of constructor constraints that can be matched at the current position.
     pub cases: Vec<MatchCase>,
@@ -47,7 +49,7 @@ impl SequentialMatcher {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
 pub struct MatchCase {
     /// The constructor id of the matched constructor.
     pub constructor: ConstructorId,
@@ -79,7 +81,7 @@ impl MatchCase {
     }
 }
 
-#[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Hash, Encode, Decode)]
 pub struct Pattern {
     pub bits: u64,
     pub mask: u64,
@@ -111,14 +113,14 @@ impl Pattern {
 ///
 /// Note: Since full expressions are almost never used by real-world SLEIGH specifications we have
 /// special cases for constants, and field expressions to improve performance.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
 pub enum ConstraintOperand {
     Constant(i64),
     Field(Field),
     Expr(Vec<PatternExprOp<Field>>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
 pub enum Constraint {
     Token { token: Token, field: Field, cmp: ConstraintCmp, operand: ConstraintOperand },
     Context { field: Field, cmp: ConstraintCmp, operand: ConstraintOperand },

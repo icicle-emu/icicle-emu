@@ -9,7 +9,7 @@ pub mod matcher;
 pub mod semantics;
 
 use std::{collections::HashMap, fmt::Display};
-
+use bincode::{Decode, Encode};
 pub use crate::{
     decoder::{ContextModValue, Decoder, DisasmConstantValue, Instruction, SubtableCtx},
     expr::PatternExprOp,
@@ -117,7 +117,7 @@ pub type TableId = u32;
 pub type ConstructorId = u32;
 pub type AttachmentId = u32;
 
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, Encode, Decode)]
 pub struct Token {
     /// Token could overwrite the global endian
     pub big_endian: bool,
@@ -141,7 +141,7 @@ impl Token {
     }
 }
 
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, Encode, Decode)]
 pub struct Field {
     /// The bit offset of the field within the parent value.
     pub offset: u16,
@@ -205,7 +205,7 @@ impl TokenField {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Encode, Decode)]
 pub struct ContextField {
     /// Describes how the field is encoded within the context register.
     pub field: Field,
@@ -219,11 +219,13 @@ pub type LocalIndex = u32;
 pub type SubtableIndex = u32;
 
 /// Represents a group of constructors that are disambiguated by constraint expression.
+#[derive(Encode, Decode)]
 pub struct Table {
     /// The index of the initial matcher to use.
     pub matcher: MatcherIndex,
 }
 
+#[derive(Encode, Decode)]
 pub struct Constructor {
     /// The ID of the table that this constructor belongs to.
     pub table: TableId,
@@ -262,14 +264,14 @@ pub struct Constructor {
     pub num_labels: u32,
 }
 
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, Encode, Decode)]
 pub enum EvalKind {
     ContextField(Field),
     TokenField(Token, Field),
 }
 
 /// An action for the decoder to perform.
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Encode, Decode)]
 pub enum DecodeAction {
     /// Modifies the context register.
     ModifyContext(Field, PatternExprRange),
@@ -303,41 +305,30 @@ pub enum DecodeAction {
 pub type RegId = u32;
 pub type NamedRegIndex = u32;
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Encode, Decode)]
 pub struct NamedRegister {
     /// The name of the register.
     pub name: StrIndex,
 
+    /// The register assigned by the runtime.
+    pub var: pcode::VarNode,
+
     /// The offset of this register in the original SLEIGH specification.
     pub offset: u32,
-
-    /// The register assigned by the runtime. Note: this value may include a register larger than
-    /// what is supported by the emulator.
-    #[deprecated(
-        note = "Using this field may result in emulation failures when the underlying register is >128-bits. Use `get_var` or `slice_var` instead."
-    )]
-    pub var: pcode::VarNode,
 }
 
 impl NamedRegister {
-    pub fn new(name: StrIndex, offset: u32, var: pcode::VarNode) -> Self {
-        #[allow(deprecated)]
-        Self { name, offset, var }
-    }
-
-    /// Get the varnode associated with a slice of the register. Handles cases where the VarId
-    /// changes because of SIMD register splitting.
-    #[allow(deprecated)]
-    pub fn slice_var(
+    /// Get the varnode associated with a slice of the register. Handling cases where the VarId may
+    /// change because of SIMD register splitting.
+    pub fn get_var(
         &self,
-        base_offset: pcode::VarOffset,
+        offset: pcode::VarOffset,
         size: pcode::VarSize,
     ) -> Option<pcode::VarNode> {
-        if base_offset + size > self.var.size {
+        if offset + size > self.var.size {
             return None;
         }
 
-        let offset = self.var.offset + base_offset;
         let (id_offset, var_offset) = (offset / MAX_REG_SIZE, offset % MAX_REG_SIZE);
         // Ensure that the access doesn't overlap with multiple sub-registers.
         if var_offset + size > MAX_REG_SIZE {
@@ -345,27 +336,16 @@ impl NamedRegister {
         }
 
         Some(
-            pcode::VarNode::new(self.var.id + id_offset as i16, var_offset + size)
-                .slice(var_offset, size),
+            pcode::VarNode::new(
+                self.var.id + id_offset as i16,
+                self.var.size - id_offset * MAX_REG_SIZE,
+            )
+            .slice(var_offset, size),
         )
-    }
-
-    /// Get the varnode associated with the full register. Returns `None` if the register is larger
-    /// than 128 bits.
-    pub fn get_var(&self) -> Option<pcode::VarNode> {
-        #[allow(deprecated)]
-        self.slice_var(0, self.var.size)
-    }
-
-    /// Get the raw underlying varnode. May cause emulation failures if the register is larger than
-    /// 128 bits.
-    pub fn get_raw_var(&self) -> pcode::VarNode {
-        #[allow(deprecated)]
-        self.var
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Encode, Decode)]
 pub struct RegisterAlias {
     /// The offset (in bytes) from the start of the full-register.
     pub offset: u16,
@@ -375,6 +355,7 @@ pub struct RegisterAlias {
     pub name: StrIndex,
 }
 
+#[derive(Encode, Decode)]
 pub struct RegisterInfo {
     /// The name of the full-register used as a fallback if there is no exact match.
     pub name: StrIndex,
@@ -389,20 +370,21 @@ pub struct RegisterInfo {
     pub aliases: Vec<RegisterAlias>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Encode, Decode)]
 pub enum DisplaySegment {
     Literal(StrIndex),
     Field(LocalIndex),
     Subtable(LocalIndex),
 }
 
+#[derive(Encode, Decode)]
 pub enum AttachmentIndex {
     Register((u32, u32), ValueSize),
     Name((u32, u32)),
     Value((u32, u32)),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Encode, Decode)]
 pub struct RegisterAttachment {
     pub name: StrIndex,
     pub offset: u32,
@@ -414,11 +396,12 @@ pub enum AttachmentRef<'a> {
     Register(&'a [Option<RegisterAttachment>], ValueSize),
 }
 
+#[derive(Encode, Decode)]
 pub struct ConstructorDebugInfo {
     pub line: String,
 }
 
-#[derive(Default)]
+#[derive(Default, Encode, Decode)]
 pub struct DebugInfo {
     pub subtable_names: Vec<StrIndex>,
     pub constructors: Vec<ConstructorDebugInfo>,
@@ -433,7 +416,7 @@ impl DebugInfo {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Encode, Decode)]
 pub struct SleighData {
     pub strings: String,
 
@@ -473,10 +456,10 @@ pub struct SleighData {
     /// Instead of exposing a register_space/unique_space where values are index by an offset like
     /// Ghidra does, we instead map all global space offsets to local offsets within
     /// non-overlapping registers.
-    ///
-    /// Note: this mapping always corresponds to an offset within the largest overlapping register
-    /// and should be sliced appropriately.
     pub register_mapping: HashMap<u32, (NamedRegIndex, pcode::VarOffset)>,
+
+    /// Varnodes reserved for temporaries that live across internal block boundaries.
+    pub saved_tmps: Vec<pcode::VarNode>,
 
     pub debug_info: DebugInfo,
 
@@ -535,21 +518,12 @@ impl SleighData {
 
     /// Lookup a context field
     pub fn get_context_field(&self, name: &str) -> Option<ContextField> {
-        self.context_field_mapping.get(name).map(|x| self.context_fields[*x])
+        self.context_field_mapping.get(name).map(|x| self.context_fields[*x as usize])
     }
 
-    /// Get the metadata about a register for a given name.
+    /// Get the register for a given name.
     pub fn get_reg(&self, name: &str) -> Option<&NamedRegister> {
         self.register_name_mapping.get(name).map(|x| &self.named_registers[*x as usize])
-    }
-
-    /// Get the varnode associated with a register name.
-    //
-    /// Note: Returns `None` if the varnode is larger than 128-bits. To access bits within larger
-    /// varnodes, use [SleighData::get_reg] to get the register metadata and slice the varnode
-    /// manually using the [NamedRegister::slice].
-    pub fn get_varnode(&self, name: &str) -> Option<pcode::VarNode> {
-        self.get_reg(name)?.get_var()
     }
 
     /// Given a runtime varnode, attempt to find the best matching register name from the original
@@ -582,7 +556,6 @@ impl SleighData {
         self.registers.push(RegisterInfo { name, size, offset: 0xfff000, aliases: vec![] });
 
         let var = pcode::VarNode::new(id, size);
-        #[allow(deprecated)]
         self.named_registers.push(NamedRegister { name, var, offset: 0xfff000 });
 
         Some(var)
@@ -592,7 +565,6 @@ impl SleighData {
     pub fn map_sleigh_reg(&self, offset: u32, size: u8) -> Option<(&NamedRegister, u8)> {
         let &(idx, varnode_offset) = self.register_mapping.get(&offset)?;
         let parent_reg = &self.named_registers[idx as usize];
-        #[allow(deprecated)]
         if varnode_offset + size > parent_reg.var.size {
             // Attempted to access bytes outside of the register.
             return None;

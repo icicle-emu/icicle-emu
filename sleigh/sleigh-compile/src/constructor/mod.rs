@@ -2,14 +2,14 @@ use std::collections::HashMap;
 
 use sleigh_parse::ast;
 use sleigh_runtime::{
-    DecodeAction, Field, PatternExprOp, Token,
     matcher::Constraint,
     semantics::{Local, PcodeTmp, SemanticAction, ValueSize},
+    DecodeAction, Field, PatternExprOp, Token,
 };
 
 use crate::{
-    Context,
     symbols::{Attachment, SymbolKind, SymbolTable, TableId},
+    Context,
 };
 
 pub use self::semantics::Semantics;
@@ -137,9 +137,6 @@ pub(crate) struct Scope<'a> {
 
     /// Keeps track of the mapping between labels and their IDs
     labels: HashMap<ast::Ident, PcodeLabel>,
-
-    /// Keeps track of the next label ID
-    next_label_id: u16,
 }
 
 impl<'a> Scope<'a> {
@@ -152,7 +149,6 @@ impl<'a> Scope<'a> {
             tokens: HashMap::new(),
             mapping: HashMap::new(),
             labels: HashMap::new(),
-            next_label_id: 0,
         }
     }
 
@@ -241,10 +237,11 @@ impl<'a> Scope<'a> {
     }
 
     pub fn get_or_insert_label(&mut self, name: &ast::Ident) -> &mut PcodeLabel {
-        let next_label = self.next_label_id;
-        self.labels.entry(name.to_owned()).or_insert_with(|| {
-            self.next_label_id = self.next_label_id.checked_add(1).unwrap();
-            PcodeLabel { id: next_label, defined: false, back_edge: false }
+        let next_label: u16 = self.labels.len().try_into().unwrap();
+        self.labels.entry(name.to_owned()).or_insert_with(|| PcodeLabel {
+            id: next_label,
+            defined: false,
+            back_edge: false,
         })
     }
 
