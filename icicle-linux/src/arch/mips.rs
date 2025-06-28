@@ -49,7 +49,7 @@ pub struct Mips32 {
 impl Mips32 {
     #[rustfmt::skip]
     pub fn new(arch: &icicle_cpu::Arch) -> Self {
-        let r = |name: &str| arch.sleigh.get_varnode(name).unwrap();
+        let r = |name: &str| arch.sleigh.get_reg(name).unwrap().var;
         Self {
             regs: [
                 r("zero"), r("at"), r("v0"), r("v1"),

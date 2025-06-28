@@ -73,7 +73,7 @@ impl Optimizer {
             if let Op::PcodeBranch(label) = stmt.op {
                 // The `None` case here corresponds to jumps to invalid labels, these will trigger
                 // an `InvalidTarget` exception at runtime.
-                if self.labels.get(&label).is_some_and(|target| *target < idx) {
+                if self.labels.get(&label).map_or(false, |target| *target < idx) {
                     self.reachable_labels.insert(label);
                 }
             }
@@ -81,9 +81,10 @@ impl Optimizer {
 
         for stmt in &block.instructions {
             if matches!(stmt.op, Op::InstructionMarker) {
-                self.const_eval
-                    .borrow_mut()
-                    .purge_temporaries(|id| self.dead_store_detector.should_persist(id));
+                // Prevent temporaries from being propagated across instruction boundaries.
+                let mut const_eval = self.const_eval.borrow_mut();
+                const_eval.results.clear();
+                const_eval.inputs.retain(|id, _| self.dead_store_detector.should_persist(*id));
             }
 
             // Check whether we are at a new label.
@@ -471,7 +472,7 @@ impl DeadStoreDetector {
         }
 
         // Check if there is any read that uses this write.
-        if self.live_reads.get(&var.id).is_some_and(|read| read.any_set(var)) {
+        if self.live_reads.get(&var.id).map_or(false, |read| read.any_set(var)) {
             return true;
         }
 

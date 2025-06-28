@@ -707,9 +707,9 @@ mod test {
             let cpu = Cpu::new_boxed(Arch::none());
             let mut jit = crate::JIT::new(&cpu);
 
-            let a = cpu.arch.sleigh.get_varnode("a").unwrap().slice(0, 4);
-            let b = cpu.arch.sleigh.get_varnode("b").unwrap().slice(0, 4);
-            let out = cpu.arch.sleigh.get_varnode("c").unwrap().slice(0, out_size);
+            let a = cpu.arch.sleigh.get_reg("a").unwrap().var.slice(0, 4);
+            let b = cpu.arch.sleigh.get_reg("b").unwrap().var.slice(0, 4);
+            let out = cpu.arch.sleigh.get_reg("c").unwrap().var.slice(0, out_size);
 
             let inst = pcode::Instruction::from((out, op, (a, b)));
             let jit_fn = compile_instruction(&mut jit, inst);

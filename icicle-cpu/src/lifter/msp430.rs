@@ -1,8 +1,6 @@
 //! A workaround for missing functionality in the SLEIGH spec for MSP430X.
 
-use crate::{
-    exec::const_eval, lifter::BlockLifter, Arch, Cpu, Exception, ExceptionCode, ValueSource,
-};
+use crate::{exec::const_eval, lifter::BlockLifter, Arch, Cpu, Exception, ExceptionCode, ValueSource};
 
 use super::BlockState;
 
@@ -21,7 +19,7 @@ pub fn status_register_control_patch(cpu: &mut Cpu, lifter: &mut BlockLifter) {
     let check_async = cpu.arch.sleigh.register_user_op(Some("check_sr_control_bits_async"));
     cpu.set_helper(check_async, check_sr_control_bits);
 
-    let status_reg = cpu.arch.sleigh.get_varnode("SR").unwrap();
+    let status_reg = cpu.arch.sleigh.get_reg("SR").unwrap().var;
     let mut const_prop = const_eval::ConstEval::new();
     let handler = move |block: &mut pcode::Block| {
         block.recompute_next_tmp();

@@ -19,13 +19,7 @@ pub const HELPERS: &[(&str, PcodeOpHelper)] = &[
     ("UnsignedDoesSaturate", unsigned_does_saturate),
     ("SignedSaturate", signed_saturate),
     ("SignedDoesSaturate", signed_does_saturate),
-    ("setISAMode", set_isa_mode),
 ];
-
-fn set_isa_mode(_cpu: &mut Cpu, _: VarNode, _: [Value; 2]) {
-    // Icicle checks for ISA mode switches on every block so does not need this function to be
-    // called explicitly.
-}
 
 fn enable_interrupts(_cpu: &mut Cpu, _: VarNode, _: [Value; 2]) {
     // @todo
@@ -133,85 +127,34 @@ fn bcd_add_digit(a: u8, b: u8, carry: u8) -> (u8, u8) {
     }
 }
 
-fn unsigned_saturate_impl(value: i64, bits: u32) -> (i64, bool) {
-    let max: i64 = (1 << bits) - 1;
-    if value < 0 {
-        (0, true)
-    }
-    else if value > max {
-        (max, true)
-    }
-    else {
-        (value, false)
-    }
-}
-
 fn unsigned_saturate(cpu: &mut Cpu, dst: pcode::VarNode, args: [Value; 2]) {
     let bits: u32 = cpu.read_dynamic(args[1]).zxt();
-    // Some uses of `UnsignedSaturate` in SLEIGH do nothing because the bits have already been
-    // truncated. Here we try to detect bugs in the spec by returning an error if the result would
-    // never change.
-    if bits >= (args[0].size() as u32 * 8) || bits >= 64 {
-        cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
-        cpu.exception.value = args[0].size() as u64;
-        return;
-    }
-
-    let value: i64 = cpu.read_dynamic(args[0]).sxt();
-    let (value, _) = unsigned_saturate_impl(value, bits);
-    cpu.write_trunc(dst, value as u64);
+    let max = (1 << bits) - 1;
+    let value: u64 = cpu.read_dynamic(args[0]).zxt();
+    cpu.write_trunc(dst, u64::min(value, max));
 }
 
 fn unsigned_does_saturate(cpu: &mut Cpu, dst: pcode::VarNode, args: [Value; 2]) {
     let bits: u32 = cpu.read_dynamic(args[1]).zxt();
-    if bits >= (args[0].size() as u32 * 8) || bits >= 64 {
-        cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
-        cpu.exception.value = args[0].size() as u64;
-        return;
-    }
-
-    let value: i64 = cpu.read_dynamic(args[0]).sxt();
-    let (_, saturates) = unsigned_saturate_impl(value, bits);
-    cpu.write_var::<u8>(dst, saturates as u8);
-}
-
-fn signed_saturate_impl(value: i64, bits: u32) -> (i64, bool) {
-    let max = (1 << (bits - 1)) - 1;
-    let min = -(1 << (bits - 1));
-    if value < min {
-        (min, true)
-    }
-    else if value > max {
-        (max, true)
-    }
-    else {
-        (value, false)
-    }
+    let max = (1 << bits) - 1;
+    let value: u64 = cpu.read_dynamic(args[0]).zxt();
+    cpu.write_var::<u8>(dst, (value > max) as u8);
 }
 
 fn signed_saturate(cpu: &mut Cpu, dst: pcode::VarNode, args: [Value; 2]) {
     let bits: u32 = cpu.read_dynamic(args[1]).zxt();
-    if bits >= (args[0].size() as u32 * 8) || bits >= 64 {
-        cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
-        cpu.exception.value = args[0].size() as u64;
-        return;
-    }
-
+    let max = (1 << (bits - 1)) - 1;
+    let min = -(1 << (bits - 1));
     let value: i64 = cpu.read_dynamic(args[0]).sxt();
-    let (value, _) = signed_saturate_impl(value, bits);
-    cpu.write_trunc(dst, value as u64);
+    cpu.write_trunc(dst, (value).min(max).max(min) as u64);
 }
 
 fn signed_does_saturate(cpu: &mut Cpu, dst: pcode::VarNode, args: [Value; 2]) {
     let bits: u32 = cpu.read_dynamic(args[1]).zxt();
-    if bits >= (args[0].size() as u32 * 8) || bits >= 64 {
-        cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
-        cpu.exception.value = args[0].size() as u64;
-        return;
-    }
+    let max = (1 << (bits - 1)) - 1;
+    let min = -(1 << (bits - 1));
     let value: i64 = cpu.read_dynamic(args[0]).sxt();
-    let (_, saturates) = unsigned_saturate_impl(value, bits);
-    cpu.write_var::<u8>(dst, saturates as u8);
+    cpu.write_var::<u8>(dst, (value < min || value > max) as u8);
 }
 
 #[allow(unused)]
@@ -264,7 +207,6 @@ pub mod x86 {
         ("movmskpd", movmskpd),
         ("pinsrw", pinsrw), // Note: implemented in SLEIGH in Ghidra 10.3.
         ("pshuflw", pshuflw),
-        ("pshufhw", pshufhw),
         ("shufpd", shufpd), // Note: implemented in SLEIGH in Ghidra 10.3.
         ("pmaddwd", pmaddwd),
         ("in", in_io),
@@ -324,21 +266,9 @@ pub mod x86 {
 
         let eax: u32 =
             (extended_family << 20) | (extended_model << 16) | (family << 8) | (model << 4);
-
-        use cpuid::FeatureInformationEcx as Feature;
-
-        let ecx: u32 = (Feature::sse3
-            | Feature::tm2
-            | Feature::pdcm
-            | Feature::popcnt
-            | Feature::tsc_deadline
-            | Feature::aesni
-            | Feature::xsave)
-            .bits();
-
         cpu.write_var(dst.slice(0, 4), eax);
         cpu.write_var(dst.slice(4, 4), 0_u32);
-        cpu.write_var(dst.slice(8, 4), ecx);
+        cpu.write_var(dst.slice(8, 4), 0_u32);
         cpu.write_var(dst.slice(12, 4), 0_u32);
     }
 
@@ -413,7 +343,7 @@ pub mod x86 {
         }
     }
 
-    /// Extract Packed Double-Precision Floating-Point Sign Mask
+    // Extract Packed Double-Precision Floating-Point Sign Mask
     fn movmskpd(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
         let src = cpu.read::<u128>(args[1]);
         let result = ((src >> 63) & 0b01) as u32 | ((src >> 126) & 0b10) as u32;
@@ -422,7 +352,7 @@ pub mod x86 {
         cpu.write_var(VarNode::new(dst.id, 8), result as u64);
     }
 
-    /// Insert word
+    // Insert word
     #[allow(unused)]
     fn pinsrw(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
         // The byte offset to insert the word at
@@ -432,12 +362,11 @@ pub mod x86 {
         cpu.write_var(dst.slice(offset as u8, 2), src as u16);
     }
 
-    /// Shuffle packed low words
+    // Shuffle packed low words
     fn pshuflw(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
         let src = cpu.read::<u64>(args[1].slice(0, 8));
         let count = cpu.args[0] as u64;
 
-        // Shuffle low bits
         for offset in 0..4 {
             let shift = (count >> (offset * 2) & 0b11) * 16;
             let value = (src >> shift) & 0xffff;
@@ -449,24 +378,7 @@ pub mod x86 {
         cpu.write_var(dst.slice(8, 8), src_hi)
     }
 
-    /// Shuffle packed high words
-    fn pshufhw(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
-        let src = cpu.read::<u64>(args[1].slice(8, 8));
-        let count = cpu.args[0] as u64;
-
-        // Copy low bits
-        let src_low = cpu.read::<u64>(args[1].slice(0, 8));
-        cpu.write_var(dst.slice(0, 8), src_low);
-
-        // Shuffle high bits
-        for offset in 0..4 {
-            let shift = (count >> (offset * 2) & 0b11) * 16;
-            let value = (src >> shift) & 0xffff;
-            cpu.write_var(dst.slice(8 + offset * 2, 2), value as u16);
-        }
-    }
-
-    /// Packed interleave shuffle
+    // Packed interleave shuffle
     #[allow(unused)]
     fn shufpd(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
         let index = cpu.args[0] as u64;
@@ -546,43 +458,6 @@ pub mod x86 {
         #![allow(non_upper_case_globals)]
 
         use bitflags::bitflags;
-
-        bitflags! {
-            pub struct FeatureInformationEcx: u32 {
-                const sse3         = 1 << 0;
-                const pclmulqdq    = 1 << 1;
-                const dtes64       = 1 << 2;
-                const monitor      = 1 << 3;
-                const ds_cpl       = 1 << 4;
-                const vmx          = 1 << 5;
-                const smx          = 1 << 6;
-                const eist         = 1 << 7;
-                const tm2          = 1 << 8;
-                const ssse3        = 1 << 9;
-                const cnxt_id      = 1 << 10;
-                const sdbg         = 1 << 11;
-                const fma          = 1 << 12;
-                const cmpxchg16b   = 1 << 13;
-                const xtpr         = 1 << 14;
-                const pdcm         = 1 << 15;
-                const _reserved    = 1 << 16;
-                const pcid         = 1 << 17;
-                const dca          = 1 << 18;
-                const sse4_1       = 1 << 19;
-                const sse4_2       = 1 << 20;
-                const x2apic       = 1 << 21;
-                const movbe        = 1 << 22;
-                const popcnt       = 1 << 23;
-                const tsc_deadline = 1 << 24;
-                const aesni        = 1 << 25;
-                const xsave        = 1 << 26;
-                const osxsave      = 1 << 27;
-                const avx          = 1 << 28;
-                const f16c         = 1 << 29;
-                const rdrand       = 1 << 30;
-                const _unused      = 1 << 31;
-            }
-        }
 
         bitflags! {
             pub struct ExtendedFeaturesEbx: u32 {
@@ -713,87 +588,8 @@ pub mod aarch64 {
 pub mod arm {
     use super::*;
 
-    pub const HELPERS: &[(&str, PcodeOpHelper)] = &[
-        ("enableIRQinterrupts", enable_interrupts),
-        ("disableIRQinterrupts", disable_interrupts),
-        // NEON
-        ("VectorCompareEqual", vector_compare_equal),
-        ("VectorPairwiseAdd", vector_pairwise_add),
-        ("VectorAdd", vector_add),
-        ("VectorSub", vector_sub),
-        ("vrev", vrev),
-        ("VectorCopyNarrow", vector_copy_narrow),
-    ];
-
-    fn vector_compare_equal(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
-        let esize = cpu.args[0] as u8;
-        for i in 0..(dst.size / esize) {
-            let a: u64 = cpu.read_dynamic(args[0].slice(i * esize, esize)).zxt();
-            let b: u64 = cpu.read_dynamic(args[1].slice(i * esize, esize)).zxt();
-            cpu.write_trunc(dst.slice(i * esize, esize), if a == b { u64::MAX } else { 0 });
-        }
-    }
-
-    // [a, b] + [c, d] = [a + c, b + d]
-    fn vector_add(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
-        let esize = cpu.args[0] as u8;
-        for i in 0..(dst.size / esize) {
-            let a: u64 = cpu.read_dynamic(args[0].slice(i * esize, esize)).zxt();
-            let b: u64 = cpu.read_dynamic(args[1].slice(i * esize, esize)).zxt();
-            cpu.write_trunc(dst.slice(i * esize, esize), a.wrapping_add(b));
-        }
-    }
-
-    // [a, b] - [c, d] = [a - c, b - d]
-    fn vector_sub(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
-        let esize = cpu.args[0] as u8;
-        for i in 0..(dst.size / esize) {
-            let a: u64 = cpu.read_dynamic(args[0].slice(i * esize, esize)).zxt();
-            let b: u64 = cpu.read_dynamic(args[1].slice(i * esize, esize)).zxt();
-            cpu.write_trunc(dst.slice(i * esize, esize), a.wrapping_sub(b));
-        }
-    }
-
-    // [a, b][c, d] = [a + b, c + d]
-    fn vector_pairwise_add(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
-        let esize = cpu.args[0] as u8;
-
-        let dst_low = dst.slice(0, dst.size / 2);
-        for i in 0..(dst_low.size / esize) {
-            let a: u64 = cpu.read_dynamic(args[0].slice((i * 2) * esize, esize)).zxt();
-            let b: u64 = cpu.read_dynamic(args[0].slice(((i * 2) + 1) * esize, esize)).zxt();
-            cpu.write_trunc(dst_low.slice(i * esize, esize), a.wrapping_add(b));
-        }
-        let dst_high = dst.slice(dst.size / 2, dst.size / 2);
-        for i in 0..(dst_high.size / esize) {
-            let a: u64 = cpu.read_dynamic(args[1].slice((i * 2) * esize, esize)).zxt();
-            let b: u64 = cpu.read_dynamic(args[1].slice(((i * 2) + 1) * esize, esize)).zxt();
-            cpu.write_trunc(dst_high.slice(i * esize, esize), a.wrapping_add(b));
-        }
-    }
-
-    fn vrev(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
-        let esize: u8 = cpu.read_dynamic(args[1]).zxt();
-        for i in 0..(dst.size / esize) {
-            let a: u64 = cpu.read_dynamic(args[0].slice(i * esize, esize)).zxt();
-            cpu.write_trunc(dst.slice(dst.size - (i + 1) * esize, esize), a);
-        }
-    }
-
-    /// Copy the lower bits of a quadword vector to a doubleword vector.
-    /// arg[0] = source, arg[1] = element size
-    ///
-    /// e.g., for element size = 4:
-    /// arg[0] [a:u32, b:32, c:u32, d:u32], dst=[a:u16, b:u16, c:u16, d:u16]
-    fn vector_copy_narrow(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
-        let src = args[0];
-        let esize = cpu.read::<u8>(args[1]);
-        let dst_esize = esize / 2;
-        for i in 0..(src.size() / esize) {
-            let value: u64 = cpu.read_dynamic(src.slice(i * esize, esize)).zxt();
-            cpu.write_trunc(dst.slice(i * dst_esize, dst_esize), value);
-        }
-    }
+    pub const HELPERS: &[(&str, PcodeOpHelper)] =
+        &[("enableIRQinterrupts", enable_interrupts), ("disableIRQinterrupts", disable_interrupts)];
 }
 
 #[cfg(test)]
