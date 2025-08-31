@@ -1,12 +1,12 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     net::{SocketAddr, TcpListener},
 };
 
 use anyhow::Context;
 use gdbstub::{
     common::Signal,
-    conn::ConnectionExt,
+    conn::{Connection, ConnectionExt},
     stub::{DisconnectReason, GdbStub, SingleThreadStopReason, run_blocking},
 };
 use icicle_vm::Vm;
@@ -39,7 +39,11 @@ pub struct CustomCommands {
 }
 
 #[cfg(not(unix))]
-pub fn listen<T>(addr: &str, target: stub::VmState<T>, commands: CustomCommands) -> anyhow::Result<()>
+pub fn listen<T>(
+    addr: &str,
+    target: stub::VmState<T>,
+    commands: CustomCommands,
+) -> anyhow::Result<()>
 where
     T: stub::DynamicTarget,
 {
@@ -47,7 +51,11 @@ where
 }
 
 #[cfg(unix)]
-pub fn listen<T>(addr: &str, target: stub::VmState<T>, commands: CustomCommands) -> anyhow::Result<()>
+pub fn listen<T>(
+    addr: &str,
+    target: stub::VmState<T>,
+    commands: CustomCommands,
+) -> anyhow::Result<()>
 where
     T: stub::DynamicTarget,
 {
@@ -70,7 +78,7 @@ where
         .with_context(|| format!("Failed to bind to TCP listener to: {addr}"))?;
     for stream in server.incoming() {
         let stream = match stream {
-            Ok(stream) => stream,
+            Ok(stream) => BufferedConnection::new(stream),
             Err(e) => {
                 tracing::warn!("Client error: {}", e);
                 continue;
@@ -93,11 +101,28 @@ fn listen_unix<T>(
 where
     T: stub::DynamicTarget,
 {
-    let server = std::os::unix::net::UnixListener::bind(path)
-        .with_context(|| format!("Failed to bind to Unix listener to: {path}"))?;
+    use std::os::unix::fs::FileTypeExt;
+
+    let server = match std::os::unix::net::UnixListener::bind(path) {
+        Ok(server) => server,
+        Err(e)
+            if e.kind() == std::io::ErrorKind::AddrInUse
+                && std::fs::metadata(path).map_or(false, |x| x.file_type().is_socket()) =>
+        {
+            std::fs::remove_file(path)
+                .with_context(|| format!("Failed to remove socket file: {path}"))?;
+
+            std::os::unix::net::UnixListener::bind(path)
+                .with_context(|| format!("Failed to bind to Unix listener to: {path}"))?
+        }
+        Err(e) => {
+            return Err(e).with_context(|| format!("Failed to bind to Unix listener to: {path}"));
+        }
+    };
+
     for stream in server.incoming() {
         let stream = match stream {
-            Ok(stream) => stream,
+            Ok(stream) => BufferedConnection::new(stream),
             Err(e) => {
                 tracing::warn!("Client error: {}", e);
                 continue;
@@ -111,15 +136,109 @@ where
     Ok(())
 }
 
+struct BufferedConnection<S> {
+    inner: S,
+    rx_buffer: VecDeque<u8>,
+    tx_buffer: Vec<u8>,
+    buffer_size: usize,
+}
+
+impl<S> BufferedConnection<S> {
+    fn new(inner: S) -> Self {
+        let buffer_size = 8 * 1024;
+        Self {
+            inner,
+            rx_buffer: VecDeque::with_capacity(buffer_size),
+            tx_buffer: Vec::with_capacity(buffer_size),
+            buffer_size,
+        }
+    }
+}
+
+impl<S: Connection<Error = std::io::Error>> Connection for BufferedConnection<S> {
+    type Error = std::io::Error;
+
+    fn write(&mut self, byte: u8) -> Result<(), Self::Error> {
+        self.write_all(&[byte])
+    }
+
+    fn write_all(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
+        // Either just add the buf to the tx_buffer or fully write everything to the underlying
+        // connection if the buffer is full.
+        if self.tx_buffer.len() + buf.len() > self.buffer_size {
+            self.inner.write_all(&self.tx_buffer)?;
+            self.tx_buffer.clear();
+            self.inner.write_all(buf)?;
+        }
+        else {
+            self.tx_buffer.extend_from_slice(buf);
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        if !self.tx_buffer.is_empty() {
+            self.inner.write_all(&self.tx_buffer)?;
+            self.tx_buffer.clear();
+        }
+        self.inner.flush()
+    }
+
+    fn on_session_start(&mut self) -> Result<(), Self::Error> {
+        self.inner.on_session_start()
+    }
+}
+
+impl<S: ConnectionExt<Error = std::io::Error> + std::io::Read> ConnectionExt
+    for BufferedConnection<S>
+{
+    fn read(&mut self) -> Result<u8, Self::Error> {
+        if let Some(byte) = self.rx_buffer.pop_front() {
+            return Ok(byte);
+        }
+
+        // @todo: use an improved buffer type to avoid needing to zeroing and coalesce the buffer.
+        self.rx_buffer.resize(self.buffer_size, 0);
+        let buf = self.rx_buffer.make_contiguous();
+
+        match std::io::Read::read(&mut self.inner, buf) {
+            Ok(0) => {
+                self.rx_buffer.clear();
+                return ConnectionExt::read(&mut self.inner);
+            }
+            Ok(bytes_read) => {
+                tracing::trace!("Read {bytes_read} bytes from connection");
+                self.rx_buffer.truncate(bytes_read);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                // The inner connection will handle actually waiting for data to be available.
+                self.rx_buffer.clear();
+                return ConnectionExt::read(&mut self.inner);
+            }
+            Err(e) => {
+                self.rx_buffer.clear();
+                return Err(e);
+            }
+        }
+
+        Ok(self.rx_buffer.pop_front().unwrap())
+    }
+
+    fn peek(&mut self) -> Result<Option<u8>, Self::Error> {
+        if let Some(byte) = self.rx_buffer.front() {
+            return Ok(Some(*byte));
+        }
+        self.inner.peek()
+    }
+}
+
 pub fn run<T, S>(stream: S, target: &mut stub::VmState<T>) -> anyhow::Result<()>
 where
     T: stub::DynamicTarget,
     S: ConnectionExt,
     S::Error: Send + Sync + std::fmt::Debug + std::fmt::Display + 'static,
 {
-    // The default packet buffer size is 4096 bytes, which is quite small we significantly increase
-    // it to accommodate larger packets, especially for `vFile` operations.
-    let stub = GdbStub::builder(stream).packet_buffer_size(0x4000).build()?;
+    let stub = GdbStub::builder(stream).packet_buffer_size(8 * 1024).build()?;
     match stub.run_blocking::<GdbStubEventLoop<T, S>>(target)? {
         DisconnectReason::TargetExited(status) => {
             tracing::info!("Target exited: {}", status);
