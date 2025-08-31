@@ -216,7 +216,7 @@ where
     }
 
     /// Returns an iterator over all the entries in the map that overlap with `range`.
-    pub fn overlapping_iter(&self, range: (u64, u64)) -> BTreeRangeIter<T> {
+    pub fn overlapping_iter(&self, range: (u64, u64)) -> BTreeRangeIter<'_, T> {
         BTreeRangeIter { start: range.0, end: range.1, map: self }
     }
 

@@ -23,7 +23,7 @@ enum Location<'a> {
 }
 
 impl<'a> IcicleDecorator<'a> {
-    fn get_pcode(&self, mut id: u32) -> Location {
+    fn get_pcode(&self, mut id: u32) -> Location<'_> {
         for (_, block) in self.target.iter() {
             let locations = block.pcode.instructions.len() + 1;
             if locations <= id as usize {

@@ -610,7 +610,7 @@ impl SleighData {
         &self.strings[index.0 as usize..index.1 as usize]
     }
 
-    pub fn get_attachment(&self, id: AttachmentId) -> AttachmentRef {
+    pub fn get_attachment(&self, id: AttachmentId) -> AttachmentRef<'_> {
         match &self.attachments[id as usize] {
             AttachmentIndex::Register((start, end), size) => {
                 let regs = &self.attached_registers[*start as usize..*end as usize];

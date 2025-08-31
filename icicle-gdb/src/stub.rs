@@ -149,26 +149,30 @@ impl<T: DynamicTarget> gdbstub::target::Target for VmState<'_, T> {
     type Arch = <T as DynamicTarget>::Arch;
     type Error = anyhow::Error;
 
-    fn base_ops(&mut self) -> ext::base::BaseOps<Self::Arch, Self::Error> {
+    fn base_ops(&mut self) -> ext::base::BaseOps<'_, Self::Arch, Self::Error> {
         ext::base::BaseOps::SingleThread(self)
     }
 
-    fn support_breakpoints(&mut self) -> Option<ext::breakpoints::BreakpointsOps<Self>> {
+    fn support_breakpoints(&mut self) -> Option<ext::breakpoints::BreakpointsOps<'_, Self>> {
         Some(self)
     }
 
-    fn support_monitor_cmd(&mut self) -> Option<ext::monitor_cmd::MonitorCmdOps<Self>> {
+    fn support_monitor_cmd(&mut self) -> Option<ext::monitor_cmd::MonitorCmdOps<'_, Self>> {
         Some(self)
     }
 
-    fn support_section_offsets(&mut self) -> Option<ext::section_offsets::SectionOffsetsOps<Self>> {
+    fn support_section_offsets(
+        &mut self,
+    ) -> Option<ext::section_offsets::SectionOffsetsOps<'_, Self>> {
         match self.vm.env.as_any().is::<icicle_vm::linux::Kernel>() {
             true => Some(self),
             false => None,
         }
     }
 
-    fn support_catch_syscalls(&mut self) -> Option<ext::catch_syscalls::CatchSyscallsOps<Self>> {
+    fn support_catch_syscalls(
+        &mut self,
+    ) -> Option<ext::catch_syscalls::CatchSyscallsOps<'_, Self>> {
         match self.vm.env.as_any().is::<icicle_vm::linux::Kernel>() {
             true => Some(self),
             false => None,
@@ -229,7 +233,7 @@ impl<T: DynamicTarget> SingleThreadBase for VmState<'_, T> {
         self.vm.cpu.mem.write_bytes(start, data, perm::NONE).map_err(|_| TargetError::NonFatal)
     }
 
-    fn support_resume(&mut self) -> Option<SingleThreadResumeOps<Self>> {
+    fn support_resume(&mut self) -> Option<SingleThreadResumeOps<'_, Self>> {
         Some(self)
     }
 }
@@ -278,7 +282,7 @@ impl<T: DynamicTarget> ReverseStep<()> for VmState<'_, T> {
 }
 
 impl<T: DynamicTarget> ext::breakpoints::Breakpoints for VmState<'_, T> {
-    fn support_sw_breakpoint(&mut self) -> Option<ext::breakpoints::SwBreakpointOps<Self>> {
+    fn support_sw_breakpoint(&mut self) -> Option<ext::breakpoints::SwBreakpointOps<'_, Self>> {
         Some(self)
     }
 

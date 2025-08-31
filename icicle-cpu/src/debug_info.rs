@@ -363,7 +363,7 @@ impl SourceLocation {
 }
 
 impl SourceLocation {
-    pub fn display_file(&self) -> SourceLocationDisplayFile {
+    pub fn display_file(&self) -> SourceLocationDisplayFile<'_> {
         SourceLocationDisplayFile { source: self }
     }
 }

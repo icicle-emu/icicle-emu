@@ -161,7 +161,7 @@ impl Parser {
     }
 
     /// Creates a wrapper that is used for formatting an error message
-    pub fn error_formatter(&self, error: Error) -> ErrorFormatter {
+    pub fn error_formatter(&self, error: Error) -> ErrorFormatter<'_> {
         ErrorFormatter { inner: self, error }
     }
 

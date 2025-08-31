@@ -53,7 +53,7 @@ impl BlockTable {
         self.modified.clear();
     }
 
-    pub fn get_info(&self, key: BlockKey) -> Option<BlockInfoRef> {
+    pub fn get_info(&self, key: BlockKey) -> Option<BlockInfoRef<'_>> {
         let group = *self.map.get(&key)?;
         Some(BlockInfoRef { group, code: self })
     }
