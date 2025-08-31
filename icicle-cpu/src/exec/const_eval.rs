@@ -628,7 +628,7 @@ pub trait BitVecExt {
         }
     }
 
-    fn display(&self) -> BitVecDisplay {
+    fn display(&self) -> BitVecDisplay<'_> {
         BitVecDisplay(self.slice())
     }
 }

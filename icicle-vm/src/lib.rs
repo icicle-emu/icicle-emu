@@ -560,7 +560,7 @@ impl Vm {
         self.code.disasm.get(&addr).map(|s| s.as_str())
     }
 
-    pub fn get_block_info(&self, addr: u64) -> Option<cpu::BlockInfoRef> {
+    pub fn get_block_info(&self, addr: u64) -> Option<cpu::BlockInfoRef<'_>> {
         let key = self.get_block_key(addr);
         self.code.get_info(key)
     }
