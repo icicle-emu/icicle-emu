@@ -40,6 +40,7 @@ pub struct RuntimeConfig {
     pub allow_backtracking: bool,
     /// Controls whether the runtime context value will be updated as a result of `globalset`
     /// actions during instruction decoding.
+    pub allow_any_addr_globalsets: bool,
     pub update_context: bool,
 }
 
@@ -49,6 +50,7 @@ impl Default for RuntimeConfig {
             context: 0,
             ignore_delay_slots: false,
             allow_backtracking: true,
+            allow_any_addr_globalsets: false,
             update_context: true,
         }
     }
@@ -72,6 +74,7 @@ impl Runtime {
         let mut decoder = Decoder::new();
         decoder.allow_backtracking = config.allow_backtracking;
         decoder.ignore_delay_slots = config.ignore_delay_slots;
+        decoder.allow_any_addr_globalsets = config.allow_any_addr_globalsets;
 
         Self {
             context: config.context,
@@ -275,7 +278,7 @@ pub enum DecodeAction {
     ModifyContext(Field, PatternExprRange),
 
     /// Globally saves a context value.
-    SaveContext(Field),
+    SaveContext(Field, PatternExprRange),
 
     /// Evaluate the current value of a field and store it into a local.
     Eval(LocalIndex, EvalKind),

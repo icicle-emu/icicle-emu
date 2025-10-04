@@ -18,5 +18,5 @@ We use a simple DSL for writing test cases consisting of 5 distinct sections:
 
 4. Register values that should be set before executing the instruction (any unspecified values will are currently set to zero, however when writing test cases this should not be assumed to be the case).
 
-5. The expected values for registers after executing the instruction (any unspecified inputs are unchecked).
+5. The expected values for registers after executing the instruction (any unspecified outputs are unchecked).
 

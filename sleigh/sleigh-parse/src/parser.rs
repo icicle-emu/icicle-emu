@@ -1501,12 +1501,12 @@ impl Parse for ast::DisasmAction {
             TokenKind::GlobalSet => {
                 p.expect(TokenKind::GlobalSet)?;
                 p.expect(TokenKind::LeftParen)?;
-                let start_sym = p.parse()?;
+                let expr = parse_disasm_expr(p)?;
                 p.expect(TokenKind::Comma)?;
                 let context_sym = p.parse()?;
                 p.expect(TokenKind::RightParen)?;
                 p.expect(TokenKind::SemiColon)?;
-                Some(ast::DisasmAction::GlobalSet { start_sym, context_sym })
+                Some(ast::DisasmAction::GlobalSet { expr, context_sym })
             }
             _ => match parse_ident_or_keyword(p)? {
                 Some(ident) => {
