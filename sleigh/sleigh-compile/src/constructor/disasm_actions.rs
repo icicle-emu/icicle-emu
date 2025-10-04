@@ -15,7 +15,7 @@ pub(crate) struct DisasmActions {
     pub context_mod: Vec<(Field, Vec<PatternExprOp<ContextModValue>>)>,
 
     /// The context fields globally set by this section
-    pub global_set: Vec<u32>,
+    pub global_set: Vec<(u32, Vec<PatternExprOp<ContextModValue>>)>,
 }
 
 pub(crate) fn resolve(
@@ -58,24 +58,14 @@ pub(crate) fn resolve(
                     }
                 }
             }
-            ast::DisasmAction::GlobalSet { start_sym, context_sym } => {
-                let resolved = match DisasmConstantValue::resolve_ident(scope, *start_sym).ok() {
-                    Some(DisasmConstantValue::InstNext) => DisasmConstantValue::InstNext,
-                    Some(DisasmConstantValue::InstStart) => DisasmConstantValue::InstStart,
-                    // @fixme: unsupported target for globalset
-                    _ => continue,
-                };
+            ast::DisasmAction::GlobalSet { expr, context_sym } => {
+                let context_id =
+                    scope.globals.lookup_kind(*context_sym, SymbolKind::ContextField)?;
 
-                let id = scope.globals.lookup_kind(*context_sym, SymbolKind::ContextField)?;
-                if !scope.globals.context_fields[id as usize].flow
-                    && matches!(resolved, DisasmConstantValue::InstStart)
-                {
-                    return Err(format!(
-                        "globalset(inst_start,{}) does nothing",
-                        scope.debug(context_sym)
-                    ));
-                }
-                section.global_set.push(id);
+                let mut out = vec![];
+                resolve_pattern_expr::<ContextModValue>(scope, expr, &mut out)?;
+
+                section.global_set.push((context_id, out));
             }
         }
     }
@@ -112,7 +102,7 @@ impl ResolveIdent for ContextModValue {
         match scope.lookup(ident) {
             Some(Local::Field(id)) => {
                 // Context modification expression are evaluated before local fields so the runtime
-                // needs to know the original source of the field to evalaute them correctly.
+                // needs to know the original source of the field to evaluate them correctly.
                 let field = scope.fields[id as usize];
                 match scope.tokens.get(&id) {
                     Some(token) => Ok(Self::TokenField(*token, field)),
@@ -120,6 +110,7 @@ impl ResolveIdent for ContextModValue {
                 }
             }
             Some(Local::InstStart) => Ok(Self::InstStart),
+            Some(Local::InstNext) => Ok(Self::InstNext),
             Some(other) => {
                 Err(format!("{:?}<{}> in context modification", other, scope.debug(&ident)))
             }

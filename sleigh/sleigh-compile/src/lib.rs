@@ -391,9 +391,12 @@ fn add_constructor(
         ctx.data.decode_actions.push(DecodeAction::ModifyContext(*field, (start, end)));
     }
 
-    for field in &constructor.disasm_actions.global_set {
-        let field = symbols.context_fields[*field as usize].field;
-        ctx.data.decode_actions.push(DecodeAction::SaveContext(field));
+    for (context_id, expr) in &constructor.disasm_actions.global_set {
+        let field = symbols.context_fields[*context_id as usize].field;
+        let start = ctx.data.context_disasm_expr.len() as u32;
+        ctx.data.context_disasm_expr.extend_from_slice(expr);
+        let end = ctx.data.context_disasm_expr.len() as u32;
+        ctx.data.decode_actions.push(DecodeAction::SaveContext(field, (start, end)));
     }
 
     for action in &constructor.decode_actions {

@@ -9,6 +9,8 @@ use crate::{
     ConstructorId, Field, TableId, Token,
 };
 
+use std::collections::HashMap;
+
 /// The decoder context for the current instruction.
 pub struct Decoder {
     /// The global decoder context.
@@ -16,6 +18,9 @@ pub struct Decoder {
 
     /// The local context value.
     pub(crate) context: u64,
+
+    /// The future context modifications. The address is the key for the (Field, Val) tuple.
+    future_context_mods: HashMap<u64, Vec<(Field, i64)>>,
 
     /// The bytes in the instruction stream.
     bytes: Vec<u8>,
@@ -31,6 +36,10 @@ pub struct Decoder {
 
     /// Controls whether to ignore delayslots.
     pub(crate) ignore_delay_slots: bool,
+
+    /// Controls whether to allow globalset(any_addr, val) instead of just
+    /// globalset(inst_next, val).
+    pub(crate) allow_any_addr_globalsets: bool,
 
     /// Controls the maximum number of subtables the decoder will attempt to resolve before
     /// bailing. Catches unbounded recursion in SLEIGH specifications.
@@ -60,10 +69,12 @@ impl Decoder {
         Self {
             global_context: 0,
             context: 0,
+            future_context_mods: HashMap::new(),
             bytes: Vec::new(),
             big_endian: false,
             allow_backtracking: true,
             ignore_delay_slots: false,
+            allow_any_addr_globalsets: false,
             max_subtables: 64,
             is_valid: false,
             base_addr: 0,
@@ -85,6 +96,16 @@ impl Decoder {
     /// Decode the current instruction storing the result in `inst`.
     pub fn decode_into(&mut self, sleigh: &SleighData, inst: &mut Instruction) -> Option<()> {
         self.is_valid = true;
+
+        // Apply global set modifications if instruction address matches
+        if self.allow_any_addr_globalsets {
+            if let Some(modifications) = self.future_context_mods.get(&self.base_addr) {
+                for (field, val) in modifications.iter() {
+                    field.set(&mut self.context, *val);
+                    field.set(&mut self.global_context, *val);
+                }
+            }
+        }
 
         // Clear any noflow fields from `global_context`
         for entry in sleigh.context_fields.iter().filter(|entry| !entry.flow) {
@@ -204,9 +225,29 @@ impl Decoder {
                     let value = self.eval_context_expr(*expr, sleigh);
                     field.set(&mut self.context, value);
                 }
-                DecodeAction::SaveContext(field) => {
+                DecodeAction::SaveContext(field, expr) => {
                     let value = field.extract(self.context);
-                    field.set(&mut self.global_context, value);
+                    let addr = self.eval_context_expr(*expr, sleigh);
+
+                    // Modify global_context directly if change should take effect immediately.
+                    // Otherwise, store it for the future modification if feature flag is enabled.
+                    if addr == self.base_addr as i64 {
+                        field.set(&mut self.global_context, value);
+                    } else if self.allow_any_addr_globalsets {
+                        let addr_key = addr as u64;
+                        let modifications =
+                            self.future_context_mods.entry(addr_key).or_insert_with(Vec::new);
+
+                        // Check if we already have a modification for this field at this address
+                        if let Some(existing) = modifications
+                            .iter_mut()
+                            .find(|(existing_field, _)| *existing_field == *field)
+                        {
+                            existing.1 = value;
+                        } else {
+                            modifications.push((*field, value));
+                        }
+                    }
                 }
                 DecodeAction::Eval(idx, kind) => {
                     ctx.locals_mut()[*idx as usize] = match kind {
@@ -586,6 +627,7 @@ pub enum ContextModValue {
     TokenField(Token, Field),
     ContextField(Field),
     InstStart,
+    InstNext,
 }
 
 impl EvalPatternValue for &'_ Decoder {
@@ -596,6 +638,10 @@ impl EvalPatternValue for &'_ Decoder {
             ContextModValue::ContextField(field) => field.extract(self.context),
             ContextModValue::TokenField(token, field) => field.extract(self.get_token(*token)),
             ContextModValue::InstStart => self.base_addr as i64,
+            // NOTE: self.next_state is still zero when this is called so we just set InstNext to
+            // InstStart. Since the context field already has to be modified locally for that
+            // instruction, this should have no effect.
+            ContextModValue::InstNext => self.base_addr as i64,
         }
     }
 }
