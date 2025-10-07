@@ -12,12 +12,12 @@ pcode = { workspace = true }
 target-lexicon = { workspace = true }
 tracing = { workspace = true }
 memoffset = "0.9.1"
-cranelift = "0.113.0"
-cranelift-native = "0.113.0"
-cranelift-module = "0.113.0"
-cranelift-jit = "0.113.0"
-cranelift-codegen = { version = "0.113.0", default-features = false, features = ["std"] }
-wasmtime-jit-debug = { version = "26.0.0", features = ["perf_jitdump"] }
+cranelift = "0.124.1"
+cranelift-native = "0.124.1"
+cranelift-module = "0.124.1"
+cranelift-jit = "0.124.1"
+cranelift-codegen = { version = "0.124.1", default-features = false, features = ["std"] }
+wasmtime-jit-debug = { version = "34.0.2", features = ["perf_jitdump"] }
 
 [dev-dependencies]
 quickcheck = { version = "1.0.3", default-features = false }

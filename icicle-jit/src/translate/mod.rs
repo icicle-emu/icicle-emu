@@ -6,7 +6,7 @@ mod ops;
 use std::collections::HashMap;
 
 use cranelift::{
-    codegen::ir::{AliasRegion, Endianness, FuncRef, Function, SigRef},
+    codegen::ir::{AliasRegion, BlockArg, Endianness, FuncRef, Function, SigRef},
     frontend::Switch,
     prelude::*,
 };
@@ -535,7 +535,11 @@ impl<'a> Translator<'a> {
         let block_id = self.builder.ins().iconst(types::I64, self.block_id as i64);
         let block_offset = self.builder.ins().iconst(types::I64, self.block_offset as i64);
         let next_addr = self.builder.ins().iconst(types::I64, self.last_addr as i64);
-        self.builder.ins().jump(self.exit_block, &[block_id, block_offset, next_addr]);
+        self.builder.ins().jump(self.exit_block, [
+            &BlockArg::from(block_id),
+            &BlockArg::from(block_offset),
+            &BlockArg::from(next_addr),
+        ]);
     }
 
     /// Exit the JIT with a specific interrupt code, value and block offset.
@@ -550,7 +554,11 @@ impl<'a> Translator<'a> {
         self.flush_state(false);
         let block_id = self.builder.ins().iconst(types::I64, self.block_id as i64);
         let block_offset = self.builder.ins().iconst(types::I64, 0_i64);
-        self.builder.ins().jump(self.exit_block, &[block_id, block_offset, addr]);
+        self.builder.ins().jump(self.exit_block, [
+            &BlockArg::from(block_id),
+            &BlockArg::from(block_offset),
+            &BlockArg::from(addr),
+        ]);
     }
 
     /// Generates code that exits the JIT if there is an active exception. Returns the block

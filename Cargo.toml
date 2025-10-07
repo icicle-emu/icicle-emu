@@ -15,10 +15,10 @@ default-members = ["afl-icicle-trace"]
 
 [workspace.dependencies]
 anyhow = "1.0.82"
-target-lexicon = "0.12.14"
+target-lexicon = "0.13.3"
 tracing = { version = "0.1.40", default-features = false }
-object = { version = "0.36.2", default-features = false, features = ["write", "read_core", "elf"] }
-gimli = { version = "0.31.0", features = ["endian-reader"] }
+object = { version = "0.37.3", default-features = false, features = ["write", "read_core", "elf"] }
+gimli = { version = "0.32.3", features = ["endian-reader"] }
 serde = { version = "1.0.197", features = ["derive"] }
 bytemuck = "1"
 pcode = { path = "./sleigh/pcode" }
