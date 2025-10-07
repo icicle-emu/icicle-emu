@@ -1,0 +1,54 @@
+name: Unit Tests
+on:
+  pull_request:
+    branches: [ master ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  unit_tests:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4 # This checks out the current repo.
+
+    - name: Checkout ghidra dependency
+      uses: actions/checkout@v4
+      with:
+        repository: NationalSecurityAgency/ghidra
+        path: ghidra
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@nightly
+      with:
+        toolchain: nightly
+
+    - name: Cache cargo dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Compile
+      env:
+        GHIDRA_SRC: ${{ github.workspace }}/ghidra
+      run: cargo test --lib --bins --all --no-run
+
+    - name: Run unit tests
+      env:
+        GHIDRA_SRC: ${{ github.workspace }}/ghidra
+      run: cargo test --lib --bins --all
+
+    - name: Run integration tests
+      working-directory: ./icicle-test
+      env:
+        GHIDRA_SRC: ${{ github.workspace }}/ghidra
+      run: cargo run
