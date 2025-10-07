@@ -14,7 +14,7 @@ tracing = { workspace = true }
 object = { workspace = true }
 gimli = { workspace = true }
 bytemuck = { workspace = true }
-addr2line = "0.24.1"
+addr2line = "0.25.1"
 bitflags = "2.5.0"
 half = "2.4.1"
 
