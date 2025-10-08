@@ -239,7 +239,6 @@ fn find_conflict_solver(
 #[allow(unused)]
 fn bit_to_string(case: &Pattern) -> String {
     (0..64)
-        .into_iter()
         .map(|bit| match (case.mask >> bit & 1 != 0, case.bits >> bit & 1 != 0) {
             (true, true) => '1',
             (true, false) => '0',
@@ -265,7 +264,7 @@ fn debug_cases(file: &str, symbols: &SymbolTable, table: &Table, cases: &[MatchC
         let _ = writeln!(
             out,
             "| {} | {} | `{}` | `{}` |",
-            constructor.mnemonic.as_ref().map(String::as_str).unwrap_or("∅"),
+            constructor.mnemonic.as_deref().unwrap_or("∅"),
             symbols.format_constructor_line(case.constructor),
             bit_to_string(&case.context),
             bit_to_string(&case.token),

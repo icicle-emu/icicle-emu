@@ -33,7 +33,7 @@ impl core::fmt::Display for NumericFormatter {
                 let value = sxt64(self.value, self.num_bits as u64) as i64;
                 match value < 0 && value != i64::MIN {
                     true => write!(f, "-{:#0x}", -value),
-                    false => write!(f, "{:#0x}", value),
+                    false => write!(f, "{value:#0x}"),
                 }
             }
             (true, false) => write!(f, "{}", sxt64(self.value, self.num_bits as u64) as i64),

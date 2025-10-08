@@ -11,7 +11,7 @@ use icicle_cpu::{
 };
 use target_lexicon::{Aarch64Architecture, Architecture, CDataModel, Endianness, Triple};
 
-use crate::{types, LinuxCpu, LinuxError, LinuxMmu, LinuxResult};
+use crate::{LinuxCpu, LinuxError, LinuxMmu, LinuxResult, types};
 
 pub enum Dynamic {
     Aarch64(aarch64::Aarch64),
@@ -270,13 +270,14 @@ macro_rules! impl_fixed_size {
     };
 }
 
-impl_fixed_size!(U8, 1, false);
-impl_fixed_size!(S8, 1, true);
-impl_fixed_size!(U16, 2, false);
-impl_fixed_size!(S16, 2, true);
+impl_fixed_size!(_U8, 1, false);
+impl_fixed_size!(_S8, 1, true);
+impl_fixed_size!(_U16, 2, false);
+impl_fixed_size!(_S16, 2, true);
 impl_fixed_size!(U32, 4, false);
 impl_fixed_size!(S32, 4, true);
 
+#[allow(unused)]
 pub struct UByte;
 impl CDataType for UByte {
     fn size(_model: &CDataModel) -> u64 {
@@ -284,6 +285,7 @@ impl CDataType for UByte {
     }
 }
 
+#[allow(unused)]
 pub struct SByte;
 impl CDataType for SByte {
     const SIGNED: bool = true;

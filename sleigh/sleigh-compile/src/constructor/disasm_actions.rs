@@ -88,7 +88,7 @@ impl ResolveIdent for DisasmConstantValue {
                 let sym = scope
                     .globals
                     .lookup_kind(ident, SymbolKind::ContextField)
-                    .map_err(|err| format!("Unexpected symbol kind in disasm expr: {}", err))?;
+                    .map_err(|err| format!("Unexpected symbol kind in disasm expr: {err}"))?;
                 Ok(Self::ContextField(scope.globals.context_fields[sym as usize].field))
             }
         }
@@ -119,7 +119,7 @@ impl ResolveIdent for ContextModValue {
                 // expressions without first declaring them in the constraint expression.
                 let sym =
                     scope.globals.lookup_kind(ident, SymbolKind::ContextField).map_err(|err| {
-                        format!("Unexpected symbol kind in disasm context write expr: {}", err)
+                        format!("Unexpected symbol kind in disasm context write expr: {err}")
                     })?;
                 Ok(Self::ContextField(scope.globals.context_fields[sym as usize].field))
             }
