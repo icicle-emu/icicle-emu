@@ -1,6 +1,6 @@
 use std::fmt::Write;
 
-use crate::{decoder::SubtableCtx, AttachmentRef, DisplaySegment, Field, SleighData};
+use crate::{AttachmentRef, DisplaySegment, Field, SleighData, decoder::SubtableCtx};
 
 pub fn disasm_subtable(ctx: SubtableCtx, disasm: &mut String) -> Option<()> {
     for segment in ctx.display_segments() {
@@ -59,5 +59,5 @@ fn write_numeric_field(sleigh: &SleighData, value: i64, field: Field, disasm: &m
         is_hex: field.hex,
         num_bits: field.num_bits,
     };
-    write!(disasm, "{}", fmt).unwrap();
+    write!(disasm, "{fmt}").unwrap();
 }

@@ -1,5 +1,6 @@
-use crate::parser::StrIndex;
 pub use crate::Span;
+
+use crate::parser::StrIndex;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct ConstraintExprId(u32);
@@ -40,19 +41,19 @@ pub enum Item {
 impl ParserDisplay for Item {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>, p: &crate::Parser) -> std::fmt::Result {
         match self {
-            Self::DefineEndian(x) => f.write_fmt(format_args!("{:?}", x)),
+            Self::DefineEndian(x) => f.write_fmt(format_args!("{x:?}")),
             Self::DefineAlignment(x) => f.write_fmt(format_args!("{}", x)),
-            Self::DefineSpace(x) => f.write_fmt(format_args!("{:?}", x)),
-            Self::SpaceNameDef(x) => f.write_fmt(format_args!("{:?}", x)),
-            Self::DefineBitRange(x) => f.write_fmt(format_args!("{:?}", x)),
-            Self::DefineUserOp(x) => f.write_fmt(format_args!("{:?}", x)),
-            Self::DefineToken(x) => f.write_fmt(format_args!("{:?}", x)),
-            Self::DefineContext(x) => f.write_fmt(format_args!("{:?}", x)),
-            Self::AttachVariables(x) => f.write_fmt(format_args!("{:?}", x)),
-            Self::AttachNames(x) => f.write_fmt(format_args!("{:?}", x)),
-            Self::AttachValues(x) => f.write_fmt(format_args!("{:?}", x)),
+            Self::DefineSpace(x) => f.write_fmt(format_args!("{x:?}")),
+            Self::SpaceNameDef(x) => f.write_fmt(format_args!("{x:?}")),
+            Self::DefineBitRange(x) => f.write_fmt(format_args!("{x:?}")),
+            Self::DefineUserOp(x) => f.write_fmt(format_args!("{x:?}")),
+            Self::DefineToken(x) => f.write_fmt(format_args!("{x:?}")),
+            Self::DefineContext(x) => f.write_fmt(format_args!("{x:?}")),
+            Self::AttachVariables(x) => f.write_fmt(format_args!("{x:?}")),
+            Self::AttachNames(x) => f.write_fmt(format_args!("{x:?}")),
+            Self::AttachValues(x) => f.write_fmt(format_args!("{x:?}")),
             Self::Macro(x) => x.fmt(f, p),
-            Self::With(x) => f.write_fmt(format_args!("{:?}", x)),
+            Self::With(x) => f.write_fmt(format_args!("{x:?}")),
             Self::Constructor(x) => x.fmt(f, p),
         }
     }
@@ -298,14 +299,14 @@ impl ParserDisplay for ConstraintExpr {
         match self {
             Self::Ident(ident) => ident.fmt(f, p),
             Self::Cmp(ident, op, operand) => {
-                write!(f, "{}{}{}", ident.display(p), op, operand.display(p))
+                write!(f, "{}{op}{}", ident.display(p), operand.display(p))
             }
             Self::Op(lhs, op, rhs) => {
                 match &**lhs {
                     Self::Ident(_) | Self::Cmp(..) => lhs.fmt(f, p)?,
                     _ => write!(f, "({})", lhs.display(p))?,
                 }
-                write!(f, " {} ", op)?;
+                write!(f, " {op} ")?;
                 match &**rhs {
                     Self::Ident(_) | Self::Cmp(..) => rhs.fmt(f, p)?,
                     _ => write!(f, "({})", rhs.display(p))?,
@@ -399,7 +400,7 @@ impl ParserDisplay for PatternExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>, p: &crate::Parser) -> std::fmt::Result {
         match self {
             Self::Ident(ident) => ident.fmt(f, p),
-            Self::Integer(x) => write!(f, "{:#0x}", x),
+            Self::Integer(x) => write!(f, "{x:#0x}"),
             Self::Op(lhs, op, rhs) => {
                 match &**lhs {
                     Self::Ident(_) | Self::Not(_) | Self::Negate(_) | Self::Integer(_) => {
@@ -407,7 +408,7 @@ impl ParserDisplay for PatternExpr {
                     }
                     _ => write!(f, "({})", lhs.display(p))?,
                 }
-                write!(f, " {} ", op)?;
+                write!(f, " {op} ")?;
                 match &**rhs {
                     Self::Ident(_) | Self::Not(_) | Self::Negate(_) | Self::Integer(_) => {
                         rhs.fmt(f, p)?
@@ -504,13 +505,13 @@ impl ParserDisplay for Statement {
             Self::Store { space, size, pointer, value } => {
                 let space =
                     space.as_ref().map_or(String::new(), |name| format!("[{}]", name.display(p)));
-                let size = size.map_or(String::new(), |size| format!(":{}", size));
+                let size = size.map_or(String::new(), |size| format!(":{size}"));
                 write!(f, "*:{}({}){} = {}", space, pointer.display(p), size, value.display(p))
             }
             Self::Call(call) => write!(f, "{}", call.display(p)),
-            Self::Branch { dst, hint } => write!(f, "{:?} {}", hint, dst.display(p)),
+            Self::Branch { dst, hint } => write!(f, "{hint:?} {}", dst.display(p)),
             Self::CondBranch { cond, dst, hint } => {
-                write!(f, "if {} {} {:?}", cond.display(p), dst.display(p), hint)
+                write!(f, "if {} {} {hint:?}", cond.display(p), dst.display(p))
             }
             Self::Label { label } => write!(f, "<{}>", label.display(p)),
         }
@@ -544,7 +545,7 @@ impl ParserDisplay for JumpLabel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>, p: &crate::Parser) -> std::fmt::Result {
         match self {
             Self::Ident(name) => name.fmt(f, p),
-            Self::Integer(dst, size) => write!(f, "{:#0x}:{}", dst, size),
+            Self::Integer(dst, size) => write!(f, "{dst:#0x}:{size}"),
         }
     }
 }
@@ -566,9 +567,9 @@ impl ParserDisplay for PcodeExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>, p: &crate::Parser) -> std::fmt::Result {
         match self {
             Self::Ident { value } => value.fmt(f, p),
-            Self::Integer { value } => write!(f, "{:#0x}", value),
+            Self::Integer { value } => write!(f, "{value:#0x}"),
             Self::AddressOf { size, value } => {
-                let size = size.map_or(String::new(), |size| format!(":{} ", size));
+                let size = size.map_or(String::new(), |size| format!(":{size} "));
                 write!(f, "&{}{}", size, value.display(p))
             }
             Self::Truncate { value, size } => write!(f, "{}:{}", value.display(p), size),
@@ -579,10 +580,10 @@ impl ParserDisplay for PcodeExpr {
             Self::Deref { space, size, pointer } => {
                 let space =
                     space.as_ref().map_or(String::new(), |space| format!("[{}]", space.display(p)));
-                let size = size.map_or(String::new(), |size| format!(":{}", size));
-                write!(f, "*{}{} {}", space, size, pointer.display(p))
+                let size = size.map_or(String::new(), |size| format!(":{size}"));
+                write!(f, "*{space}{size} {}", pointer.display(p))
             }
-            Self::ConstantPoolRef { params } => write!(f, "constpoolref({:?})", params),
+            Self::ConstantPoolRef { params } => write!(f, "constpoolref({params:?})"),
             Self::Call(call) => write!(f, "{}", call.display(p)),
         }
     }
@@ -723,10 +724,10 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for (i, entry) in self.0.iter().enumerate() {
             if i + 1 < self.0.len() {
-                write!(f, "{}, ", entry)?;
+                write!(f, "{entry}, ")?;
             }
             else {
-                write!(f, "{}", entry)?;
+                write!(f, "{entry}")?;
             }
         }
         Ok(())

@@ -1,4 +1,4 @@
-use crate::{error::Error, Span};
+use crate::{Span, error::Error};
 
 pub type SourceId = u32;
 
@@ -22,8 +22,8 @@ impl Token {
             TokenKind::UnclosedString if expected == [TokenKind::String] => {
                 String::from("Unterminated string")
             }
-            TokenKind::Eof => format!("Unexpected end of file (expected: {:?})", expected),
-            _ => format!("Unexpected token: {:?} (expected {:?})", self.kind, expected),
+            TokenKind::Eof => format!("Unexpected end of file (expected: {expected:?})"),
+            _ => format!("Unexpected token: {:?} (expected {expected:?})", self.kind),
         };
 
         self.error(message)
@@ -352,7 +352,7 @@ impl Lexer {
                     "is" => TokenKind::Is,
 
                     // Multi-character symbols
-                    "f" if self.peek_char(input).map_or(false, |x| "-+/*<>!=".contains(x)) => {
+                    "f" if self.peek_char(input).is_some_and(|x| "-+/*<>!=".contains(x)) => {
                         match self.bump(input).unwrap() {
                             '-' => TokenKind::FMinus,
                             '+' => TokenKind::FPlus,
@@ -365,7 +365,7 @@ impl Lexer {
                             _ => unreachable!(),
                         }
                     }
-                    "s" if self.peek_char(input).map_or(false, |x| "/%<>".contains(x)) => {
+                    "s" if self.peek_char(input).is_some_and(|x| "/%<>".contains(x)) => {
                         match self.bump(input).unwrap() {
                             '/' => TokenKind::SForwardSlash,
                             '%' => TokenKind::SPercent,
@@ -525,7 +525,7 @@ impl Lexer {
             }
         }
 
-        if !self.bump(input).map_or(false, is_ident_char) {
+        if !self.bump(input).is_some_and(is_ident_char) {
             panic!("called `eat_ident` at an invalid location");
         }
 

@@ -265,20 +265,24 @@ fn map_calling_cov(
 
 #[derive(Debug, Deserialize)]
 struct Set {
+    #[serde(rename = "@name")]
     pub name: String,
+    #[serde(rename = "@val")]
     pub val: u64,
 }
 
 #[derive(Debug, Deserialize)]
 struct ProgramCounter {
+    #[serde(rename = "@register")]
     register: String,
 }
 
 #[allow(unused)]
 #[derive(Debug, Deserialize)]
 struct ContextSet {
+    #[serde(rename = "@space")]
     pub space: String,
-    #[serde(rename = "$value")]
+    #[serde(rename = "#content")]
     pub set: Vec<Set>,
 }
 
@@ -306,8 +310,10 @@ struct PSpec {
 
 #[derive(Debug, Deserialize)]
 struct StackPointer {
+    #[serde(rename = "@register")]
     register: String,
     #[allow(unused)]
+    #[serde(rename = "@space")]
     space: String,
 }
 
@@ -322,20 +328,25 @@ enum MetaType {
 
 #[derive(Debug, Deserialize)]
 struct RegisterDesc {
+    #[serde(rename = "@name")]
     name: String,
 }
 
 #[allow(unused)]
 #[derive(Debug, Deserialize)]
 struct AddrDesc {
+    #[serde(rename = "@space")]
     space: String,
 }
 
 #[allow(unused)]
 #[derive(Debug, Deserialize)]
 struct VarnodeDesc {
+    #[serde(rename = "@space")]
     space: String,
+    #[serde(rename = "@offset")]
     offset: u64,
+    #[serde(rename = "@size")]
     size: u64,
 }
 
@@ -352,12 +363,15 @@ enum Location {
 #[derive(Debug, Deserialize)]
 struct Pentry {
     #[allow(unused)]
+    #[serde(rename = "@minsize")]
     minsize: u32,
     #[allow(unused)]
+    #[serde(rename = "@maxsize")]
     maxsize: u32,
     #[serde(default)]
+    #[serde(rename = "@metatype")]
     metatype: MetaType,
-    #[serde(rename = "$value")]
+    #[serde(rename = "#content")]
     location: Location,
 }
 
@@ -368,7 +382,7 @@ struct EntryList {
 
 #[derive(Debug, Default, Deserialize)]
 pub struct LocationList {
-    #[serde(rename = "$value")]
+    #[serde(rename = "#content")]
     location: Vec<Location>,
 }
 
@@ -439,20 +453,31 @@ impl LanguageDef {
 
 #[derive(Debug, Deserialize)]
 pub struct CompilerDesc {
+    #[serde(rename = "@name")]
     pub name: String,
+    #[serde(rename = "@spec")]
     pub spec: String,
+    #[serde(rename = "@id")]
     pub id: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct LanguageDesc {
+    #[serde(rename = "@id")]
     pub id: String,
+    #[serde(rename = "@processor")]
     pub processor: String,
+    #[serde(rename = "@endian")]
     pub endian: Endianness,
+    #[serde(rename = "@size")]
     pub size: u32,
+    #[serde(rename = "@variant")]
     pub variant: String,
+    #[serde(rename = "@version")]
     pub version: String,
+    #[serde(rename = "@slafile")]
     pub slafile: String,
+    #[serde(rename = "@processorspec")]
     pub processorspec: String,
     pub description: String,
     pub compiler: Vec<CompilerDesc>,

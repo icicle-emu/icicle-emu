@@ -40,7 +40,7 @@ pub struct State {
 impl State {
     /// Gets whether we are in a disabled section in the preprocessor
     pub fn is_disabled(&self) -> bool {
-        !self.enabled_stack.last().map_or(true, |x| matches!(x, BranchState::Enabled))
+        !self.enabled_stack.last().is_none_or(|x| matches!(x, BranchState::Enabled))
     }
 
     /// Sets the current preprocessor branch state

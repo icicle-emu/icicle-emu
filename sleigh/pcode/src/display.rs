@@ -217,7 +217,7 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>, ctx: &T) -> std::fmt::Result {
         match self {
             Value::Var(v) => write!(f, "{}", v.display(ctx)),
-            Value::Const(c, sz) => write!(f, "{:#0x}:{}", c, sz),
+            Value::Const(c, sz) => write!(f, "{c:#0x}:{sz}"),
         }
     }
 }

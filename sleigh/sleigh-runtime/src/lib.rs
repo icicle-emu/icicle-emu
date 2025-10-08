@@ -38,9 +38,10 @@ pub struct RuntimeConfig {
     pub ignore_delay_slots: bool,
     /// Controls whether backtracking is allowed during constructor matching.
     pub allow_backtracking: bool,
+    /// Whether `globalset` operations other than `instr_next` are applied.
+    pub allow_any_addr_globalsets: bool,
     /// Controls whether the runtime context value will be updated as a result of `globalset`
     /// actions during instruction decoding.
-    pub allow_any_addr_globalsets: bool,
     pub update_context: bool,
 }
 
