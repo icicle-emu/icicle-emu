@@ -1,7 +1,7 @@
 use sleigh_parse::ast::{self, ParserDisplay};
 use sleigh_runtime::{
-    matcher::{Constraint, ConstraintOperand, MatchCase},
     ConstructorId,
+    matcher::{Constraint, ConstraintOperand, MatchCase},
 };
 
 use crate::symbols::{SymbolTable, Table};
@@ -98,7 +98,7 @@ fn build_case_matcher(
 
     let token_bytes = tokens.bits.len() as u8 / 8;
     if token_bytes > 8 {
-        return Err(format!("Constraint requires matching {} bytes", token_bytes));
+        return Err(format!("Constraint requires matching {token_bytes} bytes"));
     }
 
     let case = MatchCase {
@@ -275,7 +275,7 @@ impl BitVec {
 
     /// Shifts the bit vector by inserting `shift` false values at the start of the vector
     pub fn shift_start(self, shift: usize) -> Self {
-        std::iter::repeat(false).take(shift).chain(self.bit_iter()).collect()
+        std::iter::repeat_n(false, shift).chain(self.bit_iter()).collect()
     }
 
     /// Grow the bit vector to contain at least `len` bits, initializing new bits with `value`. Does

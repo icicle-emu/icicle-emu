@@ -1,12 +1,12 @@
 use crate::{
+    Constructor, DEBUG, DecodeAction, DisplaySegment, EvalKind, LocalIndex, ROOT_TABLE_ID,
+    SleighData,
     semantics::{PcodeTmp, SemanticAction},
-    Constructor, DecodeAction, DisplaySegment, EvalKind, LocalIndex, SleighData, DEBUG,
-    ROOT_TABLE_ID,
 };
 
 use crate::{
-    expr::{eval_pattern_expr, EvalPatternValue, PatternExprRange},
     ConstructorId, Field, TableId, Token,
+    expr::{EvalPatternValue, PatternExprRange, eval_pattern_expr},
 };
 
 use std::collections::HashMap;
@@ -233,7 +233,8 @@ impl Decoder {
                     // Otherwise, store it for the future modification if feature flag is enabled.
                     if addr == self.base_addr as i64 {
                         field.set(&mut self.global_context, value);
-                    } else if self.allow_any_addr_globalsets {
+                    }
+                    else if self.allow_any_addr_globalsets {
                         let addr_key = addr as u64;
                         let modifications =
                             self.future_context_mods.entry(addr_key).or_insert_with(Vec::new);
@@ -244,7 +245,8 @@ impl Decoder {
                             .find(|(existing_field, _)| *existing_field == *field)
                         {
                             existing.1 = value;
-                        } else {
+                        }
+                        else {
                             modifications.push((*field, value));
                         }
                     }
@@ -414,7 +416,7 @@ impl Instruction {
 
     /// Returns the length of the instruction in bytes.
     pub fn num_bytes(&self) -> u64 {
-        self.inst_next.checked_sub(self.inst_start).unwrap_or(0)
+        self.inst_next.saturating_sub(self.inst_start)
     }
 
     /// Reserve `count` local parameters, returning the range of the reserved parameters.

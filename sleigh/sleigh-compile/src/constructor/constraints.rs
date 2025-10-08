@@ -115,10 +115,10 @@ impl<'a, 'b> ConstraintVisitor<'a, 'b> {
                 let mut out = vec![];
                 match src {
                     OperandSource::Token => {
-                        resolve_pattern_expr::<TokenResolver>(&self.scope, expr, &mut out)?
+                        resolve_pattern_expr::<TokenResolver>(self.scope, expr, &mut out)?
                     }
                     OperandSource::Context => {
-                        resolve_pattern_expr::<ContextResolver>(&self.scope, expr, &mut out)?
+                        resolve_pattern_expr::<ContextResolver>(self.scope, expr, &mut out)?
                     }
                 };
                 Ok(ConstraintOperand::Expr(out))

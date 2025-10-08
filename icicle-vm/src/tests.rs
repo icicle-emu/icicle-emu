@@ -102,3 +102,43 @@ fn single_step_after_fault() {
     assert_eq!(vm.step(1), VmExit::InstructionLimit);
     assert_eq!(vm.cpu.read_pc(), 0x0A);
 }
+
+#[test]
+fn build_arm() {
+    let _ = crate::build(&Config::from_target_triple("arm-none")).unwrap();
+}
+
+#[test]
+fn build_aarch64() {
+    let _ = crate::build(&Config::from_target_triple("aarch64-none")).unwrap();
+}
+
+#[test]
+fn build_m68k() {
+    let _ = crate::build(&Config::from_target_triple("m68k-none")).unwrap();
+}
+
+#[test]
+fn build_mips32() {
+    let _ = crate::build(&Config::from_target_triple("mips-none")).unwrap();
+}
+
+#[test]
+fn build_msp430x() {
+    let _ = crate::build(&Config::from_target_triple("msp430-none")).unwrap();
+}
+
+#[test]
+fn build_powerpc() {
+    let _ = crate::build(&Config::from_target_triple("powerpc-none")).unwrap();
+}
+
+#[test]
+fn build_riscv64() {
+    let _ = crate::build(&Config::from_target_triple("riscv64-none")).unwrap();
+}
+
+#[test]
+fn build_x86_64() {
+    let _ = crate::build(&Config::from_target_triple("x86_64-none")).unwrap();
+}
