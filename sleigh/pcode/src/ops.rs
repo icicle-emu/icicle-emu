@@ -312,7 +312,12 @@ impl Block {
     }
 
     pub fn next_tmp(&self) -> i16 {
-        self.instructions.iter().map(|x| x.output.id).min().map_or(-1, |x| x - 1)
+        self.instructions
+            .iter()
+            .filter(|x| x.output.is_temp())
+            .map(|x| x.output.id)
+            .min()
+            .map_or(-1, |x| x - 1)
     }
 
     /// Returns the address of the first instruction marker in the block (or None if there is no

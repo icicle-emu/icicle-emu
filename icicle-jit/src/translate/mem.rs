@@ -1,18 +1,18 @@
 //! Module for interacting with memory inside of the JIT.
 
 use cranelift::prelude::{
-    types, Block, InstBuilder, IntCC, MemFlags, StackSlotData, StackSlotKind::ExplicitSlot, Type,
-    Value,
+    Block, InstBuilder, IntCC, MemFlags, StackSlotData, StackSlotKind::ExplicitSlot, Type, Value,
+    types,
 };
-use cranelift_codegen::ir::{AliasRegion, Endianness};
+use cranelift_codegen::ir::{AliasRegion, BlockArg, Endianness};
 use icicle_cpu::mem::{
     self, perm,
-    physical::{PageData, OFFSET_BITS},
-    tlb::{TLBEntry, TLB_INDEX_BITS},
+    physical::{OFFSET_BITS, PageData},
+    tlb::{TLB_INDEX_BITS, TLBEntry},
 };
 use memoffset::offset_of;
 
-use crate::translate::{is_jit_supported_size, sized_int, Translator};
+use crate::translate::{Translator, is_jit_supported_size, sized_int};
 
 #[derive(Clone, Copy)]
 enum AccessKind {
@@ -198,8 +198,8 @@ fn splat_const(trans: &mut Translator, value: u8, ty: Type) -> Value {
 fn load_host(trans: &mut Translator, addr: Value, size: u8) -> Value {
     let ty = sized_int(size);
 
-    let mut flags = MemFlags::new().with_notrap().with_alias_region(Some(AliasRegion::Heap));
-    flags.set_endianness(trans.ctx.endianness);
+    let flags = MemFlags::new().with_notrap().with_alias_region(Some(AliasRegion::Heap));
+    // flags.set_endianness(trans.ctx.endianness);
     let mut result = trans.builder.ins().load(ty, flags, addr, 0);
 
     // Setting the endianness doesn't actually do anything in x86_64 backend for cranelift
@@ -265,7 +265,7 @@ pub(super) fn load_ram(trans: &mut Translator, guest_addr: pcode::Value, output:
     // inline access (fallthrough):
     if let Some(host_addr) = host_addr {
         let value = load_host(trans, host_addr, size);
-        trans.builder.ins().jump(success_block, &[value]);
+        trans.builder.ins().jump(success_block, [&BlockArg::from(value)]);
     }
 
     // fallback:
@@ -273,7 +273,7 @@ pub(super) fn load_ram(trans: &mut Translator, guest_addr: pcode::Value, output:
         trans.builder.switch_to_block(fallback_block);
         trans.builder.seal_block(fallback_block);
         let value = load_fallback(trans, output, guest_addr_val);
-        trans.builder.ins().jump(success_block, &[value]);
+        trans.builder.ins().jump(success_block, [&BlockArg::from(value)]);
     }
 
     // success:
@@ -314,8 +314,8 @@ fn load_fallback(trans: &mut Translator, output: pcode::VarNode, guest_addr: Val
 }
 
 pub(super) fn store_host(trans: &mut Translator, addr: Value, mut value: Value, size: u8) {
-    let mut flags = MemFlags::new().with_notrap().with_alias_region(Some(AliasRegion::Heap));
-    flags.set_endianness(trans.ctx.endianness);
+    let flags = MemFlags::new().with_notrap().with_alias_region(Some(AliasRegion::Heap));
+    // flags.set_endianness(trans.ctx.endianness);
     // Setting the endianness doesn't actually do anything in x86_64 backend for cranelift
     // currently, so we manually perform a byte swap operation.
     if trans.ctx.endianness != Endianness::Little && size != 1 {

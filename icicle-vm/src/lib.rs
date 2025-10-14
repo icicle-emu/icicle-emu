@@ -14,7 +14,7 @@ pub use icicle_cpu::VmExit;
 pub use icicle_linux as linux;
 
 pub use crate::{
-    builder::{build, build_with_path, sleigh_init, x86, BuildError},
+    builder::{BuildError, build, build_with_path, sleigh_init, x86},
     injector::{CodeInjector, InjectorRef},
 };
 pub use icicle_cpu::BlockTable;
@@ -25,9 +25,9 @@ use std::{
 };
 
 use icicle_cpu::{
-    lifter::{self, count_instructions, DecodeError, Target},
-    mem, BlockKey, Cpu, CpuSnapshot, Environment, Exception, ExceptionCode, InternalError,
-    ValueSource,
+    BlockKey, Cpu, CpuSnapshot, Environment, Exception, ExceptionCode, InternalError, ValueSource,
+    lifter::{self, DecodeError, Target, count_instructions},
+    mem,
 };
 use pcode::PcodeDisplay;
 
@@ -375,12 +375,26 @@ impl Vm {
             print_interpreter_enter(self, block_id, offset);
         }
         self.cpu.block_offset = 0;
-        loop {
-            let block = match self.code.blocks.get(block_id as usize) {
-                Some(block) => block,
-                None => return self.corrupted_block_map(block_id),
-            };
+        let Some(mut block) = self.code.blocks.get(block_id as usize)
+        else {
+            self.corrupted_block_map(block_id);
+            return;
+        };
 
+        // The interpreter decrements the fuel counter at the start of each instruction (i.e., at
+        // the `Op::InstructionMarker` and when the fuel counter reaches zero, the interpreter stops
+        // at the next instruction marker.
+        //
+        // However, there are cases where we enter the interpreter in the middle of a block (e.g.,
+        // resuming after a fault). To account for the missing instruction marker, we need to
+        // decrement the fuel counter here.
+        if let Some(inst) = block.pcode.instructions.get(offset as usize) {
+            if !matches!(inst.op, pcode::Op::InstructionMarker) {
+                self.cpu.fuel.remaining = self.cpu.fuel.remaining.saturating_sub(1);
+            }
+        }
+
+        loop {
             if block.has_breakpoint() {
                 // Determine how many steps to execute before we hit the first breakpoint in this
                 // block.
@@ -465,6 +479,11 @@ impl Vm {
                     break;
                 }
             }
+
+            block = match self.code.blocks.get(block_id as usize) {
+                Some(block) => block,
+                None => return self.corrupted_block_map(block_id),
+            };
         }
 
         if TRACE_EXEC {

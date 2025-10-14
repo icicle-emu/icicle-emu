@@ -11,8 +11,7 @@ impl Span {
     pub fn new(start: Span, end: Span) -> Self {
         if start.src != end.src {
             eprintln!(
-                "[WARNING] trying to compute span that crosses source boundaries: start={:?}, end={:?}",
-                start, end
+                "[WARNING] trying to compute span that crosses source boundaries: start={start:?}, end={end:?}",
             )
         }
 
