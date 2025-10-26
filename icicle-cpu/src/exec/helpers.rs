@@ -5,7 +5,7 @@ use crate::{Cpu, ExceptionCode, ValueSource};
 pub type PcodeOpHelper = fn(&mut Cpu, VarNode, [Value; 2]);
 
 pub fn unknown_operation(cpu: &mut Cpu, _: VarNode, _: [Value; 2]) {
-    cpu.exception.code = ExceptionCode::UnimplementedOp as u32;
+    cpu.exception = ExceptionCode::UnimplementedOp.into();
 }
 
 pub const HELPERS: &[(&str, PcodeOpHelper)] = &[
@@ -44,8 +44,7 @@ fn count_leading_zeros(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
         8 => cpu.read::<u64>(input).leading_zeros(),
         16 => cpu.read::<u128>(input).leading_zeros(),
         size => {
-            cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
-            cpu.exception.value = size as u64;
+            cpu.exception = (ExceptionCode::InvalidOpSize, size as u64).into();
             return;
         }
     };
@@ -61,8 +60,7 @@ fn count_leading_ones(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
         8 => cpu.read::<u64>(input).leading_ones(),
         16 => cpu.read::<u128>(input).leading_ones(),
         size => {
-            cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
-            cpu.exception.value = size as u64;
+            cpu.exception = (ExceptionCode::InvalidOpSize, size as u64).into();
             return;
         }
     };
@@ -73,8 +71,7 @@ fn bcd_add(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
     let size = dst.size;
 
     if args[0].size() != size || args[1].size() != size {
-        cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
-        cpu.exception.value = args[0].size() as u64;
+        cpu.exception = (ExceptionCode::InvalidOpSize, args[0].size() as u64).into();
         return;
     }
 
@@ -92,8 +89,7 @@ fn bcd_add(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
             cpu.write_var(dst, result);
         }
         _ => {
-            cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
-            cpu.exception.value = args[0].size() as u64;
+            cpu.exception = (ExceptionCode::InvalidOpSize, args[0].size() as u64).into();
         }
     }
 }
@@ -152,8 +148,7 @@ fn unsigned_saturate(cpu: &mut Cpu, dst: pcode::VarNode, args: [Value; 2]) {
     // truncated. Here we try to detect bugs in the spec by returning an error if the result would
     // never change.
     if bits >= (args[0].size() as u32 * 8) || bits >= 64 {
-        cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
-        cpu.exception.value = args[0].size() as u64;
+        cpu.exception = (ExceptionCode::InvalidOpSize, args[0].size() as u64).into();
         return;
     }
 
@@ -165,8 +160,7 @@ fn unsigned_saturate(cpu: &mut Cpu, dst: pcode::VarNode, args: [Value; 2]) {
 fn unsigned_does_saturate(cpu: &mut Cpu, dst: pcode::VarNode, args: [Value; 2]) {
     let bits: u32 = cpu.read_dynamic(args[1]).zxt();
     if bits >= (args[0].size() as u32 * 8) || bits >= 64 {
-        cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
-        cpu.exception.value = args[0].size() as u64;
+        cpu.exception = (ExceptionCode::InvalidOpSize, args[0].size() as u64).into();
         return;
     }
 
@@ -192,8 +186,7 @@ fn signed_saturate_impl(value: i64, bits: u32) -> (i64, bool) {
 fn signed_saturate(cpu: &mut Cpu, dst: pcode::VarNode, args: [Value; 2]) {
     let bits: u32 = cpu.read_dynamic(args[1]).zxt();
     if bits >= (args[0].size() as u32 * 8) || bits >= 64 {
-        cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
-        cpu.exception.value = args[0].size() as u64;
+        cpu.exception = (ExceptionCode::InvalidOpSize, args[0].size() as u64).into();
         return;
     }
 
@@ -205,8 +198,7 @@ fn signed_saturate(cpu: &mut Cpu, dst: pcode::VarNode, args: [Value; 2]) {
 fn signed_does_saturate(cpu: &mut Cpu, dst: pcode::VarNode, args: [Value; 2]) {
     let bits: u32 = cpu.read_dynamic(args[1]).zxt();
     if bits >= (args[0].size() as u32 * 8) || bits >= 64 {
-        cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
-        cpu.exception.value = args[0].size() as u64;
+        cpu.exception = (ExceptionCode::InvalidOpSize, args[0].size() as u64).into();
         return;
     }
     let value: i64 = cpu.read_dynamic(args[0]).sxt();
@@ -219,8 +211,7 @@ fn saturating_sub(cpu: &mut Cpu, dst: pcode::VarNode, args: [Value; 2]) {
     let size = dst.size;
 
     if args[0].size() != size || args[1].size() != size {
-        cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
-        cpu.exception.value = args[0].size() as u64;
+        cpu.exception = (ExceptionCode::InvalidOpSize, args[0].size() as u64).into();
         return;
     }
 
@@ -246,8 +237,7 @@ fn saturating_sub(cpu: &mut Cpu, dst: pcode::VarNode, args: [Value; 2]) {
             cpu.write_var(dst, a.saturating_sub(b))
         }
         _ => {
-            cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
-            cpu.exception.value = args[0].size() as u64;
+            cpu.exception = (ExceptionCode::InvalidOpSize, args[0].size() as u64).into();
         }
     }
 }
@@ -407,8 +397,7 @@ pub mod x86 {
             }
             unknown => {
                 tracing::warn!("Unknown CPUID index: {:0x}", unknown);
-                cpu.exception.code = ExceptionCode::UnknownCpuID as u32;
-                cpu.exception.value = unknown as u64;
+                cpu.exception = (ExceptionCode::UnknownCpuID, unknown as u64).into();
             }
         }
     }
@@ -647,8 +636,7 @@ pub mod aarch64 {
         let size = cpu.args[0] as u8;
         if size == 0 {
             // This only occurs as a result of a SLEIGH bug.
-            cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
-            cpu.exception.value = 0;
+            cpu.exception = ExceptionCode::InvalidOpSize.into();
             return;
         }
 

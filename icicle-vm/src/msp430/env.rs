@@ -9,7 +9,7 @@ use crate::{
         elf::ElfLoader,
         mem::{perm, IoMemory, IoMemoryAny, Mapping, MemError, MemResult},
         utils::XorShiftRng,
-        Cpu, Environment, Exception, ExceptionCode, ValueSource,
+        Cpu, Environment, ExceptionCode, ValueSource,
     },
     hw, BuildError, VmExit,
 };
@@ -161,7 +161,7 @@ impl Msp430 {
         // Update stack pointer and jump to ISR handler.
         cpu.write_var(self.sp, sp - 4);
         let isr = cpu.mem.read_u16(isr_addr, perm::READ)? as u32;
-        cpu.exception = Exception::new(ExceptionCode::ExternalAddr, isr as u64);
+        cpu.exception = (ExceptionCode::ExternalAddr, isr as u64).into();
 
         Ok(())
     }
@@ -281,8 +281,7 @@ impl Msp430 {
                 tracing::trace!("[{}] {}: {}_ISR", cpu.icount, interrupt.name, interrupt.isr_name);
                 let isr_addr = interrupt.isr;
                 if let Err(e) = self.call_interrupt(cpu, isr_addr) {
-                    cpu.exception =
-                        Exception::new(ExceptionCode::from_load_error(e), cpu.read_pc());
+                    cpu.exception = (ExceptionCode::from_load_error(e), cpu.read_pc()).into();
                 }
                 return true;
             }

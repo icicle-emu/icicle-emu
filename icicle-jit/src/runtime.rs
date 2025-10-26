@@ -1,19 +1,17 @@
 use icicle_cpu::{mem::perm, Cpu, ExceptionCode, InternalError};
 
 pub unsafe extern "C" fn jit_compilation_error(cpu: *mut Cpu, addr: u64) -> u64 {
-    (*cpu).exception.code = ExceptionCode::JitError as u32;
+    (*cpu).exception = (ExceptionCode::JitError, 0x0).into();
     addr
 }
 
 pub unsafe extern "C" fn bad_lookup_error(cpu: *mut Cpu, addr: u64) -> u64 {
-    (*cpu).exception.code = ExceptionCode::JitError as u32;
-    (*cpu).exception.value = 0x1;
+    (*cpu).exception = (ExceptionCode::JitError, 0x1).into();
     addr
 }
 
 pub unsafe extern "C" fn address_not_translated(cpu: *mut Cpu, addr: u64) -> u64 {
-    (*cpu).exception.code = ExceptionCode::CodeNotTranslated as u32;
-    (*cpu).exception.value = addr;
+    (*cpu).exception = (ExceptionCode::CodeNotTranslated, addr).into();
     addr
 }
 
@@ -29,8 +27,7 @@ fn load<const N: usize>(cpu_ptr: *mut Cpu, addr: u64) -> [u8; N] {
         Ok(v) => v,
         Err(e) => {
             unsafe {
-                (*cpu_ptr).exception.code = ExceptionCode::from_load_error(e) as u32;
-                (*cpu_ptr).exception.value = addr;
+                (*cpu_ptr).exception = (e, addr, N).into();
             }
             [0; N]
         }
@@ -70,8 +67,7 @@ fn store<const N: usize>(cpu_ptr: *mut Cpu, addr: u64, value: [u8; N]) {
     let result = unsafe { (*cpu_ptr).mem.write(addr, value, perm::WRITE) };
     if let Err(e) = result {
         unsafe {
-            (*cpu_ptr).exception.code = ExceptionCode::from_store_error(e) as u32;
-            (*cpu_ptr).exception.value = addr;
+            (*cpu_ptr).exception = (e, addr, value).into();
         }
     }
 }

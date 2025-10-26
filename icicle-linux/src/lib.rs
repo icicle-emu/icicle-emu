@@ -19,7 +19,7 @@ use icicle_cpu::{
     debug_info::{DebugInfo, SourceLocation},
     elf::ElfLoader,
     mem::{self, perm, AllocLayout, Mapping, MemError, MemResult, VirtualMemoryMap},
-    Exception, ExceptionCode, ValueSource, VmExit,
+    ExceptionCode, ValueSource, VmExit,
 };
 
 pub trait LinuxMmu {
@@ -177,7 +177,7 @@ impl LinuxCpu for icicle_cpu::Cpu {
 
     fn resume(&mut self) {
         let next_pc = ValueSource::read_var(self, self.arch.reg_next_pc);
-        self.exception = Exception::new(ExceptionCode::ExternalAddr, next_pc);
+        self.exception = (ExceptionCode::ExternalAddr, next_pc).into();
         self.set_next_pc(next_pc);
     }
 
