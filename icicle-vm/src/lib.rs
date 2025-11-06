@@ -25,7 +25,7 @@ use std::{
 };
 
 use icicle_cpu::{
-    BlockKey, Cpu, CpuSnapshot, Environment, Exception, ExceptionCode, InternalError, ValueSource,
+    BlockKey, Cpu, CpuSnapshot, Environment, ExceptionCode, InternalError, ValueSource,
     lifter::{self, DecodeError, Target, count_instructions},
     mem,
 };
@@ -210,7 +210,7 @@ impl Vm {
                 self.cpu.update_fuel(0);
             }
             else {
-                self.cpu.exception.code = ExceptionCode::InstructionLimit as u32;
+                self.cpu.exception = ExceptionCode::InstructionLimit.into();
             }
 
             match self.handle_exception() {
@@ -301,7 +301,7 @@ impl Vm {
             }
             Err(e) => {
                 tracing::trace!("DecodeError at {pc:#x}: {e:?}");
-                self.cpu.exception = cpu::Exception::new(ExceptionCode::from(e), pc);
+                self.cpu.exception = (ExceptionCode::from(e), pc).into();
                 self.cpu.block_id = u64::MAX;
                 if self.cpu.icount >= self.icount_limit {
                     return VmExit::InstructionLimit;
@@ -336,8 +336,7 @@ impl Vm {
     #[cold]
     #[inline(never)]
     fn corrupted_block_map(&mut self, id: u64) {
-        self.cpu.exception.code = ExceptionCode::InternalError as u32;
-        self.cpu.exception.value = InternalError::CorruptedBlockMap as u64;
+        self.cpu.exception = (ExceptionCode::InternalError, InternalError::CorruptedBlockMap).into();
         let pc = self.cpu.read_pc();
         eprintln!(
             "Block map corrupted at: pc={pc:#x} id={id}\n{}",
@@ -366,8 +365,7 @@ impl Vm {
         let (mut block_id, mut offset) = match self.get_current_block() {
             Some(value) => value,
             None => {
-                self.cpu.exception.code = ExceptionCode::CodeNotTranslated as u32;
-                self.cpu.exception.value = self.cpu.read_pc();
+                self.cpu.exception = (ExceptionCode::CodeNotTranslated, self.cpu.read_pc()).into();
                 return;
             }
         };
@@ -449,8 +447,7 @@ impl Vm {
                         }
                         None => {
                             self.cpu.block_id = block_id;
-                            self.cpu.exception.code = ExceptionCode::CodeNotTranslated as u32;
-                            self.cpu.exception.value = addr;
+                            self.cpu.exception = (ExceptionCode::CodeNotTranslated, addr).into();
                             break;
                         }
                     }
@@ -475,7 +472,7 @@ impl Vm {
                     else {
                         ExceptionCode::from(e)
                     };
-                    self.cpu.exception = Exception::new(code, addr);
+                    self.cpu.exception = (code, addr).into();
                     break;
                 }
             }
@@ -660,8 +657,7 @@ impl Vm {
     #[cold]
     fn invalid_isa_mode(&mut self) {
         tracing::error!("Unknown or unsupported ISA mode: {}", self.prev_isa_mode);
-        self.cpu.exception.code = ExceptionCode::InternalError as u32;
-        self.cpu.exception.value = InternalError::CorruptedBlockMap as u64;
+        self.cpu.exception = (ExceptionCode::InternalError, InternalError::CorruptedBlockMap).into();
     }
 
     #[inline(never)]

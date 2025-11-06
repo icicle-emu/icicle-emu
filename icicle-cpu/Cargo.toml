@@ -17,6 +17,7 @@ bytemuck = { workspace = true }
 addr2line = "0.25.1"
 bitflags = "2.5.0"
 half = "2.4.1"
+smallvec = "1.13"
 
 [dev-dependencies]
 quickcheck = { version = "1.0.3", default-features = false }
