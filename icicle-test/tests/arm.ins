@@ -265,3 +265,9 @@
     // Q value computed incorrectly (result of SignedSaturate passed to SignedDoesSaturate instead of original result)
     // r2 = 0x7fffffff, lr = 1 => r2 = 0x7fffffff, Q = 1;
 }
+
+// BLX in thumb mode
+0x70096b12|1 [00 f0 c2 e8] "blx 0x70096c98"
+{
+    pc = 0x70096b12, TB = 1 => pc = 0x70096c98, TB = 0;
+}
