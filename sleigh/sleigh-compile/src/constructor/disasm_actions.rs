@@ -6,16 +6,30 @@ use crate::{
     symbols::{Symbol, SymbolKind},
 };
 
+/// A context operation - either a context modification or a globalset.
+///
+/// Needed to preserve processing order for the following situation:
+/// `[loopEnd=1; globalset(addr, loopEnd); loopEnd=0;]`:
+/// - First, `loopEnd` is set to 1 in the local context
+/// - Then, `globalset` captures the *current* value of `loopEnd` (which is 1) for `addr`
+/// - Finally, `loopEnd` is reset to 0
+///
+/// If these operations are processed out of order, the globalset might capture the wrong value.
+#[derive(Clone, Debug)]
+pub(crate) enum ContextAction {
+    /// Modify a context field locally
+    Modify(Field, Vec<PatternExprOp<ContextModValue>>),
+    /// GlobalSet: saves context value for a target address
+    GlobalSet(u32, Vec<PatternExprOp<ContextModValue>>),
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct DisasmActions {
     /// Fields assigned to in the disassembly expression
     pub fields: Vec<(FieldIndex, Vec<PatternExprOp<DisasmConstantValue>>)>,
 
-    /// The context fields modified in this section
-    pub context_mod: Vec<(Field, Vec<PatternExprOp<ContextModValue>>)>,
-
-    /// The context fields globally set by this section
-    pub global_set: Vec<(u32, Vec<PatternExprOp<ContextModValue>>)>,
+    /// Context operations in order (modifications and globalsets)
+    pub context_actions: Vec<ContextAction>,
 }
 
 pub(crate) fn resolve(
@@ -34,7 +48,7 @@ pub(crate) fn resolve(
 
                         let mut out = vec![];
                         resolve_pattern_expr::<ContextModValue>(scope, expr, &mut out)?;
-                        section.context_mod.push((field, out));
+                        section.context_actions.push(ContextAction::Modify(field, out));
                     }
 
                     // An expression that sets a disassembly constant.
@@ -65,7 +79,7 @@ pub(crate) fn resolve(
                 let mut out = vec![];
                 resolve_pattern_expr::<ContextModValue>(scope, expr, &mut out)?;
 
-                section.global_set.push((context_id, out));
+                section.context_actions.push(ContextAction::GlobalSet(context_id, out));
             }
         }
     }
@@ -109,6 +123,7 @@ impl ResolveIdent for ContextModValue {
                     None => Ok(Self::ContextField(field)),
                 }
             }
+            Some(Local::Subtable(idx)) => Ok(Self::Subtable(idx)),
             Some(Local::InstStart) => Ok(Self::InstStart),
             Some(Local::InstNext) => Ok(Self::InstNext),
             Some(other) => {

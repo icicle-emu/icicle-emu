@@ -272,6 +272,16 @@ pub enum EvalKind {
     TokenField(Token, Field),
 }
 
+/// The address source for a globalset operation.
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub enum GlobalSetAddr {
+    /// Address computed from a pattern expression (can be evaluated during decode).
+    Expr(PatternExprRange),
+    /// Address comes from a subtable's export (resolved after eval_disasm_expr).
+    /// The u32 is the local subtable index.
+    Subtable(u32),
+}
+
 /// An action for the decoder to perform.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum DecodeAction {
@@ -279,7 +289,7 @@ pub enum DecodeAction {
     ModifyContext(Field, PatternExprRange),
 
     /// Globally saves a context value.
-    SaveContext(Field, PatternExprRange),
+    SaveContext(Field, GlobalSetAddr),
 
     /// Evaluate the current value of a field and store it into a local.
     Eval(LocalIndex, EvalKind),

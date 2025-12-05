@@ -12,6 +12,7 @@ use crate::{
     symbols::{Attachment, SymbolKind, SymbolTable, TableId},
 };
 
+pub(crate) use self::disasm_actions::ContextAction;
 pub use self::semantics::Semantics;
 
 mod display;

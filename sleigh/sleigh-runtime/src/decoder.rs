@@ -1,7 +1,7 @@
 use crate::{
-    Constructor, DEBUG, DecodeAction, DisplaySegment, EvalKind, LocalIndex, ROOT_TABLE_ID,
-    SleighData,
-    semantics::{PcodeTmp, SemanticAction},
+    Constructor, DEBUG, DecodeAction, DisplaySegment, EvalKind, GlobalSetAddr, LocalIndex,
+    ROOT_TABLE_ID, SleighData,
+    semantics::{Export, PcodeTmp, SemanticAction},
 };
 
 use crate::{
@@ -39,7 +39,7 @@ pub struct Decoder {
 
     /// Controls whether to allow globalset(any_addr, val) instead of just
     /// globalset(inst_next, val).
-    pub(crate) allow_any_addr_globalsets: bool,
+    pub allow_any_addr_globalsets: bool,
 
     /// Controls the maximum number of subtables the decoder will attempt to resolve before
     /// bailing. Catches unbounded recursion in SLEIGH specifications.
@@ -62,6 +62,10 @@ pub struct Decoder {
 
     /// A stack for storing intermediate values used for evaluating expressions.
     eval_stack: Vec<i64>,
+
+    /// Processed after eval_disasm_expr when subtable exports are available.
+    /// (context_field, absolute_subtable_index, captured_context_value)
+    subtable_globalsets: Vec<(Field, u32, i64)>,
 }
 
 impl Decoder {
@@ -82,6 +86,7 @@ impl Decoder {
             next_offset: 0,
             token_stack: Vec::new(),
             eval_stack: Vec::new(),
+            subtable_globalsets: Vec::new(),
         }
     }
     pub fn set_inst(&mut self, base_addr: u64, bytes: &[u8]) {
@@ -120,6 +125,11 @@ impl Decoder {
 
         inst.root_mut(sleigh).eval_disasm_expr(self);
 
+        // Process globalsets with subtables now that subtable exports are evaluated
+        if self.allow_any_addr_globalsets {
+            self.process_subtable_globalsets(sleigh, inst)?;
+        }
+
         // Delay slots need to be decoded _before_ the semantic section is evaluated because the
         // specification requires that `inst_next` refers to the address after the delay slot.
         //
@@ -129,8 +139,7 @@ impl Decoder {
             self.offset = self.next_offset;
             if !self.ignore_delay_slots {
                 inst.delay_slot = Some(self.decode_subtable(sleigh, inst, ROOT_TABLE_ID));
-            }
-            else {
+            } else {
                 // Assume the size of the delay slot is the same as the root instruction.
                 self.next_offset *= 2;
                 inst.delay_slot = Some(invalid_constructor(sleigh));
@@ -225,29 +234,23 @@ impl Decoder {
                     let value = self.eval_context_expr(*expr, sleigh);
                     field.set(&mut self.context, value);
                 }
-                DecodeAction::SaveContext(field, expr) => {
+                DecodeAction::SaveContext(field, addr_source) => {
                     let value = field.extract(self.context);
-                    let addr = self.eval_context_expr(*expr, sleigh);
-
-                    // Modify global_context directly if change should take effect immediately.
-                    // Otherwise, store it for the future modification if feature flag is enabled.
-                    if addr == self.base_addr as i64 {
+                    if !self.allow_any_addr_globalsets {
+                        // Fast path: just apply to global context directly
                         field.set(&mut self.global_context, value);
-                    }
-                    else if self.allow_any_addr_globalsets {
-                        let addr_key = addr as u64;
-                        let modifications =
-                            self.future_context_mods.entry(addr_key).or_insert_with(Vec::new);
-
-                        // Check if we already have a modification for this field at this address
-                        if let Some(existing) = modifications
-                            .iter_mut()
-                            .find(|(existing_field, _)| *existing_field == *field)
-                        {
-                            existing.1 = value;
-                        }
-                        else {
-                            modifications.push((*field, value));
+                    } else {
+                        match addr_source {
+                            GlobalSetAddr::Expr(expr) => {
+                                // Address known - apply immediately
+                                let addr = self.eval_context_expr(*expr, sleigh);
+                                self.apply_globalset(*field, addr, value);
+                            }
+                            GlobalSetAddr::Subtable(subtable_idx) => {
+                                // Address from subtable export - defer until after eval_disasm_expr
+                                let absolute_idx = ctx.constructor.subtables.0 + subtable_idx;
+                                self.subtable_globalsets.push((*field, absolute_idx, value));
+                            }
                         }
                     }
                 }
@@ -307,6 +310,49 @@ impl Decoder {
             eval_pattern_expr(&mut stack, &*self, expr).expect("invalid disassembly expression");
         self.eval_stack = stack;
         result
+    }
+
+    fn apply_globalset(&mut self, field: Field, addr: i64, value: i64) {
+        // Apply immediately if current address
+        if addr == self.base_addr as i64 {
+            field.set(&mut self.global_context, value);
+        } else {
+            let modifications = self.future_context_mods.entry(addr as u64).or_default();
+            if let Some(existing) = modifications.iter_mut().find(|(f, _)| *f == field) {
+                existing.1 = value;
+            } else {
+                modifications.push((field, value));
+            }
+        }
+    }
+
+    /// Must be called after subtables have been evaluated.
+    fn process_subtable_globalsets(
+        &mut self,
+        sleigh: &SleighData,
+        inst: &Instruction,
+    ) -> Option<()> {
+        // Swap out the vec to avoid borrow conflicts, preserving capacity for reuse
+        let mut pending = std::mem::take(&mut self.subtable_globalsets);
+        for (field, absolute_subtable_idx, value) in pending.drain(..) {
+            let subtable_constructor = inst.subtables[absolute_subtable_idx as usize];
+            let subtable_info = &sleigh.constructors[subtable_constructor.id as usize];
+
+            // Only Values or RamRefs are valid for globalset subtable results
+            let val = match subtable_info.export.as_ref()? {
+                Export::Value(val) | Export::RamRef(val, _) => val,
+                Export::RegisterRef(_, _) => return None,
+            };
+            let crate::semantics::Local::Field(idx) = val.local else {
+                return None;
+            };
+            let locals_start = subtable_constructor.locals.0 as usize;
+            let addr = inst.locals[locals_start + idx as usize];
+
+            self.apply_globalset(field, addr, value);
+        }
+        self.subtable_globalsets = pending;
+        Some(())
     }
 
     /// Read a raw token (i.e. without any endianness conversion) of `token_size` bytes, from the
@@ -630,6 +676,9 @@ pub enum ContextModValue {
     ContextField(Field),
     InstStart,
     InstNext,
+    /// Reference to a subtable's export address (used in globalset).
+    /// This cannot be evaluated during decode actions - requires deferred processing.
+    Subtable(u32),
 }
 
 impl EvalPatternValue for &'_ Decoder {
@@ -644,6 +693,10 @@ impl EvalPatternValue for &'_ Decoder {
             // InstStart. Since the context field already has to be modified locally for that
             // instruction, this should have no effect.
             ContextModValue::InstNext => self.base_addr as i64,
+            // Subtable addresses are handled via GlobalSetAddr::Subtable, not expression evaluation
+            ContextModValue::Subtable(_) => {
+                panic!("Subtable in context expression should use GlobalSetAddr::Subtable")
+            }
         }
     }
 }

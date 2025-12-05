@@ -2,8 +2,9 @@ use std::{collections::HashMap, path::Path};
 
 use sleigh_parse::{Parser, ast};
 use sleigh_runtime::{
-    AttachmentIndex, Constructor, ConstructorDebugInfo, DecodeAction, DisplaySegment,
-    NamedRegister, RegisterAlias, RegisterAttachment, SleighData, StrIndex,
+    AttachmentIndex, Constructor, ConstructorDebugInfo, ContextModValue, DecodeAction,
+    DisplaySegment, GlobalSetAddr, NamedRegister, PatternExprOp, RegisterAlias, RegisterAttachment,
+    SleighData, StrIndex,
 };
 
 pub use sleigh_parse::resolve_dependencies;
@@ -384,19 +385,36 @@ fn add_constructor(
     let fields_end = ctx.data.fields.len() as u32;
 
     let decode_actions_start = ctx.data.decode_actions.len() as u32;
-    for (field, expr) in &constructor.disasm_actions.context_mod {
-        let start = ctx.data.context_disasm_expr.len() as u32;
-        ctx.data.context_disasm_expr.extend_from_slice(expr);
-        let end = ctx.data.context_disasm_expr.len() as u32;
-        ctx.data.decode_actions.push(DecodeAction::ModifyContext(*field, (start, end)));
-    }
 
-    for (context_id, expr) in &constructor.disasm_actions.global_set {
-        let field = symbols.context_fields[*context_id as usize].field;
-        let start = ctx.data.context_disasm_expr.len() as u32;
-        ctx.data.context_disasm_expr.extend_from_slice(expr);
-        let end = ctx.data.context_disasm_expr.len() as u32;
-        ctx.data.decode_actions.push(DecodeAction::SaveContext(field, (start, end)));
+    // Process context actions in order - this is important for correct semantics
+    // e.g., [loopEnd=1; globalset(..., loopEnd); loopEnd=0;] must capture loopEnd=1
+    for action in &constructor.disasm_actions.context_actions {
+        match action {
+            constructor::ContextAction::Modify(field, value) => {
+                let start = ctx.data.context_disasm_expr.len() as u32;
+                ctx.data.context_disasm_expr.extend_from_slice(value);
+                let end = ctx.data.context_disasm_expr.len() as u32;
+                ctx.data.decode_actions.push(DecodeAction::ModifyContext(*field, (start, end)));
+            }
+            constructor::ContextAction::GlobalSet(context_id, value) => {
+                let field = symbols.context_fields[*context_id as usize].field;
+
+                // Determine the address source for the globalset
+                let addr = if let [PatternExprOp::Value(ContextModValue::Subtable(subtable_idx))] =
+                    value.as_slice()
+                {
+                    // Subtable address - resolved after eval_disasm_expr
+                    GlobalSetAddr::Subtable(*subtable_idx)
+                } else {
+                    // Expression address - can be evaluated during decode
+                    let start = ctx.data.context_disasm_expr.len() as u32;
+                    ctx.data.context_disasm_expr.extend_from_slice(value);
+                    let end = ctx.data.context_disasm_expr.len() as u32;
+                    GlobalSetAddr::Expr((start, end))
+                };
+                ctx.data.decode_actions.push(DecodeAction::SaveContext(field, addr));
+            }
+        }
     }
 
     for action in &constructor.decode_actions {
