@@ -79,10 +79,6 @@ impl InstructionLifter {
         self.decoder.global_context = context;
     }
 
-    pub fn set_allow_any_addr_globalsets(&mut self, allow: bool) {
-        self.decoder.allow_any_addr_globalsets = allow;
-    }
-
     /// Lift a single instruction starting at `vaddr` returning the address of the next instruction,
     /// or `None` if no instruction could be fetched from `vaddr`.
     pub fn lift<S>(&mut self, src: &mut S, vaddr: u64) -> Result<u64, DecodeError>

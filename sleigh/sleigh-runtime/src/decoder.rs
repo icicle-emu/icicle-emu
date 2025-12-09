@@ -37,10 +37,6 @@ pub struct Decoder {
     /// Controls whether to ignore delayslots.
     pub(crate) ignore_delay_slots: bool,
 
-    /// Controls whether to allow globalset(any_addr, val) instead of just
-    /// globalset(inst_next, val).
-    pub allow_any_addr_globalsets: bool,
-
     /// Controls the maximum number of subtables the decoder will attempt to resolve before
     /// bailing. Catches unbounded recursion in SLEIGH specifications.
     max_subtables: usize,
@@ -78,7 +74,6 @@ impl Decoder {
             big_endian: false,
             allow_backtracking: true,
             ignore_delay_slots: false,
-            allow_any_addr_globalsets: false,
             max_subtables: 64,
             is_valid: false,
             base_addr: 0,
@@ -103,7 +98,7 @@ impl Decoder {
         self.is_valid = true;
 
         // Apply global set modifications if instruction address matches
-        if self.allow_any_addr_globalsets {
+        if !self.future_context_mods.is_empty() {
             if let Some(modifications) = self.future_context_mods.get(&self.base_addr) {
                 for (field, val) in modifications.iter() {
                     field.set(&mut self.context, *val);
@@ -126,7 +121,7 @@ impl Decoder {
         inst.root_mut(sleigh).eval_disasm_expr(self);
 
         // Process globalsets with subtables now that subtable exports are evaluated
-        if self.allow_any_addr_globalsets {
+        if !self.subtable_globalsets.is_empty() {
             self.process_subtable_globalsets(sleigh, inst)?;
         }
 
@@ -236,25 +231,21 @@ impl Decoder {
                 }
                 DecodeAction::SaveContext(field, addr_source) => {
                     let value = field.extract(self.context);
-                    if !self.allow_any_addr_globalsets {
-                        // Fast path: just apply to global context directly
-                        field.set(&mut self.global_context, value);
-                    } else {
-                        match addr_source {
-                            GlobalSetAddr::InstStart => {
-                                self.apply_globalset(*field, self.base_addr as i64, value);
-                            }
-                            GlobalSetAddr::InstNext => {
-                                // Note: next_offset may not be fully known yet, but for InstNext
-                                // the context field should already be modified locally so applying
-                                // to inst_start has the same effect
-                                self.apply_globalset(*field, self.base_addr as i64, value);
-                            }
-                            GlobalSetAddr::Subtable(subtable_idx) => {
-                                // Address from subtable export - defer until after eval_disasm_expr
-                                let absolute_idx = ctx.constructor.subtables.0 + subtable_idx;
-                                self.subtable_globalsets.push((*field, absolute_idx, value));
-                            }
+                    match addr_source {
+                        GlobalSetAddr::InstStart => {
+                            field.set(&mut self.global_context, value);
+                        }
+                        GlobalSetAddr::InstNext => {
+                            // This can be treated the same as InstStart since the only way to make
+                            // a context var apply to the next insn and not the current one is to do
+                            // [ ctx_var = 1; globalset(inst_next, ctx_var); ctx_var = 0; ],
+                            // where the last ctx_var = 0 would be handled by ModifyContext anyway.
+                            field.set(&mut self.global_context, value);
+                        }
+                        GlobalSetAddr::Subtable(subtable_idx) => {
+                            // Address from subtable export - defer until after eval_disasm_expr
+                            let absolute_idx = ctx.constructor.subtables.0 + subtable_idx;
+                            self.subtable_globalsets.push((*field, absolute_idx, value));
                         }
                     }
                 }
@@ -316,20 +307,6 @@ impl Decoder {
         result
     }
 
-    fn apply_globalset(&mut self, field: Field, addr: i64, value: i64) {
-        // Apply immediately if current address
-        if addr == self.base_addr as i64 {
-            field.set(&mut self.global_context, value);
-        } else {
-            let modifications = self.future_context_mods.entry(addr as u64).or_default();
-            if let Some(existing) = modifications.iter_mut().find(|(f, _)| *f == field) {
-                existing.1 = value;
-            } else {
-                modifications.push((field, value));
-            }
-        }
-    }
-
     /// Must be called after subtables have been evaluated.
     fn process_subtable_globalsets(
         &mut self,
@@ -353,7 +330,17 @@ impl Decoder {
             let locals_start = subtable_constructor.locals.0 as usize;
             let addr = inst.locals[locals_start + idx as usize];
 
-            self.apply_globalset(field, addr, value);
+            // Apply immediately if current address
+            if addr == self.base_addr as i64 {
+                field.set(&mut self.global_context, value);
+            } else {
+                let modifications = self.future_context_mods.entry(addr as u64).or_default();
+                if let Some(existing) = modifications.iter_mut().find(|(f, _)| *f == field) {
+                    existing.1 = value;
+                } else {
+                    modifications.push((field, value));
+                }
+            };
         }
         self.subtable_globalsets = pending;
         Some(())
