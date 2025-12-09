@@ -275,8 +275,10 @@ pub enum EvalKind {
 /// The address source for a globalset operation.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum GlobalSetAddr {
-    /// Address computed from a pattern expression (can be evaluated during decode).
-    Expr(PatternExprRange),
+    /// Address is inst_start (current instruction address).
+    InstStart,
+    /// Address is inst_next (address after current instruction).
+    InstNext,
     /// Address comes from a subtable's export (resolved after eval_disasm_expr).
     /// The u32 is the local subtable index.
     Subtable(u32),

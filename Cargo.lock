@@ -1087,6 +1087,7 @@ version = "0.3.0"
 name = "sleigh-runtime"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "pcode",
  "sleigh-parse",
 ]

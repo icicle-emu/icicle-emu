@@ -9,7 +9,7 @@ use crate::{
     expr::{EvalPatternValue, PatternExprRange, eval_pattern_expr},
 };
 
-use std::collections::HashMap;
+use ahash::{HashMap, HashMapExt};
 
 /// The decoder context for the current instruction.
 pub struct Decoder {
@@ -241,10 +241,14 @@ impl Decoder {
                         field.set(&mut self.global_context, value);
                     } else {
                         match addr_source {
-                            GlobalSetAddr::Expr(expr) => {
-                                // Address known - apply immediately
-                                let addr = self.eval_context_expr(*expr, sleigh);
-                                self.apply_globalset(*field, addr, value);
+                            GlobalSetAddr::InstStart => {
+                                self.apply_globalset(*field, self.base_addr as i64, value);
+                            }
+                            GlobalSetAddr::InstNext => {
+                                // Note: next_offset may not be fully known yet, but for InstNext
+                                // the context field should already be modified locally so applying
+                                // to inst_start has the same effect
+                                self.apply_globalset(*field, self.base_addr as i64, value);
                             }
                             GlobalSetAddr::Subtable(subtable_idx) => {
                                 // Address from subtable export - defer until after eval_disasm_expr

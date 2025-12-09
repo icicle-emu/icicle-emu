@@ -1,5 +1,7 @@
 use sleigh_parse::ast;
-use sleigh_runtime::{semantics::Local, ContextModValue, DisasmConstantValue, Field, PatternExprOp};
+use sleigh_runtime::{
+    semantics::Local, ContextModValue, DisasmConstantValue, Field, GlobalSetAddr, PatternExprOp,
+};
 
 use crate::{
     constructor::{resolve_pattern_expr, FieldIndex, ResolveIdent, Scope},
@@ -19,8 +21,8 @@ use crate::{
 pub(crate) enum ContextAction {
     /// Modify a context field locally
     Modify(Field, Vec<PatternExprOp<ContextModValue>>),
-    /// GlobalSet: saves context value for a target address
-    GlobalSet(u32, Vec<PatternExprOp<ContextModValue>>),
+    /// GlobalSet: saves context value for a target address (context_field_id, address_source)
+    GlobalSet(u32, GlobalSetAddr),
 }
 
 #[derive(Clone, Default)]
@@ -72,14 +74,24 @@ pub(crate) fn resolve(
                     }
                 }
             }
-            ast::DisasmAction::GlobalSet { expr, context_sym } => {
+            ast::DisasmAction::GlobalSet { addr_sym, context_sym } => {
                 let context_id =
                     scope.globals.lookup_kind(*context_sym, SymbolKind::ContextField)?;
 
-                let mut out = vec![];
-                resolve_pattern_expr::<ContextModValue>(scope, expr, &mut out)?;
+                let resolved = ContextModValue::resolve_ident(scope, *addr_sym)?;
+                let addr = match resolved {
+                    ContextModValue::InstStart => GlobalSetAddr::InstStart,
+                    ContextModValue::InstNext => GlobalSetAddr::InstNext,
+                    ContextModValue::Subtable(idx) => GlobalSetAddr::Subtable(idx),
+                    _ => {
+                        return Err(format!(
+                            "globalset address must be inst_start, inst_next, or a subtable, got: {}",
+                            scope.debug(addr_sym)
+                        ))
+                    }
+                };
 
-                section.context_actions.push(ContextAction::GlobalSet(context_id, out));
+                section.context_actions.push(ContextAction::GlobalSet(context_id, addr));
             }
         }
     }
