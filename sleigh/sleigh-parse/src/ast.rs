@@ -362,7 +362,7 @@ impl std::fmt::Display for ConstraintOp {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum DisasmAction {
     Assignment { ident: Ident, expr: PatternExpr },
-    GlobalSet { expr: PatternExpr, context_sym: Ident },
+    GlobalSet { addr_sym: Ident, context_sym: Ident },
 }
 
 impl ParserDisplay for DisasmAction {
@@ -371,8 +371,8 @@ impl ParserDisplay for DisasmAction {
             Self::Assignment { ident, expr } => {
                 write!(f, "{} = {}", ident.display(p), expr.display(p))
             }
-            Self::GlobalSet { expr, context_sym } => {
-                write!(f, "globalset({}, {})", expr.display(p), context_sym.display(p))
+            Self::GlobalSet { addr_sym, context_sym } => {
+                write!(f, "globalset({}, {})", addr_sym.display(p), context_sym.display(p))
             }
         }
     }

@@ -726,3 +726,10 @@ qadd r2,r2,lr
 	Q = SignedDoesSaturate($U1:4, 0x20:2)
 	r2 = $U1:4
 
+blx 0x70096c98
+<L0> (entry=0x70096b12):
+	lr = 0x70096b17:4
+	ISAModeSwitch = 0x0:1
+	TB = 0x0:1
+	call 0x70096c98:4
+

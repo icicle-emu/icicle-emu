@@ -38,8 +38,6 @@ pub struct RuntimeConfig {
     pub ignore_delay_slots: bool,
     /// Controls whether backtracking is allowed during constructor matching.
     pub allow_backtracking: bool,
-    /// Whether `globalset` operations other than `instr_next` are applied.
-    pub allow_any_addr_globalsets: bool,
     /// Controls whether the runtime context value will be updated as a result of `globalset`
     /// actions during instruction decoding.
     pub update_context: bool,
@@ -51,7 +49,6 @@ impl Default for RuntimeConfig {
             context: 0,
             ignore_delay_slots: false,
             allow_backtracking: true,
-            allow_any_addr_globalsets: false,
             update_context: true,
         }
     }
@@ -75,7 +72,6 @@ impl Runtime {
         let mut decoder = Decoder::new();
         decoder.allow_backtracking = config.allow_backtracking;
         decoder.ignore_delay_slots = config.ignore_delay_slots;
-        decoder.allow_any_addr_globalsets = config.allow_any_addr_globalsets;
 
         Self {
             context: config.context,
@@ -272,6 +268,18 @@ pub enum EvalKind {
     TokenField(Token, Field),
 }
 
+/// The address source for a globalset operation.
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub enum GlobalSetAddr {
+    /// Address is inst_start (current instruction address).
+    InstStart,
+    /// Address is inst_next (address after current instruction).
+    InstNext,
+    /// Address comes from a subtable's export (resolved after eval_disasm_expr).
+    /// The u32 is the local subtable index.
+    Subtable(u32),
+}
+
 /// An action for the decoder to perform.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum DecodeAction {
@@ -279,7 +287,7 @@ pub enum DecodeAction {
     ModifyContext(Field, PatternExprRange),
 
     /// Globally saves a context value.
-    SaveContext(Field, PatternExprRange),
+    SaveContext(Field, GlobalSetAddr),
 
     /// Evaluate the current value of a field and store it into a local.
     Eval(LocalIndex, EvalKind),

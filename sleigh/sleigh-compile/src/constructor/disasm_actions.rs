@@ -1,21 +1,37 @@
 use sleigh_parse::ast;
-use sleigh_runtime::{semantics::Local, ContextModValue, DisasmConstantValue, Field, PatternExprOp};
+use sleigh_runtime::{
+    semantics::Local, ContextModValue, DisasmConstantValue, Field, GlobalSetAddr, PatternExprOp,
+};
 
 use crate::{
     constructor::{resolve_pattern_expr, FieldIndex, ResolveIdent, Scope},
     symbols::{Symbol, SymbolKind},
 };
 
+/// A context operation - either a context modification or a globalset.
+///
+/// Needed to preserve processing order for the following situation:
+/// `[loopEnd=1; globalset(addr, loopEnd); loopEnd=0;]`:
+/// - First, `loopEnd` is set to 1 in the local context
+/// - Then, `globalset` captures the *current* value of `loopEnd` (which is 1) for `addr`
+/// - Finally, `loopEnd` is reset to 0
+///
+/// If these operations are processed out of order, the globalset might capture the wrong value.
+#[derive(Clone, Debug)]
+pub(crate) enum ContextAction {
+    /// Modify a context field locally
+    Modify(Field, Vec<PatternExprOp<ContextModValue>>),
+    /// GlobalSet: saves context value for a target address (context_field_id, address_source)
+    GlobalSet(u32, GlobalSetAddr),
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct DisasmActions {
     /// Fields assigned to in the disassembly expression
     pub fields: Vec<(FieldIndex, Vec<PatternExprOp<DisasmConstantValue>>)>,
 
-    /// The context fields modified in this section
-    pub context_mod: Vec<(Field, Vec<PatternExprOp<ContextModValue>>)>,
-
-    /// The context fields globally set by this section
-    pub global_set: Vec<(u32, Vec<PatternExprOp<ContextModValue>>)>,
+    /// Context operations in order (modifications and globalsets)
+    pub context_actions: Vec<ContextAction>,
 }
 
 pub(crate) fn resolve(
@@ -34,7 +50,7 @@ pub(crate) fn resolve(
 
                         let mut out = vec![];
                         resolve_pattern_expr::<ContextModValue>(scope, expr, &mut out)?;
-                        section.context_mod.push((field, out));
+                        section.context_actions.push(ContextAction::Modify(field, out));
                     }
 
                     // An expression that sets a disassembly constant.
@@ -58,14 +74,24 @@ pub(crate) fn resolve(
                     }
                 }
             }
-            ast::DisasmAction::GlobalSet { expr, context_sym } => {
+            ast::DisasmAction::GlobalSet { addr_sym, context_sym } => {
                 let context_id =
                     scope.globals.lookup_kind(*context_sym, SymbolKind::ContextField)?;
 
-                let mut out = vec![];
-                resolve_pattern_expr::<ContextModValue>(scope, expr, &mut out)?;
+                let resolved = ContextModValue::resolve_ident(scope, *addr_sym)?;
+                let addr = match resolved {
+                    ContextModValue::InstStart => GlobalSetAddr::InstStart,
+                    ContextModValue::InstNext => GlobalSetAddr::InstNext,
+                    ContextModValue::Subtable(idx) => GlobalSetAddr::Subtable(idx),
+                    _ => {
+                        return Err(format!(
+                            "globalset address must be inst_start, inst_next, or a subtable, got: {}",
+                            scope.debug(addr_sym)
+                        ))
+                    }
+                };
 
-                section.global_set.push((context_id, out));
+                section.context_actions.push(ContextAction::GlobalSet(context_id, addr));
             }
         }
     }
@@ -109,6 +135,7 @@ impl ResolveIdent for ContextModValue {
                     None => Ok(Self::ContextField(field)),
                 }
             }
+            Some(Local::Subtable(idx)) => Ok(Self::Subtable(idx)),
             Some(Local::InstStart) => Ok(Self::InstStart),
             Some(Local::InstNext) => Ok(Self::InstNext),
             Some(other) => {
