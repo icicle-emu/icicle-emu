@@ -1,7 +1,8 @@
 use std::cell::UnsafeCell;
 
-use icicle_mem::{perm, tlb::TranslationCache, MemResult, Mmu};
+use icicle_mem::{perm, tlb::TranslationCache, MemError, MemResult, Mmu};
 use pcode::PcodeDisplay;
+use smallvec::SmallVec;
 
 use crate::{
     exec::{
@@ -68,40 +69,71 @@ impl std::fmt::Debug for ShadowStackEntry {
     }
 }
 
-#[derive(Default, Debug, Copy, Clone, PartialEq)]
-#[repr(C)]
+#[derive(Default, Debug, Clone, PartialEq)]
 pub struct Exception {
     pub code: u32,
     pub value: u64,
+    pub size: u32,
+    pub data: SmallVec<[u8; 16]>, // Store up to 16 bytes inline, can grow if needed
+}
+
+impl From<ExceptionCode> for Exception {
+    fn from(code: ExceptionCode) -> Self {
+        (code, 0).into()
+    }
 }
 
 impl From<(ExceptionCode, u64)> for Exception {
     fn from((code, value): (ExceptionCode, u64)) -> Self {
-        Self::new(code, value)
+        Self {
+            code: code as u32,
+            value: value as u64,
+            size: 0,
+            data: SmallVec::new()
+        }
     }
 }
 
 impl From<(ExceptionCode, InternalError)> for Exception {
     fn from((code, value): (ExceptionCode, InternalError)) -> Self {
-        Self::new(code, value as u64)
+        Self {
+            code: code as u32,
+            value: value as u64,
+            size: 0,
+            data: SmallVec::new()
+        }
+    }
+}
+
+impl From<(MemError, u64, usize)> for Exception {
+    fn from((err, addr, size): (MemError, u64, usize)) -> Self {
+        Self {
+            code: ExceptionCode::from_load_error(err) as u32,
+            value: addr,
+            size: size as u32,
+            data: SmallVec::new()
+        }
+    }
+}
+
+impl<const N: usize> From<(MemError, u64, [u8; N])> for Exception {
+    fn from((err, addr, data): (MemError, u64, [u8; N])) -> Self {
+        Self {
+            code: ExceptionCode::from_store_error(err) as u32,
+            value: addr,
+            size: N as u32,
+            data: SmallVec::from_slice(&data)
+        }
     }
 }
 
 impl Exception {
     #[inline]
-    pub fn new(code: ExceptionCode, value: u64) -> Self {
-        Self { code: code as u32, value }
-    }
-
-    #[inline]
-    pub fn none() -> Self {
-        Self::new(ExceptionCode::None, 0)
-    }
-
-    #[inline]
     pub fn clear(&mut self) {
         self.code = ExceptionCode::None as u32;
         self.value = 0;
+        self.size = 0;
+        self.data.clear();
     }
 }
 
@@ -340,8 +372,7 @@ impl Cpu {
         self.icount = 0;
         self.fuel = Fuel::default();
 
-        self.exception.code = ExceptionCode::None as u32;
-        self.exception.value = 0;
+        self.exception.clear();
         self.block_id = u64::MAX;
         self.block_offset = 0;
     }
@@ -525,8 +556,7 @@ impl Cpu {
     #[inline]
     pub fn push_shadow_stack(&mut self, addr: u64) {
         if self.shadow_stack.offset >= SHADOW_STACK_SIZE {
-            self.exception.code = ExceptionCode::ShadowStackOverflow as u32;
-            self.exception.value = addr;
+            self.exception = (ExceptionCode::ShadowStackOverflow, addr).into();
             return;
         }
 
@@ -543,8 +573,7 @@ impl Cpu {
                 return;
             }
         }
-        self.exception.code = ExceptionCode::ShadowStackInvalid as u32;
-        self.exception.value = target;
+        self.exception = (ExceptionCode::ShadowStackInvalid, target).into();
     }
 
     #[inline]
@@ -621,8 +650,7 @@ impl<'a> ValueSource for UncheckedExecutor<'a> {
 
 impl<'a> PcodeExecutor for UncheckedExecutor<'a> {
     fn exception(&mut self, code: ExceptionCode, value: u64) {
-        self.cpu.exception.code = code as u32;
-        self.cpu.exception.value = value;
+        self.cpu.exception = (code, value).into();
     }
 
     fn next_instruction(&mut self, addr: u64, _len: u64) {
@@ -630,8 +658,7 @@ impl<'a> PcodeExecutor for UncheckedExecutor<'a> {
         match self.cpu.fuel.remaining.checked_sub(1) {
             Some(fuel) => self.cpu.fuel.remaining = fuel,
             None => {
-                self.cpu.exception.code = ExceptionCode::InstructionLimit as u32;
-                self.cpu.exception.value = addr;
+                self.exception(ExceptionCode::InstructionLimit, addr);
             }
         }
     }
@@ -641,7 +668,7 @@ impl<'a> PcodeExecutor for UncheckedExecutor<'a> {
             pcode::RAM_SPACE => match self.cpu.mem.read::<N>(addr, perm::READ) {
                 Ok(val) => Some(val),
                 Err(err) => {
-                    self.exception(ExceptionCode::from_load_error(err), addr);
+                    self.cpu.exception = (err, addr, N).into();
                     return None;
                 }
             },
@@ -680,7 +707,7 @@ impl<'a> PcodeExecutor for UncheckedExecutor<'a> {
         match id {
             pcode::RAM_SPACE => {
                 if let Err(err) = self.cpu.mem.write(addr, value, perm::WRITE) {
-                    self.exception(ExceptionCode::from_store_error(err), addr);
+                    self.cpu.exception = (err, addr, value).into();
                     return None;
                 }
             }
@@ -746,8 +773,8 @@ impl Cpu {
             regs: self.regs.clone(),
             args: self.args,
             shadow_stack: self.shadow_stack.clone(),
-            exception: self.exception,
-            pending_exception: self.pending_exception,
+            exception: self.exception.clone(),
+            pending_exception: self.pending_exception.clone(),
             icount: self.icount,
             block_id: self.block_id,
             block_offset: self.block_offset,
@@ -761,8 +788,8 @@ impl Cpu {
 
         self.args = snapshot.args;
         self.shadow_stack.clone_from(&snapshot.shadow_stack);
-        self.exception = snapshot.exception;
-        self.pending_exception = snapshot.pending_exception;
+        self.exception = snapshot.exception.clone();
+        self.pending_exception = snapshot.pending_exception.clone();
         self.icount = snapshot.icount;
         self.fuel = Fuel::default();
 

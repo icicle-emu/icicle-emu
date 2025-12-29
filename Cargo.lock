@@ -525,6 +525,7 @@ dependencies = [
  "pcode",
  "quickcheck",
  "sleigh-runtime",
+ "smallvec",
  "target-lexicon",
  "tracing",
 ]

@@ -684,6 +684,7 @@ fn store<E: PcodeExecutor>(exec: &mut E, id: MemId, addr: u64, value: Value) {
         4 => writer!(addr, exec.read::<u32>(value)),
         8 => writer!(addr, exec.read::<u64>(value)),
         16 => {
+            // TODO: how do we handle the exception correctly here?
             if exec.is_big_endian() && id == pcode::RAM_SPACE {
                 writer!(addr, exec.read::<u64>(value.slice(8, 8)));
                 writer!(addr.wrapping_add(8), exec.read::<u64>(value.slice(0, 8)));
@@ -694,6 +695,7 @@ fn store<E: PcodeExecutor>(exec: &mut E, id: MemId, addr: u64, value: Value) {
             }
         }
         size => {
+            // TODO: generate exception size/data correctly here
             if exec.is_big_endian() && id == pcode::RAM_SPACE {
                 for i in 0..size {
                     writer!(
