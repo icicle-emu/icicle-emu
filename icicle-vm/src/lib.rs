@@ -929,10 +929,9 @@ impl Vm {
 
         for block in self.code.blocks.iter_mut().filter(|x| x.start <= addr && addr < x.end) {
             block.breakpoints += 1;
+            // Make sure that any JIT blocks containing this address are removed from fast lookup.
+            self.jit.remove_fast_lookup(block.start);
         }
-
-        // Make sure that any JIT blocks containing this address are removed from fast lookup.
-        self.jit.remove_fast_lookup(addr);
 
         true
     }
