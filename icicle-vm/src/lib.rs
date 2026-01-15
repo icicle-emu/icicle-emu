@@ -385,12 +385,20 @@ impl Vm {
         // the `Op::InstructionMarker` and when the fuel counter reaches zero, the interpreter stops
         // at the next instruction marker.
         //
+        // There are two corner cases to consider here:
+        // The first is when we enter the interpreter at the start of a block that has pcode
+        // instructions injected before the first instruction marker. In this case we should not
+        // decrement the fuel counter before executing the first instruction marker.
         // However, there are cases where we enter the interpreter in the middle of a block (e.g.,
         // resuming after a fault). To account for the missing instruction marker, we need to
         // decrement the fuel counter here.
-        if let Some(inst) = block.pcode.instructions.get(offset as usize) {
-            if !matches!(inst.op, pcode::Op::InstructionMarker) {
-                self.cpu.fuel.remaining = self.cpu.fuel.remaining.saturating_sub(1);
+        let first_imark_offset =
+            block.pcode.first_addr().and_then(|addr| block.pcode.offset_of(addr)).unwrap_or(0);
+        if offset >= first_imark_offset as u64 {
+            if let Some(inst) = block.pcode.instructions.get(offset as usize) {
+                if !matches!(inst.op, pcode::Op::InstructionMarker) {
+                    self.cpu.fuel.remaining = self.cpu.fuel.remaining.saturating_sub(1);
+                }
             }
         }
 
