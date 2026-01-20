@@ -1,7 +1,7 @@
 //! A workaround for missing functionality in the SLEIGH spec for MSP430X.
 
 use crate::{
-    exec::const_eval, lifter::BlockLifter, Arch, Cpu, Exception, ExceptionCode, ValueSource,
+    exec::const_eval, lifter::BlockLifter, Arch, Cpu, ExceptionCode, ValueSource,
 };
 
 use super::BlockState;
@@ -77,7 +77,7 @@ fn check_sr_control_bits(cpu: &mut Cpu, _dst: pcode::VarNode, args: [pcode::Valu
     let old = cpu.read::<u32>(args[0]);
     let new = cpu.read::<u32>(args[1]);
     if (old & GIE_BIT) != (new & GIE_BIT) || (old & CPUOFF_BIT) != (new & CPUOFF_BIT) {
-        cpu.pending_exception = Some(Exception::new(ExceptionCode::CpuStateChanged, 0));
+        cpu.pending_exception = Some((ExceptionCode::CpuStateChanged, 0).into());
         cpu.update_fuel(0);
     }
 }

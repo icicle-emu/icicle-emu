@@ -25,6 +25,8 @@ pub use crate::{
     regs::{RegValue, Regs, ValueSource, VarSource},
     trace::{HookData, HookHandler, HookTrampoline, InstHook, StoreRef, TraceStore},
 };
+// Re-export SmallVec so users can work with Exception.data
+pub use smallvec::SmallVec;
 pub use icicle_mem as mem;
 pub use icicle_mem::Mmu;
 pub use lifter::DecodeError;
