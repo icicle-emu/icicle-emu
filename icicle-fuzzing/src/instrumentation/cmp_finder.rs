@@ -665,7 +665,7 @@ mod test {
     }
 
     fn test_generic(cond: pcode::VarNode, block: pcode::Block) -> String {
-        use super::{find_comparisons, CmpProp};
+        use super::{CmpProp, find_comparisons};
         use std::fmt::Write;
 
         let sleigh = sleigh_runtime::SleighData::default();

@@ -4,9 +4,9 @@ use sleigh_parse::{
     ast,
     ast::{EndianKind, ParserDisplay},
 };
-use sleigh_runtime::{semantics::ValueSize, Field};
+use sleigh_runtime::{Field, semantics::ValueSize};
 
-use crate::{constructor::Constructor, Context};
+use crate::{Context, constructor::Constructor};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum SymbolKind {

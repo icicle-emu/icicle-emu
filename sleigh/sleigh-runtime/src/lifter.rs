@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use crate::{
+    AttachmentId, ConstructorId, Instruction, MAX_REG_SIZE, SleighData,
     decoder::SubtableCtx,
     semantics::{Export, Local, SemanticAction, Value, ValueSize},
-    AttachmentId, ConstructorId, Instruction, SleighData, MAX_REG_SIZE,
 };
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]

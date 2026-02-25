@@ -1,10 +1,11 @@
 use crate::{
+    Cpu,
     debug_info::DebugInfo,
-    mem::{perm, AllocLayout, Mapping},
-    utils, Cpu,
+    mem::{AllocLayout, Mapping, perm},
+    utils,
 };
 
-use object::{elf, read::elf::ProgramHeader, Endianness, FileKind};
+use object::{Endianness, FileKind, elf, read::elf::ProgramHeader};
 use tracing::{info, warn};
 
 #[derive(Debug, Clone, Default)]

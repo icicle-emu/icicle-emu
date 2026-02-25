@@ -16,10 +16,10 @@ use bstr::ByteSlice;
 use tracing::info;
 
 use icicle_cpu::{
+    Exception, ExceptionCode, ValueSource, VmExit,
     debug_info::{DebugInfo, SourceLocation},
     elf::ElfLoader,
-    mem::{self, perm, AllocLayout, Mapping, MemError, MemResult, VirtualMemoryMap},
-    Exception, ExceptionCode, ValueSource, VmExit,
+    mem::{self, AllocLayout, Mapping, MemError, MemResult, VirtualMemoryMap, perm},
 };
 
 pub trait LinuxMmu {

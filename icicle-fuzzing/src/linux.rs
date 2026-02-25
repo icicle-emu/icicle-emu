@@ -2,12 +2,12 @@
 use std::path::PathBuf;
 
 use icicle_vm::{
+    Vm, VmExit,
     cpu::{Environment, ExceptionCode},
     linux::fs::devices::ReadableSharedBufDevice,
-    Vm, VmExit,
 };
 
-use crate::{parse_u64_with_prefix, FuzzConfig, FuzzTarget, Runnable};
+use crate::{FuzzConfig, FuzzTarget, Runnable, parse_u64_with_prefix};
 
 #[derive(Clone)]
 pub struct LinuxConfig {

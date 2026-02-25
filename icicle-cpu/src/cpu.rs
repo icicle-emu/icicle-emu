@@ -1,17 +1,17 @@
 use std::cell::UnsafeCell;
 
-use icicle_mem::{perm, tlb::TranslationCache, MemResult, Mmu};
+use icicle_mem::{MemResult, Mmu, perm, tlb::TranslationCache};
 use pcode::PcodeDisplay;
 
 use crate::{
+    ExceptionCode, InstHook, InternalError, VarSource,
     exec::{
         helpers::{self, PcodeOpHelper},
-        interpreter::{interpret, PcodeExecutor},
+        interpreter::{PcodeExecutor, interpret},
     },
     lifter::{BlockExit, Target},
     regs::{RegValue, Regs, ValueSource},
     trace::{self, Trace},
-    ExceptionCode, InstHook, InternalError, VarSource,
 };
 
 pub const SHADOW_STACK_SIZE: usize = 0x1000;

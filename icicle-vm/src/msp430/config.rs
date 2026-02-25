@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use anyhow::Context;
 use crate::cpu::mem::perm;
+use anyhow::Context;
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Config {

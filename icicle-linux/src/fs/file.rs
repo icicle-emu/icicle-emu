@@ -3,7 +3,7 @@ use std::{cell::RefCell, collections::BTreeSet, rc::Rc};
 use bstr::ByteSlice;
 use icicle_cpu::mem::perm;
 
-use crate::{errno, fs::socket, types, LinuxMmu, ProcessManager};
+use crate::{LinuxMmu, ProcessManager, errno, fs::socket, types};
 
 use super::{InodeRef, Path, Result};
 

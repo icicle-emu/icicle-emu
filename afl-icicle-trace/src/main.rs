@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use afl_icicle_trace::{forkserver_init, log_error_and_exit, ForkserverFuzzer};
+use afl_icicle_trace::{ForkserverFuzzer, forkserver_init, log_error_and_exit};
 use icicle_fuzzing::FuzzConfig;
 
 fn main() {

@@ -1,15 +1,16 @@
 use crate::{
+    Cpu,
     debug_info::DebugInfo,
-    mem::{perm, AllocLayout, Mapping},
-    utils, Cpu,
+    mem::{AllocLayout, Mapping, perm},
+    utils,
 };
 
 use object::{
     coff::SectionTable,
     pe::{
-        self, ImageDosHeader, ImageNtHeaders32, ImageNtHeaders64, ImageSectionHeader,
-        IMAGE_REL_BASED_DIR64, IMAGE_REL_BASED_HIGH, IMAGE_REL_BASED_HIGHLOW, IMAGE_REL_BASED_LOW,
-        IMAGE_SIZEOF_FILE_HEADER,
+        self, IMAGE_REL_BASED_DIR64, IMAGE_REL_BASED_HIGH, IMAGE_REL_BASED_HIGHLOW,
+        IMAGE_REL_BASED_LOW, IMAGE_SIZEOF_FILE_HEADER, ImageDosHeader, ImageNtHeaders32,
+        ImageNtHeaders64, ImageSectionHeader,
     },
     read::pe::{DataDirectories, ImageOptionalHeader},
 };

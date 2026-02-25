@@ -6,19 +6,19 @@
 use bstr::ByteSlice;
 
 use icicle_cpu::{
-    mem::{self, perm, AllocLayout, MemResult},
-    utils::{align_down, align_up},
     ExceptionCode, VmExit,
+    mem::{self, AllocLayout, MemResult, perm},
+    utils::{align_down, align_up},
 };
 
 use crate::{
+    CloneState, Kernel, LinuxCpu, LinuxMmu, LinuxResult, MemMappedFile, SemaphoreSet,
+    SemaphoreSetUndo, Shmem, TerminationReason,
     arch::{self, CDataType},
     errno,
     fs::{self, PathRef},
     sys,
     types::{self, IoVec, Seek, SemBuf, Timespec, Timeval, Timezone},
-    CloneState, Kernel, LinuxCpu, LinuxMmu, LinuxResult, MemMappedFile, SemaphoreSet,
-    SemaphoreSetUndo, Shmem, TerminationReason,
 };
 
 pub type Call0<C> = fn(&mut Ctx<C>) -> LinuxResult;

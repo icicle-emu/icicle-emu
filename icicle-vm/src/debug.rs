@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use icicle_cpu::{debug_info::SourceLocation, utils::get_u64};
 use pcode::PcodeDisplay;
 
-use crate::{lifter::BlockGroup, ValueSource, Vm};
+use crate::{ValueSource, Vm, lifter::BlockGroup};
 
 pub fn dump_disasm(vm: &Vm) -> Result<String, std::fmt::Error> {
     let sorted_groups = {

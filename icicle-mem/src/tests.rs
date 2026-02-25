@@ -1,4 +1,4 @@
-use crate::{perm, AllocLayout, Mapping, MemError, Mmu, Resettable};
+use crate::{AllocLayout, Mapping, MemError, Mmu, Resettable, perm};
 
 #[cfg(not(miri))]
 const ITERATIONS: u64 = 1000;

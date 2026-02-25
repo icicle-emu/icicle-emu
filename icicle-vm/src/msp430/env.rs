@@ -4,14 +4,15 @@ use std::{
 };
 
 use crate::{
+    BuildError, VmExit,
     cpu::{
+        Cpu, Environment, Exception, ExceptionCode, ValueSource,
         debug_info::DebugInfo,
         elf::ElfLoader,
-        mem::{perm, IoMemory, IoMemoryAny, Mapping, MemError, MemResult},
+        mem::{IoMemory, IoMemoryAny, Mapping, MemError, MemResult, perm},
         utils::XorShiftRng,
-        Cpu, Environment, Exception, ExceptionCode, ValueSource,
     },
-    hw, BuildError, VmExit,
+    hw,
 };
 
 use super::config::{self, Config, Mcu};

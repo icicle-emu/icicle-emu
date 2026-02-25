@@ -6,7 +6,7 @@ use icicle_cpu::utils::XorShiftRng;
 
 use crate::{errno, sys};
 
-use super::{FileKind, Inode, InodeVtable, Result, DEFAULT_INODE_VTABLE};
+use super::{DEFAULT_INODE_VTABLE, FileKind, Inode, InodeVtable, Result};
 
 pub fn map_device(inode: &mut Inode, device: Box<dyn Device>) {
     inode.kind = FileKind::CharacterDevice;

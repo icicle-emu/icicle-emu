@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::Context;
-use icicle_vm::{linux::TerminationReason, Vm, VmExit};
+use icicle_vm::{Vm, VmExit, linux::TerminationReason};
 
 use crate::CrashKind;
 

@@ -1,11 +1,11 @@
 use icicle_fuzzing::{
+    CoverageMode,
     cmplog::CmpMap,
     coverage::{AFLHitCountsBuilder, BlockCoverageBuilder},
-    CoverageMode,
 };
 use icicle_vm::cpu::lifter::Block;
 
-use crate::{is_cmplog_server, shared_mem, FuzzConfig};
+use crate::{FuzzConfig, is_cmplog_server, shared_mem};
 
 /// Keeps track of the instrumentation metadata associated wit the current fuzzing session.
 pub struct Instrumentation {

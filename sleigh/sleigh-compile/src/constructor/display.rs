@@ -1,7 +1,7 @@
 use sleigh_parse::ast;
-use sleigh_runtime::{semantics::Local, DisplaySegment};
+use sleigh_runtime::{DisplaySegment, semantics::Local};
 
-use crate::{constructor::Scope, symbols::SymbolKind, Context};
+use crate::{Context, constructor::Scope, symbols::SymbolKind};
 
 pub(crate) fn resolve(
     ctx: &mut Context,

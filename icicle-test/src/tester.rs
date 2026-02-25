@@ -1,6 +1,7 @@
 use icicle_vm::cpu::{
+    ValueSource,
     mem::{self, perm},
-    utils, ValueSource,
+    utils,
 };
 
 use crate::{Assignment, TestCase};
@@ -114,7 +115,7 @@ impl Tester for icicle_vm::Vm {
     }
 
     fn step(&mut self, steps: u64) -> anyhow::Result<()> {
-        use icicle_vm::{cpu::ExceptionCode, VmExit};
+        use icicle_vm::{VmExit, cpu::ExceptionCode};
 
         let exit = self.step(steps);
 

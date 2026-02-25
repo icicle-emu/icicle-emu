@@ -1,11 +1,11 @@
 use std::{any::Any, path::PathBuf};
 
 use icicle_cpu::{
-    debug_info::DebugInfo, elf::ElfLoader, pe::PeLoader, Cpu, Environment, EnvironmentAny, VmExit,
+    Cpu, Environment, EnvironmentAny, VmExit, debug_info::DebugInfo, elf::ElfLoader, pe::PeLoader,
 };
 use object::read::FileKind;
 
-use crate::{msp430::Msp430, BuildError, Vm};
+use crate::{BuildError, Vm, msp430::Msp430};
 
 struct GenericEmbedded {
     debug_info: DebugInfo,

@@ -15,7 +15,7 @@ use std::{
 };
 
 use anyhow::Context;
-use icicle_vm::{cpu::ExceptionCode, Vm, VmExit};
+use icicle_vm::{Vm, VmExit, cpu::ExceptionCode};
 
 pub use crate::{config::CustomSetup, instrumentation::*};
 pub use icicle_vm::cpu::utils::parse_u64_with_prefix;
