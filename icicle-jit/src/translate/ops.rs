@@ -686,7 +686,7 @@ mod test {
         jit.entry_points[&0]
     }
 
-    struct Checker {
+    struct Checker<T> {
         cpu: RefCell<Box<Cpu>>,
         jit: crate::JIT,
         inst: pcode::Instruction,
@@ -694,15 +694,40 @@ mod test {
         b: pcode::VarNode,
         out: pcode::VarNode,
         jit_fn: crate::JitFunction,
+        marker: std::marker::PhantomData<T>,
     }
 
-    impl Drop for Checker {
+    impl<T> Drop for Checker<T> {
         fn drop(&mut self) {
             unsafe { self.jit.reset() }
         }
     }
 
-    impl Checker {
+    impl Checker<UnaryOp> {
+        fn new(op: pcode::Op, out_size: u8) -> Self {
+            let cpu = Cpu::new_boxed(Arch::none());
+            let mut jit = crate::JIT::new(&cpu);
+
+            let a = cpu.arch.sleigh.get_varnode("a").unwrap().slice(0, 4);
+            let out = cpu.arch.sleigh.get_varnode("c").unwrap().slice(0, out_size);
+
+            let inst = pcode::Instruction::from((out, op, a));
+            let jit_fn = compile_instruction(&mut jit, inst);
+
+            Self {
+                cpu: RefCell::new(cpu),
+                jit,
+                inst,
+                a,
+                b: pcode::VarNode::NONE,
+                out,
+                jit_fn,
+                marker: std::marker::PhantomData,
+            }
+        }
+    }
+
+    impl Checker<BinaryOp> {
         fn new(op: pcode::Op, out_size: u8) -> Self {
             let cpu = Cpu::new_boxed(Arch::none());
             let mut jit = crate::JIT::new(&cpu);
@@ -711,12 +736,23 @@ mod test {
             let b = cpu.arch.sleigh.get_varnode("b").unwrap().slice(0, 4);
             let out = cpu.arch.sleigh.get_varnode("c").unwrap().slice(0, out_size);
 
-            let inst = pcode::Instruction::from((out, op, (a, b)));
+            let inst = pcode::Instruction::from((out, op, a, b));
             let jit_fn = compile_instruction(&mut jit, inst);
 
-            Self { cpu: RefCell::new(cpu), jit, inst, a, b, out, jit_fn }
+            Self {
+                cpu: RefCell::new(cpu),
+                jit,
+                inst,
+                a,
+                b,
+                out,
+                jit_fn,
+                marker: std::marker::PhantomData,
+            }
         }
+    }
 
+    impl<T> Checker<T> {
         fn eval_binop(&self, a: u32, b: u32) -> (u32, u32) {
             let mut cpu = self.cpu.borrow_mut();
 
@@ -730,7 +766,26 @@ mod test {
             cpu.write_var(self.b, b);
             cpu.write_trunc(self.out, 0xaaaa_aaaa_u32);
 
-            cpu.jit_ctx.tlb_ptr = cpu.mem.tlb.as_mut();
+            cpu.update_jit_context();
+            unsafe {
+                (self.jit_fn)((*cpu).as_mut() as *mut Cpu, 0x0);
+            }
+            let jit_out = cpu.read_dynamic(self.out.into()).zxt();
+            (interpreter_out, jit_out)
+        }
+
+        fn eval_unary(&self, a: u32) -> (u32, u32) {
+            let mut cpu = self.cpu.borrow_mut();
+
+            cpu.write_var(self.a, a);
+            cpu.write_trunc(self.out, 0xaaaa_aaaa_u32);
+            unsafe { cpu.interpret_unchecked(self.inst) };
+            let interpreter_out = cpu.read_dynamic(self.out.into()).zxt();
+
+            cpu.write_var(self.a, a);
+            cpu.write_trunc(self.out, 0xaaaa_aaaa_u32);
+
+            cpu.update_jit_context();
             unsafe {
                 (self.jit_fn)((*cpu).as_mut() as *mut Cpu, 0x0);
             }
@@ -739,19 +794,19 @@ mod test {
         }
     }
 
-    impl quickcheck::Testable for Checker {
+    struct BinaryOp;
+    impl quickcheck::Testable for Checker<BinaryOp> {
         fn result(&self, gen: &mut quickcheck::Gen) -> quickcheck::TestResult {
             let a: u32 = quickcheck::Arbitrary::arbitrary(gen);
             let b: u32 = quickcheck::Arbitrary::arbitrary(gen);
-
-            let (interpreter_out, jit_out) = self.eval_binop(a, b);
-
-            if interpreter_out != jit_out {
-                quickcheck::TestResult::error(format!(
-                    "{a:#x} {:?} {b:#x}: Interpreter: {interpreter_out:#x}, JIT: {jit_out:#x}\nclif: {}",
-                    self.inst.op,
-                    self.jit.il_dump.as_ref().map_or("", String::as_str)
-                ))
+            let this = &self;
+            let (interpreter, jit) = self.eval_binop(a, b);
+            if interpreter != jit {
+                println!(
+                    "op({a:#x}, {b:#x}) -> Interpreter: {interpreter:#x}, JIT: {jit:#x}\nclif: {}",
+                    this.jit.il_dump.as_ref().map_or("", String::as_str)
+                );
+                quickcheck::TestResult::failed()
             }
             else {
                 quickcheck::TestResult::passed()
@@ -759,12 +814,34 @@ mod test {
         }
     }
 
+    struct UnaryOp;
+    impl quickcheck::Testable for Checker<UnaryOp> {
+        fn result(&self, gen: &mut quickcheck::Gen) -> quickcheck::TestResult {
+            let a: u32 = quickcheck::Arbitrary::arbitrary(gen);
+            let (interpreter, jit) = self.eval_unary(a);
+            if interpreter != jit {
+                println!(
+                    "op({a:#x}) -> Interpreter: {interpreter:#x}, JIT: {jit:#x}\nclif: {}",
+                    self.jit.il_dump.as_ref().map_or("", String::as_str)
+                );
+                quickcheck::TestResult::failed()
+            }
+            else {
+                quickcheck::TestResult::passed()
+            }
+        }
+    }
+
+    fn test_unary(op: pcode::Op) {
+        quickcheck::QuickCheck::new().quickcheck(Checker::<UnaryOp>::new(op, 4));
+    }
+
     fn test_binop(op: pcode::Op) {
-        quickcheck::QuickCheck::new().quickcheck(Checker::new(op, 4));
+        quickcheck::QuickCheck::new().quickcheck(Checker::<BinaryOp>::new(op, 4));
     }
 
     fn test_cmp_op(op: pcode::Op) {
-        quickcheck::QuickCheck::new().quickcheck(Checker::new(op, 1));
+        quickcheck::QuickCheck::new().quickcheck(Checker::<BinaryOp>::new(op, 1));
     }
 
     #[test]
@@ -802,7 +879,7 @@ mod test {
     #[test]
     fn ushr() {
         // Regression test
-        let checker = Checker::new(pcode::Op::IntRight, 4);
+        let checker = Checker::<BinaryOp>::new(pcode::Op::IntRight, 4);
         let (int, jit) = checker.eval_binop(0x67879a2f, 0xe29e001b);
         assert_eq!(int, jit);
 
@@ -812,5 +889,15 @@ mod test {
     #[test]
     fn shl() {
         test_binop(pcode::Op::IntLeft);
+    }
+
+    #[test]
+    fn float_to_int() {
+        test_unary(pcode::Op::FloatToInt);
+    }
+
+    #[test]
+    fn int_to_float() {
+        test_unary(pcode::Op::IntToFloat);
     }
 }
