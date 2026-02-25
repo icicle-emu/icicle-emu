@@ -3,8 +3,8 @@
 use std::ptr::NonNull;
 
 use crate::{
-    physical::{PageData, PageRef, OFFSET_BITS, PAGE_MASK, PAGE_SIZE},
     MemError, MemResult,
+    physical::{OFFSET_BITS, PAGE_MASK, PAGE_SIZE, PageData, PageRef},
 };
 
 /// The number of bits required to represent any address.

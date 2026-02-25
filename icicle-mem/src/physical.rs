@@ -1,6 +1,6 @@
 use std::{cell::UnsafeCell, ptr::NonNull, rc::Rc};
 
-use crate::{perm, MemError, MemResult};
+use crate::{MemError, MemResult, perm};
 
 /// The number of bits required to represent any offset within a page.
 pub const OFFSET_BITS: usize = 12;

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use icicle_cpu::{cpu::CallCov, exec::helpers, lifter, Arch, Config, Cpu};
+use icicle_cpu::{Arch, Config, Cpu, cpu::CallCov, exec::helpers, lifter};
 use sleigh_compile::ldef::SleighLanguage;
 
 use crate::Vm;
@@ -213,7 +213,10 @@ pub fn sleigh_init(target: &target_lexicon::Triple) -> Result<SleighLanguage, Bu
     sleigh_init_with_path(target, &get_default_processors_path())
 }
 
-pub fn sleigh_init_with_path(target: &target_lexicon::Triple, processors: &Path) -> Result<SleighLanguage, BuildError> {
+pub fn sleigh_init_with_path(
+    target: &target_lexicon::Triple,
+    processors: &Path,
+) -> Result<SleighLanguage, BuildError> {
     use target_lexicon::{
         Aarch64Architecture, Architecture, ArmArchitecture, Mips32Architecture,
         Riscv32Architecture, Riscv64Architecture,

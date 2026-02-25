@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
 use crate::{
+    Error,
     ast::{self, ParserDisplay},
     lexer::{MacroKind, SourceId, TokenKind},
     parser::Parser,
-    Error,
 };
 
 #[derive(Clone, Copy, Debug)]

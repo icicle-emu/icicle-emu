@@ -2,9 +2,9 @@ use std::{collections::HashSet, path::PathBuf};
 
 use icicle_vm::cpu::Cpu;
 
-use crate::{initialize_vm_auto, FuzzConfig};
+use crate::{FuzzConfig, initialize_vm_auto};
 
-pub use icicle_vm::injector::{add_path_tracer, PathTracerRef};
+pub use icicle_vm::injector::{PathTracerRef, add_path_tracer};
 
 pub struct CoverageEntry<T> {
     /// The the tag associated with the input.

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use icicle_vm::cpu::{mem::perm, Cpu};
+use icicle_vm::cpu::{Cpu, mem::perm};
 
 pub mod cmp_finder;
 pub mod cmplog;

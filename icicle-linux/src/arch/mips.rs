@@ -1,6 +1,6 @@
-use icicle_cpu::mem::{self, perm, MemResult};
+use icicle_cpu::mem::{self, MemResult, perm};
 
-use crate::{arch::ArchSyscall, types, LinuxCpu, LinuxMmu, LinuxResult};
+use crate::{LinuxCpu, LinuxMmu, LinuxResult, arch::ArchSyscall, types};
 
 #[allow(unused, bad_style)]
 mod reg {

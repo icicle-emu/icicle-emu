@@ -9,7 +9,7 @@ use cranelift::{codegen::Context as CodeContext, prelude::*};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module, ModuleResult};
 
-use icicle_cpu::{lifter::Block as IcicleBlock, Cpu};
+use icicle_cpu::{Cpu, lifter::Block as IcicleBlock};
 
 use crate::translate::TranslatorCtx;
 
@@ -469,7 +469,7 @@ fn init_module(endianness: Endianness) -> (JITModule, RuntimeFunctions) {
 }
 
 fn declare_runtime_functions(module: &mut JITModule) -> ModuleResult<RuntimeFunctions> {
-    use types::{I16, I32, I64, I8};
+    use types::{I8, I16, I32, I64};
 
     let call_conv = module.isa().default_call_conv();
 

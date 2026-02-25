@@ -2,9 +2,9 @@ use std::{collections::HashMap, io::Write};
 
 use anyhow::Context;
 use icicle_vm::cpu::{
+    Exception, ExceptionCode, ValueSource,
     mem::perm,
     utils::{get_u64, parse_u64_with_prefix},
-    Exception, ExceptionCode, ValueSource,
 };
 
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]

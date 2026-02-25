@@ -2,10 +2,10 @@ use std::mem::size_of;
 
 use cranelift::codegen::ir::AliasRegion;
 use cranelift::prelude::*;
-use icicle_cpu::{cpu::JitContext, Cpu, ExceptionCode, HookData};
+use icicle_cpu::{Cpu, ExceptionCode, HookData, cpu::JitContext};
 use memoffset::offset_of;
 
-use crate::translate::{is_jit_supported_size, sized_float, sized_int, Translator, VmPtr};
+use crate::translate::{Translator, VmPtr, is_jit_supported_size, sized_float, sized_int};
 
 pub enum Overflow {
     True,

@@ -1,7 +1,7 @@
 use crate::{
-    decoder::Decoder,
-    expr::{eval_pattern_expr, EvalPatternValue, PatternExprOp},
     ConstructorId, Field, Token,
+    decoder::Decoder,
+    expr::{EvalPatternValue, PatternExprOp, eval_pattern_expr},
 };
 
 pub type ConstraintOp = sleigh_parse::ast::ConstraintOp;

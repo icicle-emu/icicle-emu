@@ -3,11 +3,11 @@
 use std::{cell::UnsafeCell, collections::HashMap};
 
 use icicle_vm::{
-    cpu::{
-        lifter::{Block, BlockExit},
-        BlockGroup, BlockTable, Cpu, StoreRef,
-    },
     CodeInjector, Vm,
+    cpu::{
+        BlockGroup, BlockTable, Cpu, StoreRef,
+        lifter::{Block, BlockExit},
+    },
 };
 
 use crate::{fnv_hash, instrumentation::cmp_finder::CmpFinder, try_read_mem};

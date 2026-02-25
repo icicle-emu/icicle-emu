@@ -2,11 +2,11 @@
 //! reserving unique slots whenever a new comparison is found.
 
 use icicle_vm::{
-    cpu::{
-        lifter::{Block, BlockExit},
-        BlockGroup, BlockTable, Cpu, HookHandler, ValueSource,
-    },
     CodeInjector, Vm,
+    cpu::{
+        BlockGroup, BlockTable, Cpu, HookHandler, ValueSource,
+        lifter::{Block, BlockExit},
+    },
 };
 use pcode::PcodeDisplay;
 use std::collections::HashMap;

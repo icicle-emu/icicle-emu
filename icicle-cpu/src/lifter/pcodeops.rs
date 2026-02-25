@@ -1,6 +1,6 @@
 use ahash::AHashMap as HashMap;
 
-use crate::{lifter::BlockState, Arch, Cpu, ExceptionCode};
+use crate::{Arch, Cpu, ExceptionCode, lifter::BlockState};
 
 pub trait PcodeOpInjector {
     fn inject_ops(

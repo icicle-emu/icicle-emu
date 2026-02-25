@@ -2,9 +2,9 @@ use std::{collections::HashSet, rc::Rc};
 
 use icicle_vm::{
     cpu::{
+        Environment,
         mem::{self, MemError, MemResult},
         utils::XorShiftRng,
-        Environment,
     },
     msp430::Msp430,
 };

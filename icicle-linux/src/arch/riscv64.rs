@@ -1,4 +1,4 @@
-use crate::{arch::ArchSyscall, LinuxCpu, LinuxResult};
+use crate::{LinuxCpu, LinuxResult, arch::ArchSyscall};
 
 #[derive(Clone)]
 pub struct Riscv64 {

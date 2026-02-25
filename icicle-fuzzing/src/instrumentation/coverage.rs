@@ -1,10 +1,10 @@
 use ahash::{AHashMap as HashMap, AHashSet as HashSet};
 
 use icicle_vm::{
-    cpu::{
-        lifter::Block, BlockGroup, BlockKey, BlockTable, Cpu, HookHandler, StoreRef, ValueSource,
-    },
     CodeInjector, InjectorRef, Vm,
+    cpu::{
+        BlockGroup, BlockKey, BlockTable, Cpu, HookHandler, StoreRef, ValueSource, lifter::Block,
+    },
 };
 use pcode::{HookId, Op};
 

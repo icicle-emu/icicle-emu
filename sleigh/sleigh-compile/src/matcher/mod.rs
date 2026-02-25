@@ -5,8 +5,8 @@ use std::cmp::Ordering;
 use sleigh_runtime::matcher::{Constraint, MatchCase, Pattern, SequentialMatcher};
 
 use crate::{
-    symbols::{SymbolTable, Table},
     Context,
+    symbols::{SymbolTable, Table},
 };
 
 use self::cases::byteswap_value;

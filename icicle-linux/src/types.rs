@@ -15,8 +15,8 @@ use icicle_cpu::mem::MemResult;
 use target_lexicon::Architecture;
 
 use crate::{
-    arch::{self, Value},
     LinuxMmu,
+    arch::{self, Value},
 };
 
 // @fixme: update structs below to use these types.

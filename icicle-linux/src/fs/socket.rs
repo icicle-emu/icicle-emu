@@ -3,12 +3,11 @@ use std::{cell::RefCell, rc::Rc};
 use icicle_cpu::mem::MemResult;
 
 use crate::{
-    errno,
+    LinuxMmu, errno,
     fs::{
-        self, file, host::TempFs, FileKind, FileSystem, Inode, InodeRef, InodeVtable,
-        DEFAULT_INODE_VTABLE,
+        self, DEFAULT_INODE_VTABLE, FileKind, FileSystem, Inode, InodeRef, InodeVtable, file,
+        host::TempFs,
     },
-    LinuxMmu,
 };
 
 pub const AF_UNSPEC: u64 = 0;

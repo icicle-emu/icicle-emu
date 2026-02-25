@@ -12,8 +12,8 @@ use bstr::ByteSlice;
 use crate::{errno, fs::Path};
 
 use super::{
-    DirEntry, DirEntryRef, FileKind, FileName, FileNameRef, FileSystem, Inode, InodeIndex,
-    InodeRef, InodeVtable, Result, DEFAULT_INODE_VTABLE,
+    DEFAULT_INODE_VTABLE, DirEntry, DirEntryRef, FileKind, FileName, FileNameRef, FileSystem,
+    Inode, InodeIndex, InodeRef, InodeVtable, Result,
 };
 
 /// Represents a with an allocated inode, but has yet to be actually loaded from the host.

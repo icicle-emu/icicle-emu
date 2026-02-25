@@ -1,15 +1,15 @@
 use icicle_cpu::debug_info::SymbolKind;
 use object::{
     elf,
-    write::{elf::SectionIndex, StringId},
+    write::{StringId, elf::SectionIndex},
 };
 
 use crate::{
+    Vm,
     cpu::{
         lifter::BlockExit,
-        mem::{perm, MemoryMapping},
+        mem::{MemoryMapping, perm},
     },
-    Vm,
 };
 
 pub fn dump_elf(vm: &mut Vm, path: impl AsRef<std::path::Path>) -> anyhow::Result<()> {

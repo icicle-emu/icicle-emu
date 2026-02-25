@@ -2,12 +2,12 @@ use std::collections::HashMap;
 
 use sleigh_parse::ast;
 use sleigh_runtime::{
-    matcher::{Constraint, ConstraintOperand},
     DecodeAction, EvalKind, Field, Token,
+    matcher::{Constraint, ConstraintOperand},
 };
 
 use crate::{
-    constructor::{resolve_pattern_expr, ResolveIdent, Scope},
+    constructor::{ResolveIdent, Scope, resolve_pattern_expr},
     symbols::{SymbolKind, TokenFieldId},
 };
 

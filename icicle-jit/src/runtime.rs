@@ -1,4 +1,4 @@
-use icicle_cpu::{mem::perm, Cpu, ExceptionCode, InternalError};
+use icicle_cpu::{Cpu, ExceptionCode, InternalError, mem::perm};
 
 pub unsafe extern "C" fn jit_compilation_error(cpu: *mut Cpu, addr: u64) -> u64 {
     (*cpu).exception.code = ExceptionCode::JitError as u32;

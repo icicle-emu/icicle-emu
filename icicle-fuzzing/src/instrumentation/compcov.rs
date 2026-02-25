@@ -2,12 +2,12 @@
 
 use ahash::{AHashMap as HashMap, AHashSet as HashSet};
 use icicle_vm::{
+    CodeInjector, Vm,
     cpu::{
+        BlockGroup, BlockTable, Cpu, StoreRef,
         lifter::{Block, BlockExit},
         mem::perm,
-        BlockGroup, BlockTable, Cpu, StoreRef,
     },
-    CodeInjector, Vm,
 };
 use pcode::PcodeDisplay;
 

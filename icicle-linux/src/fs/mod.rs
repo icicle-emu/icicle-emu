@@ -14,7 +14,7 @@ mod file;
 use std::{
     any::Any,
     cell::RefCell,
-    collections::{hash_map::Entry as HashEntry, HashMap, VecDeque},
+    collections::{HashMap, VecDeque, hash_map::Entry as HashEntry},
     rc::Rc,
 };
 

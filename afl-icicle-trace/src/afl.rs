@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::Context;
 
-use crate::{shared_mem, FuzzConfig};
+use crate::{FuzzConfig, shared_mem};
 
 /// File descriptor used for receiving commands from the forkserver.
 pub const RX_FD: usize = 198;

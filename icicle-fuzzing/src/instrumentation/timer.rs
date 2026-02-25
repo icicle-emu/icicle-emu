@@ -1,6 +1,6 @@
 use icicle_vm::{
-    cpu::{BlockGroup, BlockTable, Cpu},
     CodeInjector, Vm,
+    cpu::{BlockGroup, BlockTable, Cpu},
 };
 use pcode::Op;
 

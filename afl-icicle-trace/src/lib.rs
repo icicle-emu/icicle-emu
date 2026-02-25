@@ -6,13 +6,13 @@ use std::{
 
 use anyhow::Context;
 use icicle_fuzzing::{
-    utils::{get_afl_exit_code, BlockCoverageTracker},
     FuzzConfig, FuzzTarget,
+    utils::{BlockCoverageTracker, get_afl_exit_code},
 };
 use icicle_vm::{
+    VmExit,
     cpu::ExceptionCode,
     linux::{Kernel, TerminationReason},
-    VmExit,
 };
 
 pub use crate::{instrumentation::instrument_vm, shared_mem::is_afl_connected};

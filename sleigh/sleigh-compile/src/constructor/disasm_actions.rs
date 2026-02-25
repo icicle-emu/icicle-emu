@@ -1,10 +1,10 @@
 use sleigh_parse::ast;
 use sleigh_runtime::{
-    semantics::Local, ContextModValue, DisasmConstantValue, Field, GlobalSetAddr, PatternExprOp,
+    ContextModValue, DisasmConstantValue, Field, GlobalSetAddr, PatternExprOp, semantics::Local,
 };
 
 use crate::{
-    constructor::{resolve_pattern_expr, FieldIndex, ResolveIdent, Scope},
+    constructor::{FieldIndex, ResolveIdent, Scope, resolve_pattern_expr},
     symbols::{Symbol, SymbolKind},
 };
 
@@ -87,7 +87,7 @@ pub(crate) fn resolve(
                         return Err(format!(
                             "globalset address must be inst_start, inst_next, or a subtable, got: {}",
                             scope.debug(addr_sym)
-                        ))
+                        ));
                     }
                 };
 
