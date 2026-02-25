@@ -70,9 +70,9 @@ where
         ($val:expr) => {{
             let val = $val;
             match output.size {
-                2 => exec.write_var::<u16>(output, val as u16),
-                4 => exec.write_var::<u32>(output, val as u32),
-                8 => exec.write_var::<u64>(output, val as u64),
+                2 => exec.write_var(output, val.to_float() as i16),
+                4 => exec.write_var(output, val.to_float() as i32),
+                8 => exec.write_var(output, val.to_float() as i64),
                 size => return exec.exception(ExceptionCode::InvalidFloatSize, size as u64),
             }
         }};
@@ -208,9 +208,9 @@ where
         (Op::FloatToFloat, 10, (10, 0)) => float_cast!(a: [u8; 10] => a),
         (Op::FloatToFloat, ..) => exec.invalid_op_size(0),
 
-        (Op::FloatToInt, _, (4, 0)) => float_to_int!(exec.read::<u32>(a).to_float() as i32),
-        (Op::FloatToInt, _, (8, 0)) => float_to_int!(exec.read::<u64>(a).to_float() as i64),
-        (Op::FloatToInt, _, (10, 0)) => float_to_int!(exec.read::<[u8; 10]>(a).to_float() as i64),
+        (Op::FloatToInt, _, (4, 0)) => float_to_int!(exec.read::<u32>(a)),
+        (Op::FloatToInt, _, (8, 0)) => float_to_int!(exec.read::<u64>(a)),
+        (Op::FloatToInt, _, (10, 0)) => float_to_int!(exec.read::<[u8; 10]>(a)),
         (Op::FloatToInt, ..) => exec.invalid_op_size(0),
 
         (Op::IntAdd, 1, (1, 1)) => binary_op!(IntAdd, u8),
