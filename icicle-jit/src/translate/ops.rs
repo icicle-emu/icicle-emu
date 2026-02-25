@@ -567,38 +567,22 @@ pub(super) fn int_signed_less_equal(trans: &mut Translator, a: Value, b: Value) 
     trans.builder.ins().icmp(IntCC::SignedLessThanOrEqual, a, b)
 }
 
+/// Overflow on unsigned addition.
 pub(super) fn int_carry(trans: &mut Translator, a: Value, b: Value) -> Value {
-    // @fixme: this is broken in cranelift
-    // let (_, carry) = trans.builder.ins().iadd_cout(a, b);
-    // carry
-
-    let a = trans.builder.ins().iadd(a, b);
-    trans.builder.ins().icmp(IntCC::UnsignedLessThan, a, b)
+    let (_result, carry) = trans.builder.ins().uadd_overflow(a, b);
+    carry
 }
 
-/// Overflow on addition.
+/// Overflow on signed addition.
 pub(super) fn int_signed_carry(trans: &mut Translator, a: Value, b: Value) -> Value {
-    // let b = trans.builder.ins().ineg(b);
-    // trans.builder.ins().icmp(IntCC::Overflow, a, b)
-
-    // Check that we end up with the correct sign assuming signed addition.
-    // @fixme: Cranelift removed `IntCC::Overflow` so this results in sub-optimal codegen.
-    let result = trans.builder.ins().iadd(a, b);
-    let result_lt_a = trans.builder.ins().icmp(IntCC::SignedLessThan, result, a);
-    let b_is_neg = trans.builder.ins().icmp_imm(IntCC::SignedLessThan, b, 0);
-    trans.builder.ins().bxor(result_lt_a, b_is_neg)
+    let (_result, overflow) = trans.builder.ins().sadd_overflow(a, b);
+    overflow
 }
 
-/// Overflow on subtraction
+/// Overflow on signed subtraction
 pub(super) fn int_signed_borrow(trans: &mut Translator, a: Value, b: Value) -> Value {
-    // trans.builder.ins().icmp(IntCC::Overflow, a, b)
-
-    // Check that we end up with the correct sign assuming signed subtraction.
-    // @fixme: Cranelift removed `IntCC::Overflow` so this results in sub-optimal codegen.
-    let result = trans.builder.ins().isub(a, b);
-    let result_gt_a = trans.builder.ins().icmp(IntCC::SignedGreaterThan, result, a);
-    let b_is_neg = trans.builder.ins().icmp_imm(IntCC::SignedLessThan, b, 0);
-    trans.builder.ins().bxor(result_gt_a, b_is_neg)
+    let (_result, overflow) = trans.builder.ins().ssub_overflow(a, b);
+    overflow
 }
 
 pub(super) fn float_negate(trans: &mut Translator, x: Value) -> Value {

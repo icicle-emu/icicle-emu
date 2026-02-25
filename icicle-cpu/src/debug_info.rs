@@ -240,14 +240,14 @@ where
     match entry.tag() {
         addr2line::gimli::constants::DW_TAG_subprogram => {
             if let Some(addr2line::gimli::AttributeValue::Addr(addr)) =
-                entry.attr_value(addr2line::gimli::constants::DW_AT_low_pc).ok().flatten()
+                entry.attr_value(addr2line::gimli::constants::DW_AT_low_pc)
             {
                 return Some(addr);
             }
         }
         addr2line::gimli::constants::DW_TAG_inlined_subroutine => {
             if let Some(addr2line::gimli::AttributeValue::Addr(addr)) =
-                entry.attr_value(addr2line::gimli::constants::DW_AT_entry_pc).ok().flatten()
+                entry.attr_value(addr2line::gimli::constants::DW_AT_entry_pc)
             {
                 return Some(addr);
             }

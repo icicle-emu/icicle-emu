@@ -12,7 +12,7 @@ use icicle_cpu::mem::{
 };
 use memoffset::offset_of;
 
-use crate::translate::{Translator, is_jit_supported_size, sized_int};
+use crate::translate::{TRUSTED_FIELD_MEM_FLAGS, Translator, is_jit_supported_size, sized_int};
 
 #[derive(Clone, Copy)]
 enum AccessKind {
@@ -83,7 +83,7 @@ fn lshift_and_mask(trans: &mut Translator, value: Value, shift: i64, mask: i64) 
 /// Generate code for looking up an entry in the TLB and comparing the tag.
 fn tlb_lookup(trans: &mut Translator, addr: Value, kind: AccessKind, not_found: Block) -> Value {
     // TLB reads do not alias with loads to actual memory.
-    let mem_flags = MemFlags::trusted().with_alias_region(Some(AliasRegion::Vmctx));
+    let mem_flags = TRUSTED_FIELD_MEM_FLAGS;
 
     // Find the host address that contains the TLB entry for this address.
     let tlb_entry_size: i64 = std::mem::size_of::<TLBEntry>().try_into().unwrap();
