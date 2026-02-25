@@ -129,10 +129,10 @@ pub fn backtrace_with_limit(vm: &mut Vm, max_frames: usize) -> String {
     let callstack = vm.get_debug_callstack();
     let is_truncated = max_frames < callstack.len();
 
-    for (i, addr) in callstack.into_iter().rev().enumerate().take(max_frames) {
-        // For all return address subtract 1 so we get the address of the call not the return for
-        // the symbol.
-        let symbol_addr = if i == 0 { addr } else { addr - 1 };
+    for (i, addr) in callstack.into_iter().rev().take(max_frames).enumerate() {
+        // All addresses in the call stack point to the next instruction after a call so decrement
+        // the address by 1 so that it lies within the instruction that was executed.
+        let symbol_addr = if i == 0 { addr } else { addr.saturating_sub(1) };
         let location =
             vm.env.symbolize_addr(&mut vm.cpu, symbol_addr).unwrap_or(SourceLocation::default());
         writeln!(buf, "{addr:#012x}: {location}").unwrap();
@@ -335,7 +335,7 @@ pub fn get_debug_regs(cpu: &crate::Cpu) -> Vec<pcode::VarNode> {
             "t7", "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "t8", "t9", "k0", "k1", "gp",
             "sp", "s8", "ra", "pc",
         ][..],
-        Architecture::Riscv64(_) => &[
+        Architecture::Riscv64(_) | Architecture::Riscv32(_) => &[
             "ra", "sp", "gp", "tp", "t0", "t1", "t2", "s0", "s1", "a0", "a1", "a2", "a3", "a4",
             "a5", "a6", "a7", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11", "t3",
             "t4", "t5", "t6",

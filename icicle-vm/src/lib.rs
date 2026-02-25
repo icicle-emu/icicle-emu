@@ -226,6 +226,10 @@ impl Vm {
     }
 
     fn handle_exception(&mut self) -> VmExit {
+        if self.interrupt_flag.load(std::sync::atomic::Ordering::Relaxed) {
+            return VmExit::Interrupted;
+        }
+
         if let Some(exit) = self.env.handle_exception(&mut self.cpu) {
             return exit;
         }
@@ -234,9 +238,6 @@ impl Vm {
         tracing::trace!("{code:?}: icount={}, next_timer={}", self.cpu.icount, self.next_timer);
         match code {
             ExceptionCode::None | ExceptionCode::InstructionLimit => {
-                if self.interrupt_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                    return VmExit::Interrupted;
-                }
                 if self.cpu.icount >= self.icount_limit {
                     return VmExit::InstructionLimit;
                 }
@@ -381,26 +382,8 @@ impl Vm {
             return;
         };
 
-        // The interpreter decrements the fuel counter at the start of each instruction (i.e., at
-        // the `Op::InstructionMarker` and when the fuel counter reaches zero, the interpreter stops
-        // at the next instruction marker.
-        //
-        // There are two corner cases to consider here:
-        // The first is when we enter the interpreter at the start of a block that has pcode
-        // instructions injected before the first instruction marker. In this case we should not
-        // decrement the fuel counter before executing the first instruction marker.
-        // However, there are cases where we enter the interpreter in the middle of a block (e.g.,
-        // resuming after a fault). To account for the missing instruction marker, we need to
-        // decrement the fuel counter here.
-        let first_imark_offset =
-            block.pcode.first_addr().and_then(|addr| block.pcode.offset_of(addr)).unwrap_or(0);
-        if offset >= first_imark_offset as u64 {
-            if let Some(inst) = block.pcode.instructions.get(offset as usize) {
-                if !matches!(inst.op, pcode::Op::InstructionMarker) {
-                    self.cpu.fuel.remaining = self.cpu.fuel.remaining.saturating_sub(1);
-                }
-            }
-        }
+        // Adjust the CPU fuel if we are entering the interpreter in the middle of a block.
+        adjust_cpu_fuel_for_block_reentry(&mut self.cpu, block, offset);
 
         loop {
             if block.has_breakpoint() {
@@ -477,11 +460,9 @@ impl Vm {
                     // Since the invalid instruction does not have a marker, we need to check if we
                     // ran out of fuel and raise the appropriate exception first. The next step will
                     // raise the actual exception related to the DecodeError.
-                    let code = if self.cpu.fuel.remaining == 0 {
-                        ExceptionCode::InstructionLimit
-                    }
-                    else {
-                        ExceptionCode::from(e)
+                    let code = match self.cpu.fuel.remaining == 0 {
+                        true => ExceptionCode::InstructionLimit,
+                        false => ExceptionCode::from(e),
                     };
                     self.cpu.exception = Exception::new(code, addr);
                     break;
@@ -504,7 +485,7 @@ impl Vm {
         // Avoid entering the JIT if: the jit is disabled, we are in the middle of a block, or we
         // are at the start of an internal block.
         self.cpu.block_offset == 0
-            && self.code.blocks.get(self.cpu.block_id as usize).map_or(false, |x| x.entry.is_some())
+            && self.code.blocks.get(self.cpu.block_id as usize).is_some_and(|x| x.entry.is_some())
             && self.enable_jit
     }
 
@@ -599,7 +580,7 @@ impl Vm {
         let group = self.lifter.lift_block(&mut ctx)?;
 
         // Add breakpoints to the lifted code.
-        if self.code.breakpoints.len() > 0 {
+        if !self.code.breakpoints.is_empty() {
             for block in &mut self.code.blocks[group.range()] {
                 for inst in &block.pcode.instructions {
                     if matches!(inst.op, pcode::Op::InstructionMarker)
@@ -813,6 +794,35 @@ impl Vm {
     }
 }
 
+/// The interpreter decrements the fuel counter at the start of each instruction (i.e., at
+/// the `Op::InstructionMarker` and when the fuel counter reaches zero, the interpreter stops
+/// at the next instruction marker.
+///
+/// There are two corner cases to consider here:
+///
+/// - The first is when we enter the interpreter at the start of a block that has pcode
+/// instructions injected before the first instruction marker. In this case we should not
+/// decrement the fuel counter before executing the first instruction marker.
+/// - However, there are cases where we enter the interpreter in the middle of a block (e.g.,
+/// resuming after a fault). To account for the missing instruction marker, we need to
+/// decrement the fuel counter here.
+fn adjust_cpu_fuel_for_block_reentry(cpu: &mut Cpu, block: &lifter::Block, offset: u64) {
+    if block.pcode.address_of(offset as usize).is_none() {
+        // The offset is _before_ the first instruction in the block (this should only occur as a
+        // result of pcode injection). In this case we should not decrement the fuel counter since
+        // the executed pcode is not related to any instruction.
+        return;
+    }
+
+    // Otherwise we resumed in the middle of an instruction, so we need to decrement the fuel
+    // counter to account for the missing instruction
+    if let Some(inst) = block.pcode.instructions.get(offset as usize) {
+        if !matches!(inst.op, pcode::Op::InstructionMarker) {
+            cpu.fuel.remaining = cpu.fuel.remaining.saturating_sub(1);
+        }
+    }
+}
+
 #[inline(never)]
 fn print_interpreter_enter(vm: &mut Vm, block_id: u64, offset: u64) {
     let pcode = &vm.code.blocks[block_id as usize].pcode;
@@ -878,14 +888,14 @@ impl Vm {
         }
     }
 
-    /// Goto a specific icount, stepping either backwards or fowards as required.
+    /// Go to a specific icount, stepping either backwards or forwards as required.
     pub fn goto_icount(&mut self, target: u64) -> Option<VmExit> {
         let old_limit = self.icount_limit;
 
         // Check if we need to restore a snapshot
         if self.cpu.icount() > target {
             // Find and restore a snapshot that was created before the target offset
-            match self.snapshots.range(..target).rev().next() {
+            match self.snapshots.range(..target).next_back() {
                 Some((_, snapshot)) => self.restore(&snapshot.clone()),
                 None => return None,
             }
