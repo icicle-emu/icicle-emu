@@ -154,23 +154,27 @@ impl VmPtr {
         (offset_of!(Cpu, exception) + offset_of!(Exception, value)).try_into().unwrap()
     }
 
+    /// Returns the offset of the given varnode relative to the start of the `Cpu` struct.
     fn var_offset(var: pcode::VarNode) -> i32 {
         (offset_of!(Cpu, regs) + Regs::var_offset(var) as usize).try_into().unwrap()
     }
 
+    /// Returns the offset of the `jit_ctx` field within the `Cpu` struct.
     fn jit_ctx_offset() -> i32 {
         offset_of!(Cpu, jit_ctx).try_into().unwrap()
     }
 
-    fn store_arg(&self, builder: &mut FunctionBuilder, id: u16, value: Value) {
-        let arg_offset = id as usize * std::mem::size_of::<u128>();
-        let offset: i32 = (offset_of!(Cpu, args) + arg_offset).try_into().unwrap();
-        builder.ins().store(
-            MemFlags::trusted().with_alias_region(Some(AliasRegion::Vmctx)),
-            value,
-            self.0,
-            offset,
-        );
+    fn var_memflags(var: pcode::VarNode) -> MemFlags {
+        let mut flags = MemFlags::new()
+            .with_alias_region(Some(AliasRegion::Vmctx))
+            .with_notrap()
+            .with_can_move();
+        if var.offset == 0 {
+            // If the varnode has no internal offset then it is guaranteed to be aligned to at least
+            // 128-bits (which is larger than any value loaded directly).
+            flags = flags.with_aligned();
+        }
+        flags
     }
 
     fn load_var(
@@ -180,56 +184,32 @@ impl VmPtr {
         ty: types::Type,
     ) -> Value {
         let offset = VmPtr::var_offset(var);
-        if var.offset == 0 {
-            builder.ins().load(
-                ty,
-                MemFlags::trusted().with_alias_region(Some(AliasRegion::Vmctx)),
-                self.0,
-                offset,
-            )
-        }
-        else {
-            builder.ins().load(
-                ty,
-                MemFlags::new().with_alias_region(Some(AliasRegion::Vmctx)).with_notrap(),
-                self.0,
-                offset,
-            )
-        }
+        let flags = VmPtr::var_memflags(var);
+        builder.ins().load(ty, flags, self.0, offset)
     }
 
     fn store_var(&self, builder: &mut FunctionBuilder, var: pcode::VarNode, value: Value) {
         let offset = VmPtr::var_offset(var);
-        if var.offset == 0 {
-            builder.ins().store(
-                MemFlags::trusted().with_alias_region(Some(AliasRegion::Vmctx)),
-                value,
-                self.0,
-                offset,
-            );
-        }
-        else {
-            builder.ins().store(
-                MemFlags::new().with_alias_region(Some(AliasRegion::Vmctx)).with_notrap(),
-                value,
-                self.0,
-                offset,
-            );
-        }
+        let flags = VmPtr::var_memflags(var);
+        builder.ins().store(flags, value, self.0, offset);
+    }
+
+    fn store_arg(&self, builder: &mut FunctionBuilder, id: u16, value: Value) {
+        let arg_offset = id as usize * std::mem::size_of::<u128>();
+        let offset: i32 = (offset_of!(Cpu, args) + arg_offset).try_into().unwrap();
+        builder.ins().store(TRUSTED_FIELD_MEM_FLAGS, value, self.0, offset);
     }
 }
+
+const TRUSTED_FIELD_MEM_FLAGS: MemFlags =
+    MemFlags::trusted().with_alias_region(Some(AliasRegion::Vmctx)).with_can_move();
 
 macro_rules! gen_load_store {
     ($load_ident:ident, $store_ident:ident, $offset:expr, $ty:ty) => {
         impl VmPtr {
             fn $load_ident(&self, builder: &mut FunctionBuilder) -> Value {
                 let offset: i32 = ($offset).try_into().unwrap();
-                builder.ins().load(
-                    <$ty>::clif_type(),
-                    MemFlags::trusted().with_alias_region(Some(AliasRegion::Vmctx)),
-                    self.0,
-                    offset,
-                )
+                builder.ins().load(<$ty>::clif_type(), TRUSTED_FIELD_MEM_FLAGS, self.0, offset)
             }
 
             fn $store_ident(
@@ -239,12 +219,7 @@ macro_rules! gen_load_store {
             ) {
                 let offset: i32 = ($offset).try_into().unwrap();
                 let value = value.into().get_value(builder);
-                builder.ins().store(
-                    MemFlags::trusted().with_alias_region(Some(AliasRegion::Vmctx)),
-                    value,
-                    self.0,
-                    offset,
-                );
+                builder.ins().store(TRUSTED_FIELD_MEM_FLAGS, value, self.0, offset);
             }
         }
     };
@@ -1168,7 +1143,7 @@ fn sized_int(size: u8) -> types::Type {
         1 => types::I8,
         2 => types::I16,
         3 | 4 => types::I32,
-        5 | 6 | 7 | 8 => types::I64,
+        5..=8 => types::I64,
         9..=16 => types::I128,
         _ => {
             tracing::error!("Invalid int size: {}", size);
