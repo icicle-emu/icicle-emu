@@ -83,11 +83,20 @@ impl<T: ?Sized> HookStore<T> {
 
     fn add(&mut self, start: u64, end: u64, handler: Box<T>) -> u32 {
         // Check if there is a dead slot that can be reused.
-        let id = self.hooks.iter().position(|x| x.handler.is_none()).unwrap_or_else(|| {
-            let id = self.hooks.len();
-            self.hooks.push(HookEntry { start, end, handler: Some(handler) });
-            id
-        });
+        let id = match self.hooks.iter().position(|x| x.handler.is_none()) {
+            Some(id) => {
+                let hook = &mut self.hooks[id];
+                hook.start = start;
+                hook.end = end;
+                hook.handler = Some(handler);
+                id as u32
+            }
+            None => {
+                let id = self.hooks.len().try_into().expect("too many hooks");
+                self.hooks.push(HookEntry { start, end, handler: Some(handler) });
+                id
+            }
+        };
         id.try_into().expect("too many hooks")
     }
 
