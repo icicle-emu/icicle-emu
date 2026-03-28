@@ -949,12 +949,14 @@ impl Vm {
             return false;
         }
 
-        for block in self.code.blocks.iter_mut().filter(|x| x.start <= addr && addr < x.end) {
-            block.breakpoints += 1;
+        for (id, block) in self.code.blocks.iter_mut().enumerate() {
+            if block.start <= addr && addr < block.end {
+                block.breakpoints += 1;
+                // Invalidate the entire compilation group so that superblocks containing
+                // this block are removed from entry_points (not just the fast lookup).
+                self.jit.invalidate(id);
+            }
         }
-
-        // Superblocks may be keyed by a different block's address, so clear everything.
-        self.jit.clear_fast_lookup();
 
         true
     }
