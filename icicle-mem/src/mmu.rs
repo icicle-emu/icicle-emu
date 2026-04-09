@@ -150,6 +150,10 @@ pub struct Mmu {
     pub tlb_miss_count: u64,
     pub mapping_changed: bool,
 
+    /// A max to apply on operations that might cross page boundaries. This is used to emulate
+    /// non-64 bit address spaces.
+    address_mask: u64,
+
     /// The set of virtual (page-aligned) addresses that have been modified since this was last
     /// cleared.
     pub modified: HashSet<u64>,
@@ -186,10 +190,6 @@ pub struct Mmu {
 }
 
 impl crate::Resettable for Mmu {
-    fn new() -> Self {
-        Self::new()
-    }
-
     fn reset(&mut self) {
         self.clear();
     }
@@ -197,12 +197,12 @@ impl crate::Resettable for Mmu {
 
 impl Default for Mmu {
     fn default() -> Self {
-        Self::new()
+        Self::new(u64::MAX)
     }
 }
 
 impl Mmu {
-    pub fn new() -> Self {
+    pub fn new(address_mask: u64) -> Self {
         Self {
             invalidate_icache: false,
             track_uninitialized: false,
@@ -210,6 +210,7 @@ impl Mmu {
             tlb_hit_count: 0,
             tlb_miss_count: 0,
             mapping_changed: false,
+            address_mask,
             modified: HashSet::new(),
             tlb: Box::new(tlb::TranslationCache::new()),
             mapping: RangeMap::new(),
@@ -1092,7 +1093,8 @@ impl Mmu {
     fn read_unaligned<const N: usize>(&mut self, addr: u64, perm: u8) -> MemResult<[u8; N]> {
         let mut value = [0; N];
         for (i, byte) in value.iter_mut().enumerate() {
-            *byte = self.read_u8(addr + i as u64, perm)?;
+            let addr = addr.wrapping_add(i as u64) & self.address_mask;
+            *byte = self.read_u8(addr, perm)?;
         }
         Ok(value)
     }
@@ -1105,7 +1107,8 @@ impl Mmu {
         perm: u8,
     ) -> MemResult<()> {
         for (i, &byte) in value.iter().enumerate() {
-            self.write_u8(addr + i as u64, byte, perm)?;
+            let addr = addr.wrapping_add(i as u64) & self.address_mask;
+            self.write_u8(addr, byte, perm)?;
         }
         Ok(())
     }

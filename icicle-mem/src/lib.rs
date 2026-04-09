@@ -42,7 +42,6 @@ pub trait Memory {
 }
 
 pub trait Resettable {
-    fn new() -> Self;
     fn reset(&mut self);
 }
 
