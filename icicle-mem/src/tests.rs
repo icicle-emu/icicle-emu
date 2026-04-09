@@ -21,7 +21,7 @@ macro_rules! assert_unmapped {
 
 #[test]
 fn write_pages() {
-    let mut mmu = Mmu::new();
+    let mut mmu = Mmu::default();
     mmu.map_memory_len(0x0, 0x1000 * ITERATIONS, Mapping { perm: perm::NONE, value: 0xAA });
     eprintln!("{:#0x?}", mmu.get_mapping());
 
@@ -38,7 +38,7 @@ fn write_pages() {
 
 #[test]
 fn write_across_boundary() {
-    let mut mmu = Mmu::new();
+    let mut mmu = Mmu::default();
     mmu.map_memory_len(0x20000, 0x2000, Mapping { perm: perm::NONE, value: 0xAA });
 
     let payload = [0xFE; 0xFFC];
@@ -52,7 +52,7 @@ fn write_across_boundary() {
 
 #[test]
 fn memset() {
-    let mut mmu = Mmu::new();
+    let mut mmu = Mmu::default();
     mmu.map_memory_len(0x10000, 0x2000, Mapping { perm: perm::NONE, value: 0xAA });
 
     mmu.fill_mem(0x10500, 0x1000, 0x10).unwrap();
@@ -77,7 +77,7 @@ fn memset() {
 
 #[test]
 fn memset_middle_of_mapped_memory() {
-    let mut mmu = Mmu::new();
+    let mut mmu = Mmu::default();
     mmu.map_memory_len(0x10000, 0x3000, Mapping { perm: perm::NONE, value: 0xAA });
 
     mmu.fill_mem(0x11000, 0x1000, 0x10).unwrap();
@@ -101,7 +101,7 @@ fn memset_middle_of_mapped_memory() {
 
 #[test]
 fn permission_checks() {
-    let mut mmu = Mmu::new();
+    let mut mmu = Mmu::default();
 
     let payload = [0xFE; 0x100];
     let mut output = [0x00; 0x100];
@@ -122,7 +122,7 @@ fn permission_checks() {
 
 #[test]
 fn unmap() {
-    let mut mmu = Mmu::new();
+    let mut mmu = Mmu::default();
     mmu.map_memory_len(0x10000, 0x10000, Mapping { perm: perm::NONE, value: 0xAA });
 
     // Start of region
@@ -138,7 +138,7 @@ fn unmap() {
 
 #[test]
 fn map_partial() {
-    let mut mmu = Mmu::new();
+    let mut mmu = Mmu::default();
     mmu.map_memory_len(0x10000 - 0x100, 0x1000, Mapping { perm: perm::NONE, value: 0xAA });
 
     let mut out = [0x00; 0x3];
@@ -162,7 +162,7 @@ fn map_partial() {
 fn map_partial_after_init() {
     let mut out = [0x00; 0x3];
 
-    let mut mmu = Mmu::new();
+    let mut mmu = Mmu::default();
     mmu.map_memory_len(0x100000, 0xcf4, Mapping { perm: perm::READ | perm::WRITE, value: 0xaa });
     mmu.write_bytes(0x100000, &[0x0, 0x1, 0x2], perm::NONE).unwrap();
     mmu.read_bytes(0x100000, &mut out, perm::NONE).unwrap();
@@ -182,7 +182,7 @@ fn map_partial_after_init() {
 
 #[test]
 fn unmap_partial() {
-    let mut mmu = Mmu::new();
+    let mut mmu = Mmu::default();
     mmu.map_memory_len(0x10000 - 0x100, 0x1000, Mapping { perm: perm::NONE, value: 0xAA });
 
     let mut out = [0x00; 0x3];
@@ -198,7 +198,7 @@ fn unmap_partial() {
 
 #[test]
 fn alloc_permissions() {
-    let mut mmu = Mmu::new();
+    let mut mmu = Mmu::default();
     let mapping = Mapping { perm: perm::ALL, value: 0x0 };
 
     let alloc1 =
@@ -218,7 +218,7 @@ fn alloc_permissions() {
 
 #[test]
 fn alloc_preferred_addr() {
-    let mut mmu = Mmu::new();
+    let mut mmu = Mmu::default();
     let mapping = Mapping { perm: perm::ALL, value: 0x0 };
 
     let alloc1 =
@@ -241,7 +241,7 @@ fn alloc_preferred_addr() {
 
 #[test]
 fn multiple_instances() {
-    let mut instances = [Mmu::new(), Mmu::new(), Mmu::new()];
+    let mut instances = [Mmu::default(), Mmu::default(), Mmu::default()];
 
     for (alloc_id, mmu) in instances.iter_mut().enumerate() {
         mmu.map_memory_len(0x0, 0x1000 * ITERATIONS, Mapping { perm: perm::NONE, value: 0xAA });
@@ -259,7 +259,7 @@ fn multiple_instances() {
 
 #[test]
 fn get_modified_pages() {
-    let mut mmu = Mmu::new();
+    let mut mmu = Mmu::default();
     mmu.map_memory_len(0x1000, 0x7000, Mapping { perm: perm::NONE, value: 0 });
 
     mmu.write_bytes(0x1000, &[0x12, 0x34], perm::NONE).unwrap();
@@ -278,7 +278,7 @@ fn get_modified_pages() {
 
 #[test]
 fn snapshot_and_restore() {
-    let mut mmu = Mmu::new();
+    let mut mmu = Mmu::default();
 
     let test_addrs = [
         0x59a335e6, 0x49827709, 0x66b8c532, 0x384bcbd9, 0x22b123d0, 0x86caaab5, 0xc4881f6e,
@@ -347,7 +347,7 @@ fn snapshot_and_restore() {
 
 #[test]
 fn snapshot_reset_and_restore() {
-    let mut mmu = Mmu::new();
+    let mut mmu = Mmu::default();
     mmu.map_memory_len(0x1000, 0x3000, Mapping { perm: perm::NONE, value: 0 });
     mmu.write_bytes(0x1000, b"before", perm::NONE).unwrap();
     mmu.write_bytes(0x3000, b"before", perm::NONE).unwrap();
@@ -381,7 +381,7 @@ fn snapshot_reset_and_restore() {
 
 #[test]
 fn complex_interactions() {
-    let mut mmu = Mmu::new();
+    let mut mmu = Mmu::default();
 
     // Request a large allocation that has an unaligned start and end.
     let alloc = mmu
@@ -444,7 +444,7 @@ fn complex_interactions() {
 #[test]
 fn unmap_allocated() {
     let mut buf = [0; 16];
-    let mut mmu = Mmu::new();
+    let mut mmu = Mmu::default();
 
     mmu.map_memory_len(0x400000000, 0x3f0ae0, Mapping { perm: perm::READ, value: 0xaa });
     mmu.read_bytes(0x4003ed000, &mut buf, perm::NONE).unwrap();
@@ -461,7 +461,7 @@ fn unmap_allocated() {
 
 #[test]
 fn move_memory() {
-    let mut mmu = Mmu::new();
+    let mut mmu = Mmu::default();
     mmu.map_memory_len(0x01000, 0x3000, Mapping { perm: perm::NONE, value: 0 });
     mmu.map_memory_len(0x04000, 0x4000, Mapping { perm: perm::NONE, value: 0 });
     mmu.map_memory_len(0x08000, 0x2000, Mapping { perm: perm::NONE, value: 1 });
@@ -475,7 +475,7 @@ fn move_memory() {
 
 #[test]
 fn boundary_init() {
-    let mut mmu = Mmu::new();
+    let mut mmu = Mmu::default();
     mmu.map_memory_len(0x01000, 0x3000, Mapping { perm: perm::NONE, value: 0xaa });
     mmu.write(0x1000, [0xbb], perm::NONE).unwrap();
 

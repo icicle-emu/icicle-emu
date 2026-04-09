@@ -299,6 +299,7 @@ impl Cpu {
 
         let pc_offset = Regs::var_offset(arch.reg_pc);
         let pc_mask = pcode::mask(arch.reg_pc.size as u64 * 8);
+        let address_mask = pcode::mask(arch.triple.pointer_width().map_or(64, |x| x.bits() as u64));
 
         Box::new(Cpu {
             regs: Regs::new(),
@@ -306,7 +307,7 @@ impl Cpu {
             shadow_stack: ShadowStack::new(),
             enable_shadow_stack: false,
 
-            mem: Mmu::new(),
+            mem: Mmu::new(address_mask),
             jit_ctx: JitContext::default(),
 
             icount: 0,
