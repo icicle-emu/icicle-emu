@@ -716,6 +716,8 @@ pub mod arm {
     pub const HELPERS: &[(&str, PcodeOpHelper)] = &[
         ("enableIRQinterrupts", enable_interrupts),
         ("disableIRQinterrupts", disable_interrupts),
+        ("coprocessor_movefromRt", coprocessor_move_from_rt),
+        ("coprocessor_movefromRt2", coprocessor_move_from_rt2),
         // NEON
         ("VectorCompareEqual", vector_compare_equal),
         ("VectorPairwiseAdd", vector_pairwise_add),
@@ -725,7 +727,35 @@ pub mod arm {
         ("VectorCopyNarrow", vector_copy_narrow),
     ];
 
+    /// The vector ops in SLEIGH are used for both widening and regular vector ops. We only support
+    /// the regular vector ops for now, so this helper checks that the arguments are well-formed for
+    /// regular vector ops avoiding a crash.
+    ///
+    /// Most of these are probably better implemented in SLEIGH directly.
+    fn ensure_matching_vector_args(
+        cpu: &mut Cpu,
+        dst: VarNode,
+        args: [Value; 2],
+        esize: u8,
+    ) -> bool {
+        if esize == 0 || dst.size % esize != 0 {
+            cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
+            cpu.exception.value = esize as u64;
+            return false;
+        }
+        if args[0].size() != dst.size || args[1].size() != dst.size {
+            cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
+            cpu.exception.value = dst.size as u64;
+            return false;
+        }
+        true
+    }
+
     fn vector_compare_equal(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
+        if !ensure_matching_vector_args(cpu, dst, args, cpu.args[0] as u8) {
+            return;
+        }
+
         let esize = cpu.args[0] as u8;
         for i in 0..(dst.size / esize) {
             let a: u64 = cpu.read_dynamic(args[0].slice(i * esize, esize)).zxt();
@@ -734,18 +764,56 @@ pub mod arm {
         }
     }
 
-    // [a, b] + [c, d] = [a + c, b + d]
+    // Note: SLEIGH uses this for both widening and non-widening vector adds, but we only implement
+    // the non-widening version for now.
+    //
+    //  [a, b] + [c, d] = [a + c, b + d]
     fn vector_add(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
+        // `esize` in sleigh is encoded as bytes.
         let esize = cpu.args[0] as u8;
-        for i in 0..(dst.size / esize) {
-            let a: u64 = cpu.read_dynamic(args[0].slice(i * esize, esize)).zxt();
-            let b: u64 = cpu.read_dynamic(args[1].slice(i * esize, esize)).zxt();
-            cpu.write_trunc(dst.slice(i * esize, esize), a.wrapping_add(b));
+        let is_signed = cpu.args[1] == 0;
+
+        if esize == 0 || dst.size % esize != 0 {
+            cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
+            cpu.exception.value = esize as u64;
+            return;
+        }
+
+        let src0_size = args[0].size();
+        let src1_size = args[1].size();
+
+        let extract_lane = |cpu: &mut Cpu, value: Value, lane: u8| -> u64 {
+            let x = value.slice(lane * esize, esize);
+            match is_signed {
+                true => cpu.read_dynamic(x).sxt(),
+                false => cpu.read_dynamic(x).zxt(),
+            }
+        };
+        let insert_lane = |cpu: &mut Cpu, dst: VarNode, lane: u8, element: u64| {
+            cpu.write_trunc(dst.slice(lane * esize, esize), element);
+        };
+
+        // Same-width add (e.g. vadd.i*)
+        if src0_size == dst.size && src1_size == dst.size {
+            for i in 0..(dst.size / esize) {
+                let a = extract_lane(cpu, args[0], i);
+                let b = extract_lane(cpu, args[1], i);
+                insert_lane(cpu, dst, i, a.wrapping_add(b));
+            }
+        }
+        else {
+            // Widening adds (vaddl / vaddw), not currently supported
+            cpu.exception.code = ExceptionCode::UnimplementedOp as u32;
+            cpu.exception.value = cpu.read_pc();
         }
     }
 
     // [a, b] - [c, d] = [a - c, b - d]
     fn vector_sub(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
+        if !ensure_matching_vector_args(cpu, dst, args, cpu.args[0] as u8) {
+            return;
+        }
+
         let esize = cpu.args[0] as u8;
         for i in 0..(dst.size / esize) {
             let a: u64 = cpu.read_dynamic(args[0].slice(i * esize, esize)).zxt();
@@ -792,6 +860,36 @@ pub mod arm {
         for i in 0..(src.size() / esize) {
             let value: u64 = cpu.read_dynamic(src.slice(i * esize, esize)).zxt();
             cpu.write_trunc(dst.slice(i * dst_esize, dst_esize), value);
+        }
+    }
+
+    fn coprocessor_move_from_rt(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
+        let coproc = cpu.read::<u32>(args[0]);
+        let opc1 = cpu.read::<u32>(args[1]);
+        let crm = cpu.args[0] as u32;
+        let result = coprocessor_read(cpu, coproc, opc1, crm) as u32;
+        cpu.write_var(dst, result);
+    }
+
+    fn coprocessor_move_from_rt2(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
+        let coproc = cpu.read::<u32>(args[0]);
+        let opc1 = cpu.read::<u32>(args[1]);
+        let crm = cpu.args[0] as u32;
+        let result = (coprocessor_read(cpu, coproc, opc1, crm) >> 32) as u32;
+        cpu.write_var(dst, result);
+    }
+
+    fn coprocessor_read(cpu: &mut Cpu, coproc: u32, opc1: u32, crm: u32) -> u64 {
+        /// Virtual count register
+        const CNTVCT: (u32, u32, u32) = (0b1111, 0b1110, 0b0001);
+
+        match (coproc, crm, opc1) {
+            CNTVCT => cpu.icount(),
+            _ => {
+                tracing::debug!("Unknown MSR: coproc=p{coproc}, opc1={opc1}, crm=c{crm}");
+                cpu.exception.code = ExceptionCode::UnimplementedOp as u32;
+                0
+            }
         }
     }
 }
