@@ -307,7 +307,7 @@ impl Cpu {
             shadow_stack: ShadowStack::new(),
             enable_shadow_stack: false,
 
-            mem: Mmu::new(address_mask),
+            mem: Mmu::with_mask(address_mask),
             jit_ctx: JitContext::default(),
 
             icount: 0,

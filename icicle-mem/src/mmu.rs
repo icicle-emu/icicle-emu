@@ -197,12 +197,16 @@ impl crate::Resettable for Mmu {
 
 impl Default for Mmu {
     fn default() -> Self {
-        Self::new(u64::MAX)
+        Self::with_mask(u64::MAX)
     }
 }
 
 impl Mmu {
-    pub fn new(address_mask: u64) -> Self {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_mask(address_mask: u64) -> Self {
         Self {
             invalidate_icache: false,
             track_uninitialized: false,
