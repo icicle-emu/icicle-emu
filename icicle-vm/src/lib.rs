@@ -746,6 +746,10 @@ impl Vm {
                 if !visited.insert(id) || id < self.recompile_offset {
                     continue;
                 }
+                // Don't chain breakpointed blocks into superblocks.
+                if block.breakpoints > 0 {
+                    continue;
+                }
                 compilation_group.push(id);
 
                 let mut add_target = |target: &lifter::Target| match target {
@@ -945,10 +949,13 @@ impl Vm {
             return false;
         }
 
-        for block in self.code.blocks.iter_mut().filter(|x| x.start <= addr && addr < x.end) {
-            block.breakpoints += 1;
-            // Make sure that any JIT blocks containing this address are removed from fast lookup.
-            self.jit.remove_fast_lookup(block.start);
+        for (id, block) in self.code.blocks.iter_mut().enumerate() {
+            if block.start <= addr && addr < block.end {
+                block.breakpoints += 1;
+                // Invalidate the entire compilation group so that superblocks containing
+                // this block are removed from entry_points (not just the fast lookup).
+                self.jit.invalidate(id);
+            }
         }
 
         true

@@ -236,7 +236,12 @@ impl JIT {
             }
             self.active[Self::lookup_key(addr)] = (addr, jit_fn);
         }
+        let group_id = self.compiled.len();
         self.compiled.push(target.entry_points().collect());
+
+        for &block_id in target.targets {
+            self.block_mapping.insert(block_id, group_id);
+        }
 
         Ok(())
     }
