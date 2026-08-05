@@ -725,6 +725,7 @@ pub mod arm {
         ("VectorSub", vector_sub),
         ("vrev", vrev),
         ("VectorCopyNarrow", vector_copy_narrow),
+        ("FixedToFP", fpu_fixed_to_fp),
     ];
 
     /// The vector ops in SLEIGH are used for both widening and regular vector ops. We only support
@@ -892,6 +893,42 @@ pub mod arm {
             }
         }
     }
+
+    // Pseudocode from https://developer.arm.com/documentation/ddi0597/2023-09/Shared-Pseudocode/shared-functions-float
+    //
+    // SLEIGH signature: FixedToFP(fp, M, N, fbits, unsigned, rounding)
+    fn fpu_fixed_to_fp(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
+        let m = cpu.read::<u32>(args[1]);
+        let n = cpu.args[0];
+        let fbits = cpu.args[1];
+        let is_unsigned = cpu.args[2] != 0;
+        let rounding = cpu.args[3];
+
+        assert!(m == 16 || m == 32, "fixed-point size must be 16 or 32 bits");
+        assert!(n == 32 || n == 64, "floating-point size must be 32 or 64 bits");
+        assert!(fbits <= u128::from(m), "fractional bits must fit in the fixed-point value");
+        assert!(rounding == 0, "only the default ARM rounding mode is implemented");
+
+        // Read the source register at its native VarNode size, then truncate to
+        // the fixed-point width `m`.
+        let raw: u64 = cpu.read_dynamic(args[0]).zxt();
+        let value: i64 = match (is_unsigned, m) {
+            (false, 16) => (raw as i16).into(),
+            (false, 32) => (raw as i32).into(),
+            (true, 16) => (raw as u16).into(),
+            (true, 32) => (raw as u32).into(),
+            _ => unreachable!(),
+        };
+
+        // Scaling by a power of two is exact, so convert-then-divide rounds
+        // once, matching the single FPRound in the ARM pseudocode.
+        let scale = (1u64 << fbits) as f64;
+        match n {
+            32 => cpu.write_trunc(dst, (value as f32 / scale as f32).to_bits()),
+            64 => cpu.write_trunc(dst, (value as f64 / scale).to_bits()),
+            _ => unreachable!(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -908,5 +945,73 @@ mod tests {
 
         assert_eq!(bcd_add16(0x1234, 0x1234), 0x2468);
         assert_eq!(bcd_add16(0x0555, 0x5555), 0x6110);
+    }
+
+    /// Regression test: `fpu_fixed_to_fp` used to read the source register
+    /// based on `n` (float output size) rather than the VarNode's actual size.
+    /// When the source VarNode was 8 bytes but `n == 32`, the read panicked
+    /// with "read/write to invalid VarNode: … of size: 4".
+    #[test]
+    fn test_fpu_fixed_to_fp_8byte_varnode_n32() {
+        let arch = crate::Arch::none();
+        let mut cpu = crate::Cpu::new_boxed(arch);
+
+        // Source register "a" (8 bytes) and destination register "b" (8 bytes).
+        let reg_a = cpu.arch.sleigh.get_varnode("a").unwrap();
+        let reg_b = cpu.arch.sleigh.get_varnode("b").unwrap();
+
+        // Write a fixed-point value into the 8-byte source register.
+        // Using 0x0001_0000 which represents 1.0 with 16 fractional bits.
+        cpu.write_var::<u64>(reg_a, 0x0001_0000);
+
+        // args[1] = m (fixed-point size in bits); pass via a const Value.
+        let m_value = pcode::Value::Const(32, 4);
+        let src_value = pcode::Value::Var(reg_a);
+
+        // cpu.args: [0]=n (float size), [1]=fbits, [2]=unsigned flag (0 = signed), [3]=rounding
+        cpu.args[0] = 32; // n = 32-bit float output
+        cpu.args[1] = 16; // fbits = 16 fractional bits
+        cpu.args[2] = 0; // signed
+        cpu.args[3] = 0; // default rounding
+
+        // Call through the public HELPERS table (same path as the interpreter).
+        let helper = arm::HELPERS.iter().find(|(name, _)| *name == "FixedToFP").unwrap().1;
+        // This panicked before the fix because the 8-byte VarNode was read as i32.
+        helper(&mut cpu, reg_b, [src_value, m_value]);
+
+        // Result should be 1.0f32 written into the lower bytes of reg_b.
+        let result: u64 = cpu.read_var(reg_b);
+        let float_val = f32::from_bits(result as u32);
+        assert!((float_val - 1.0).abs() < f32::EPSILON, "expected 1.0, got {float_val}");
+    }
+
+    /// `fbits == 32` is encodable (`vcvt.f32.s32 d0, d0, #32`: fbits = 64 - imm6)
+    /// and is the boundary case for the scale-factor shift.
+    #[test]
+    fn test_fpu_fixed_to_fp_fbits_32() {
+        let arch = crate::Arch::none();
+        let mut cpu = crate::Cpu::new_boxed(arch);
+
+        let reg_a = cpu.arch.sleigh.get_varnode("a").unwrap();
+        let reg_b = cpu.arch.sleigh.get_varnode("b").unwrap();
+
+        // 0x8000_0000 as a signed 32-bit fixed-point value with 32 fractional
+        // bits represents -2^31 / 2^32 = -0.5.
+        cpu.write_var::<u64>(reg_a, 0x8000_0000);
+
+        let m_value = pcode::Value::Const(32, 4);
+        let src_value = pcode::Value::Var(reg_a);
+
+        cpu.args[0] = 32; // n = 32-bit float output
+        cpu.args[1] = 32; // fbits = 32 fractional bits
+        cpu.args[2] = 0; // signed
+        cpu.args[3] = 0; // default rounding
+
+        let helper = arm::HELPERS.iter().find(|(name, _)| *name == "FixedToFP").unwrap().1;
+        helper(&mut cpu, reg_b, [src_value, m_value]);
+
+        let result: u64 = cpu.read_var(reg_b);
+        let float_val = f32::from_bits(result as u32);
+        assert!((float_val + 0.5).abs() < f32::EPSILON, "expected -0.5, got {float_val}");
     }
 }
