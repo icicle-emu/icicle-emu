@@ -936,6 +936,10 @@ impl Vm {
         exit
     }
 
+    pub fn breakpoints(&self) -> Vec<u64> {
+        self.code.breakpoints.iter().copied().collect()
+    }
+
     /// Adds a breakpoint at `addr`.
     ///
     /// Returns a boolean representing whether a new breakpoint was added.

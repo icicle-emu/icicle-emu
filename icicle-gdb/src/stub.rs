@@ -123,8 +123,17 @@ impl<'a, T: DynamicTarget> VmState<'a, T> {
             }
             ExecMode::ReverseStep => {
                 self.single_stepping.store(true, std::sync::atomic::Ordering::Release);
+                // Suppress breakpoints so the forward re-execution inside `step_back`
+                // cannot stop early at an earlier occurrence of a breakpoint address.
+                let breakpoints = self.vm.breakpoints();
+                for breakpoint in breakpoints.iter() {
+                    self.vm.remove_breakpoint(*breakpoint);
+                }
                 let result = self.vm.step_back(1);
                 self.single_stepping.store(false, std::sync::atomic::Ordering::Release);
+                for breakpoint in breakpoints.iter() {
+                    self.vm.add_breakpoint(*breakpoint);
+                }
 
                 match result {
                     Some(exit) => exit,
