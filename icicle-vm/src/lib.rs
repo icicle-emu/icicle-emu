@@ -894,8 +894,8 @@ impl Vm {
 
         // Check if we need to restore a snapshot
         if self.cpu.icount() > target {
-            // Find and restore a snapshot that was created before the target offset
-            match self.snapshots.range(..target).next_back() {
+            // Find and restore a snapshot that was created before or at the target offset
+            match self.snapshots.range(..=target).next_back() {
                 Some((_, snapshot)) => self.restore(&snapshot.clone()),
                 None => return None,
             }
