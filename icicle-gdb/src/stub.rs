@@ -51,11 +51,12 @@ struct Snapshot {
     vm: icicle_vm::Snapshot,
 }
 
-struct WatchPoint {
+pub struct WatchPoint {
     start: u64,
     len: u64,
     kind: WatchKind,
-    id: u32,
+    write_hook: Option<u32>,
+    read_hook: Option<u32>,
 }
 
 enum FileSource {
@@ -139,7 +140,7 @@ impl<'a, T: DynamicTarget> VmState<'a, T> {
         };
         tracing::debug!("VmExit: {exit:?} at pc={:#x}", self.vm.cpu.read_pc());
         self.single_stepping.store(true, std::sync::atomic::Ordering::Release);
-        let result = translate_stop_reason(self.vm, exit);
+        let result = translate_stop_reason(self.vm, exit, &self.watchpoints);
         self.single_stepping.store(false, std::sync::atomic::Ordering::Release);
         result
     }
@@ -319,13 +320,6 @@ impl<T: DynamicTarget> ext::breakpoints::HwWatchpoint for VmState<'_, T> {
         len: <Self::Arch as Arch>::Usize,
         kind: ext::breakpoints::WatchKind,
     ) -> TargetResult<bool, Self> {
-        if !matches!(
-            kind,
-            ext::breakpoints::WatchKind::Write | ext::breakpoints::WatchKind::ReadWrite
-        ) {
-            return Err(TargetError::NonFatal);
-        }
-
         let start: u64 = num_traits::cast(addr).unwrap();
         let len: u64 = num_traits::cast(len).unwrap();
         if self.watchpoints.iter().any(|x| x.start == start && x.len == len && x.kind == kind) {
@@ -333,28 +327,64 @@ impl<T: DynamicTarget> ext::breakpoints::HwWatchpoint for VmState<'_, T> {
         }
 
         tracing::trace!("setting watchpoint at: addr={start:#x}, len={len:#x}");
-        let cpu_ptr = self.vm.cpu.as_mut() as *mut Cpu;
-        let single_stepping = self.single_stepping.clone();
-        let id = self
-            .vm
-            .cpu
-            .mem
-            .add_write_hook(
-                start,
-                start + len,
-                Box::new(move |_mem: &mut icicle_vm::cpu::Mmu, _addr: u64, _value: &[u8]| {
-                    if single_stepping.load(std::sync::atomic::Ordering::Acquire) {
-                        return;
-                    }
+        let mut write_hook = None;
+        if kind == ext::breakpoints::WatchKind::Write
+            || kind == ext::breakpoints::WatchKind::ReadWrite
+        {
+            let cpu_ptr = self.vm.cpu.as_mut() as *mut Cpu;
+            let single_stepping = self.single_stepping.clone();
+            let id = self
+                .vm
+                .cpu
+                .mem
+                .add_write_hook(
+                    start,
+                    start + len,
+                    Box::new(move |_mem: &mut icicle_vm::cpu::Mmu, _addr: u64, _value: &[u8]| {
+                        if single_stepping.load(std::sync::atomic::Ordering::Acquire) {
+                            return;
+                        }
 
-                    // FIXME: rework memory subsystem to pass the CPU struct to the hook instead of
-                    // requiring us to smuggle the pointer in here.
-                    let cpu = unsafe { &mut *cpu_ptr };
-                    cpu.exception = Exception::new(ExceptionCode::WriteWatch, start);
-                }),
-            )
-            .ok_or_else(|| TargetError::NonFatal)?;
-        self.watchpoints.push(WatchPoint { start, len, kind, id });
+                        // FIXME: rework memory subsystem to pass the CPU struct to the hook instead
+                        // of requiring us to smuggle the pointer in here.
+                        let cpu = unsafe { &mut *cpu_ptr };
+                        cpu.exception = Exception::new(ExceptionCode::WriteWatch, start);
+                    }),
+                )
+                .ok_or_else(|| TargetError::NonFatal)?;
+            write_hook = Some(id);
+        }
+
+        let mut read_hook = None;
+        if kind == ext::breakpoints::WatchKind::Read
+            || kind == ext::breakpoints::WatchKind::ReadWrite
+        {
+            let cpu_ptr = self.vm.cpu.as_mut() as *mut Cpu;
+            let single_stepping = self.single_stepping.clone();
+            let id = self
+                .vm
+                .cpu
+                .mem
+                .add_read_hook(
+                    start,
+                    start + len,
+                    Box::new(move |_mem: &mut icicle_vm::cpu::Mmu, _addr: u64, _size: u8| {
+                        if single_stepping.load(std::sync::atomic::Ordering::Acquire) {
+                            return None;
+                        }
+
+                        // FIXME: rework memory subsystem to pass the CPU struct to the hook instead
+                        // of requiring us to smuggle the pointer in here.
+                        let cpu = unsafe { &mut *cpu_ptr };
+                        cpu.exception = Exception::new(ExceptionCode::ReadWatch, start);
+                        None
+                    }),
+                )
+                .ok_or_else(|| TargetError::NonFatal)?;
+            read_hook = Some(id);
+        }
+
+        self.watchpoints.push(WatchPoint { start, len, kind, write_hook, read_hook });
 
         Ok(true)
     }
@@ -365,12 +395,6 @@ impl<T: DynamicTarget> ext::breakpoints::HwWatchpoint for VmState<'_, T> {
         len: <Self::Arch as Arch>::Usize,
         kind: ext::breakpoints::WatchKind,
     ) -> TargetResult<bool, Self> {
-        if !matches!(
-            kind,
-            ext::breakpoints::WatchKind::Write | ext::breakpoints::WatchKind::ReadWrite
-        ) {
-            return Err(TargetError::NonFatal);
-        }
         let start: u64 = num_traits::cast(addr).unwrap();
         let len: u64 = num_traits::cast(len).unwrap();
         tracing::trace!("removing watchpoint at: addr={start:#x}, len={len:#x}");
@@ -383,7 +407,14 @@ impl<T: DynamicTarget> ext::breakpoints::HwWatchpoint for VmState<'_, T> {
         };
         let entry = self.watchpoints.remove(pos);
 
-        Ok(self.vm.cpu.mem.remove_write_hook(entry.id))
+        let mut removed = true;
+        if let Some(id) = entry.write_hook {
+            removed &= self.vm.cpu.mem.remove_write_hook(id);
+        }
+        if let Some(id) = entry.read_hook {
+            removed &= self.vm.cpu.mem.remove_read_hook(id);
+        }
+        Ok(removed)
     }
 }
 
@@ -693,7 +724,11 @@ fn remap_windows_path_to_wsl_impl(path: &std::path::Path) -> Option<PathBuf> {
     Some(PathBuf::from(wsl_path))
 }
 
-pub fn translate_stop_reason<U>(vm: &mut Vm, exit: VmExit) -> SingleThreadStopReason<U>
+pub fn translate_stop_reason<U>(
+    vm: &mut Vm,
+    exit: VmExit,
+    watchpoints: &[WatchPoint],
+) -> SingleThreadStopReason<U>
 where
     U: num_traits::Unsigned + num_traits::NumCast,
 {
@@ -746,18 +781,30 @@ where
             }
         }
         VmExit::UnhandledException((ExceptionCode::ReadWatch, addr)) => {
-            let addr = num_traits::cast(addr).unwrap();
             vm.step_back(1);
-            SingleThreadStopReason::Watch { tid: (), kind: ext::breakpoints::WatchKind::Read, addr }
+            let kind = watchpoints
+                .iter()
+                .find(|w| {
+                    w.start == addr
+                        && (w.kind == ext::breakpoints::WatchKind::Read
+                            || w.kind == ext::breakpoints::WatchKind::ReadWrite)
+                })
+                .map(|w| w.kind)
+                .unwrap_or(ext::breakpoints::WatchKind::Read);
+            SingleThreadStopReason::Watch { tid: (), kind, addr: num_traits::cast(addr).unwrap() }
         }
         VmExit::UnhandledException((ExceptionCode::WriteWatch, addr)) => {
-            let addr = num_traits::cast(addr).unwrap();
             vm.step_back(1);
-            SingleThreadStopReason::Watch {
-                tid: (),
-                kind: ext::breakpoints::WatchKind::Write,
-                addr,
-            }
+            let kind = watchpoints
+                .iter()
+                .find(|w| {
+                    w.start == addr
+                        && (w.kind == ext::breakpoints::WatchKind::Write
+                            || w.kind == ext::breakpoints::WatchKind::ReadWrite)
+                })
+                .map(|w| w.kind)
+                .unwrap_or(ext::breakpoints::WatchKind::Write);
+            SingleThreadStopReason::Watch { tid: (), kind, addr: num_traits::cast(addr).unwrap() }
         }
         VmExit::UnhandledException((code, addr)) if code.is_memory_error() => {
             warn!("Unhandled exception: {code:?}, addr={addr:#0x}");
