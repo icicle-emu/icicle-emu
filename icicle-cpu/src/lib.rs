@@ -41,6 +41,7 @@ pub struct BlockTable {
     pub map: HashMap<BlockKey, BlockGroup>,
     pub blocks: Vec<lifter::Block>,
     pub disasm: HashMap<u64, String>,
+    pub disasm_by_mode: HashMap<BlockKey, String>,
     pub breakpoints: HashSet<u64>,
     pub modified: HashSet<usize>,
 }
@@ -50,6 +51,7 @@ impl BlockTable {
         self.map.clear();
         self.blocks.clear();
         self.disasm.clear();
+        self.disasm_by_mode.clear();
         self.modified.clear();
     }
 
