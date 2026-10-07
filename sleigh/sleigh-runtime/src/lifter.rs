@@ -480,6 +480,9 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
 
     fn resolve_export(&mut self, inner: Export) -> Result<Operand> {
         match inner {
+            Export::Value(Value { local: Local::Subtable(idx), offset: 0, .. }) => {
+                self.subtable_export(idx).ok_or(Error::InvalidVarNode)
+            }
             Export::Value(value) => Ok(self.resolve_value(value)?.into()),
             Export::RamRef(ptr, size) => Ok(Operand::Pointer(self.resolve_value(ptr)?, 0, size)),
             Export::RegisterRef(offset, size) => match self.resolve_value(offset)? {
