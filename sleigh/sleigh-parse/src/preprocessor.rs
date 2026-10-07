@@ -117,7 +117,6 @@ pub(crate) fn handle_macro(p: &mut Parser, kind: MacroKind) -> Result<(), Error>
             if p.state.enabled_stack.pop().is_none() {
                 return Err(p.error("unexpected `@endif` expression"));
             }
-            p.expect(TokenKind::Line)?;
         }
 
         MacroKind::Include => {
