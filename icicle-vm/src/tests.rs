@@ -142,3 +142,32 @@ fn build_riscv64() {
 fn build_x86_64() {
     let _ = crate::build(&Config::from_target_triple("x86_64-none")).unwrap();
 }
+
+#[test]
+fn disasm_change_check_distinguishes_isa_modes() {
+    // The same bytes decode differently per instruction-set mode: `0x00000000` is `andeq r0,r0,r0`
+    // in ARM and `movs r0,r0` in Thumb. On interworking targets one address can legitimately be
+    // lifted in both modes, so the disassembly-change check keeps its baseline per (vaddr,
+    // isa_mode) and does not treat the second decode as self-modifying code. Lift a padding address
+    // in Thumb then ARM and confirm the second lift is accepted.
+    let mut vm = crate::build(&Config {
+        triple: "arm".parse().unwrap(),
+        enable_shadow_stack: false,
+        ..Config::default()
+    })
+    .unwrap();
+
+    let addr = 0x1000;
+    vm.cpu.mem.map_memory_len(addr, 0x1000, Mapping { perm: perm::NONE, value: 0 });
+    vm.cpu.mem.write_bytes(addr, &[0u8; 0x1000], perm::NONE).unwrap();
+    vm.cpu.mem.update_perm(addr, 0x1000, perm::READ | perm::INIT | perm::EXEC).unwrap();
+
+    vm.cpu.set_isa_mode(1);
+    assert!(vm.lift(addr).is_ok(), "thumb lift of padding should succeed");
+
+    vm.cpu.set_isa_mode(0);
+    assert!(
+        vm.lift(addr).is_ok(),
+        "arm lift of the same padding must not be flagged as self-modifying code"
+    );
+}

@@ -208,6 +208,10 @@ impl crate::lifter::InstructionSource for BasicInstructionSource {
         &self.arch
     }
 
+    fn isa_mode(&self) -> u8 {
+        0
+    }
+
     fn read_bytes(&mut self, vaddr: u64, buf: &mut [u8]) {
         buf.fill(0);
         match self.get_mem_region(vaddr, buf.len()) {

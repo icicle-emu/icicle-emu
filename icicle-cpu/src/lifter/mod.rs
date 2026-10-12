@@ -20,11 +20,16 @@ pub trait InstructionSource {
     fn arch(&self) -> &Arch;
     fn read_bytes(&mut self, vaddr: u64, buf: &mut [u8]);
     fn ensure_exec(&mut self, vaddr: u64, size: usize) -> bool;
+    fn isa_mode(&self) -> u8;
 }
 
 impl InstructionSource for crate::Cpu {
     fn arch(&self) -> &Arch {
         &self.arch
+    }
+
+    fn isa_mode(&self) -> u8 {
+        crate::Cpu::isa_mode(self)
     }
 
     fn read_bytes(&mut self, vaddr: u64, buf: &mut [u8]) {
@@ -681,13 +686,15 @@ impl BlockLifter {
 
         if self.instruction_lifter.generate_disassembly {
             let new_disasm = &self.instruction_lifter.disasm;
-            match ctx.code.disasm.entry(ctx.vaddr) {
+            let key = crate::BlockKey { vaddr: ctx.vaddr, isa_mode: ctx.src.isa_mode() as u64 };
+            match ctx.code.disasm_by_mode.entry(key) {
                 std::collections::hash_map::Entry::Occupied(old) => {
                     let old_disasm = old.get();
                     if old_disasm != new_disasm {
                         tracing::error!(
-                            "disassembly changed at {:#0x} (from {old_disasm} to {new_disasm})",
-                            ctx.vaddr
+                            "disassembly changed at {:#0x} (mode {}, from {old_disasm} to {new_disasm})",
+                            ctx.vaddr,
+                            key.isa_mode
                         );
                         return Err(DecodeError::DisassemblyChanged);
                     }
@@ -696,6 +703,7 @@ impl BlockLifter {
                     slot.insert(new_disasm.clone());
                 }
             }
+            ctx.code.disasm.entry(ctx.vaddr).or_insert_with(|| new_disasm.clone());
         }
 
         self.current.context = self.instruction_lifter.decoder.global_context;
