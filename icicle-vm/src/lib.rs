@@ -202,7 +202,10 @@ impl Vm {
             }
 
             let instructions_to_exec = self.next_timer.saturating_sub(self.cpu.icount);
-            if instructions_to_exec > 0 {
+            // If we stopped part way through an instruction (e.g., after a fault), then the
+            // instruction has already been counted, so we always allow it to run to completion
+            // (stopping at the next instruction marker) even if we are at the icount limit.
+            if instructions_to_exec > 0 || self.is_mid_instruction() {
                 self.cpu.update_fuel(instructions_to_exec);
 
                 self.run_block_jit();
@@ -210,9 +213,7 @@ impl Vm {
                 // At the beginning of a block we might decide that we need to switch to the
                 // interpreter. This happens if there is not enough fuel, or a breakpoint is set
                 // inside the block.
-                if self.cpu.exception
-                    == (ExceptionCode::InternalError, InternalError::SwitchToInterpreter).into()
-                {
+                if self.cpu.exception == Exception::SWITCH_TO_INTERPRETER {
                     self.run_block_interpreter();
                 }
 
@@ -396,9 +397,6 @@ impl Vm {
             return;
         };
 
-        // Adjust the CPU fuel if we are entering the interpreter in the middle of a block.
-        adjust_cpu_fuel_for_block_reentry(&mut self.cpu, block, offset);
-
         loop {
             if block.has_breakpoint() {
                 // Determine how many steps to execute before we hit the first breakpoint in this
@@ -524,8 +522,7 @@ impl Vm {
 
     fn run_block_jit(&mut self) {
         if !self.can_enter_jit() {
-            self.cpu.exception =
-                (ExceptionCode::InternalError, InternalError::SwitchToInterpreter).into();
+            self.cpu.exception = Exception::SWITCH_TO_INTERPRETER;
             return;
         }
 
@@ -835,34 +832,32 @@ impl Vm {
     pub fn has_breakpoint(&self, pc: u64) -> bool {
         self.code.breakpoints.contains(&pc)
     }
-}
 
-/// The interpreter decrements the fuel counter at the start of each instruction (i.e., at
-/// the `Op::InstructionMarker` and when the fuel counter reaches zero, the interpreter stops
-/// at the next instruction marker.
-///
-/// There are two corner cases to consider here:
-///
-/// - The first is when we enter the interpreter at the start of a block that has pcode
-/// instructions injected before the first instruction marker. In this case we should not
-/// decrement the fuel counter before executing the first instruction marker.
-/// - However, there are cases where we enter the interpreter in the middle of a block (e.g.,
-/// resuming after a fault). To account for the missing instruction marker, we need to
-/// decrement the fuel counter here.
-fn adjust_cpu_fuel_for_block_reentry(cpu: &mut Cpu, block: &lifter::Block, offset: u64) {
-    if block.pcode.address_of(offset as usize).is_none() {
-        // The offset is _before_ the first instruction in the block (this should only occur as a
-        // result of pcode injection). In this case we should not decrement the fuel counter since
-        // the executed pcode is not related to any instruction.
-        return;
-    }
+    /// Returns whether the CPU is stopped part way through an instruction (e.g., resuming after a
+    /// fault).
+    ///
+    /// Fuel is consumed at the `InstructionMarker` at the start of each instruction, so a
+    /// partially executed instruction has already been included in `icount`.
+    pub fn is_mid_instruction(&self) -> bool {
+        let Some(block) = self.code.blocks.get(self.cpu.block_id as usize)
+        else {
+            return false;
+        };
+        let offset = self.cpu.block_offset as usize;
 
-    // Otherwise we resumed in the middle of an instruction, so we need to decrement the fuel
-    // counter to account for the missing instruction
-    if let Some(inst) = block.pcode.instructions.get(offset as usize) {
-        if !matches!(inst.op, pcode::Op::InstructionMarker) {
-            cpu.fuel.remaining = cpu.fuel.remaining.saturating_sub(1);
+        if offset == 0 || block.pcode.address_of(offset).is_none() {
+            // The offset is _before_ the first instruction in the block (this should only occur as
+            // a result of pcode injection). In this case we should not consider the current state
+            // to be mid instruction since the executed pcode is not related to any instruction.
+            return false;
         }
+
+        // Otherwise check if we are stopped at an instruction marker.
+        block
+            .pcode
+            .instructions
+            .get(offset)
+            .is_some_and(|inst| !matches!(inst.op, pcode::Op::InstructionMarker))
     }
 }
 
@@ -871,8 +866,9 @@ fn print_interpreter_enter(vm: &mut Vm, block_id: u64, offset: u64) {
     let block = &vm.code.blocks[block_id as usize];
     let addr = block.pcode.address_of(offset as usize).unwrap_or(0);
     eprintln!(
-        "interpreter_enter: next_addr={addr:#x}, block.id={block_id}, block.offset={offset}, block.entry={:x?}, can_enter_jit={}\n{}",
-        block.entry,
+        "interpreter_enter: next_addr={addr:#x}, block.id={block_id}, block.offset={offset}, icount={}, fuel={}, can_enter_jit={}\n{}",
+        vm.cpu.icount(),
+        vm.cpu.fuel.remaining,
         vm.can_enter_jit(),
         block.pcode.display(&vm.cpu.arch.sleigh)
     );
@@ -915,9 +911,16 @@ fn print_jit_exit(vm: &mut Vm, next_addr: u64) {
 
 // Helper functions
 impl Vm {
-    pub fn step(&mut self, steps: u64) -> VmExit {
+    /// Execute until `steps` instruction boundaries have been reached.
+    ///
+    /// Note: if previously execution stopped midway through an instruction then the first step will
+    /// 'complete' the current instruction.
+    pub fn step(&mut self, mut steps: u64) -> VmExit {
         let old_limit = self.icount_limit;
 
+        if self.is_mid_instruction() {
+            steps = steps.saturating_sub(1);
+        }
         self.icount_limit = self.cpu.icount.saturating_add(steps);
         let exit = self.run();
 

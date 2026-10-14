@@ -47,7 +47,7 @@ impl Exception {
     }
 
     #[inline]
-    pub fn internal_error(error: crate::InternalError) -> Self {
+    pub const fn internal_error(error: crate::InternalError) -> Self {
         Self { code: ExceptionCode::InternalError as u32, value: error as u64 }
     }
 
@@ -56,6 +56,9 @@ impl Exception {
         self.code = ExceptionCode::None as u32;
         self.value = 0;
     }
+
+    pub const SWITCH_TO_INTERPRETER: Self =
+        Self::internal_error(InternalError::SwitchToInterpreter);
 }
 
 /// Used to control where the CPU should stop executing.
