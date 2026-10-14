@@ -74,21 +74,27 @@ fn execute_only_memory() {
     assert_eq!(vm.step(1), VmExit::InstructionLimit);
 }
 
+static I686_TEST_CODE: &[u8] = &[
+    0xA1, 0xFF, 0xFF, 0x01, 0x00, // 0x00: mov eax, [0x1FFFF]
+    0xB8, 0x02, 0x00, 0x00, 0x00, // 0x05: mov eax, 2
+    0x90, // 0x0A: nop
+    0xF4, // 0x0A: hlt
+];
+
+fn i686_test_vm() -> crate::Vm {
+    let mut vm = crate::build(&Config::from_target_triple("i686-none")).unwrap();
+    vm.cpu.mem.map_memory_len(0x0, 0x100, Mapping { perm: perm::READ | perm::EXEC, value: 0x00 });
+    vm.cpu.mem.write_bytes(0x0, I686_TEST_CODE, perm::NONE).unwrap();
+    vm.cpu.write_pc(0x00);
+    vm
+}
+
 #[test]
 fn single_step_after_fault() {
-    let mut vm = crate::build(&Config::from_target_triple("i686-none")).unwrap();
-    vm.cpu.mem.map_memory_len(0, 0x100, Mapping { perm: perm::READ | perm::EXEC, value: 0 });
+    let mut vm = i686_test_vm();
 
     let reg_eax = vm.cpu.arch.sleigh.get_varnode("EAX").unwrap();
 
-    static CODE: &[u8] = &[
-        0xA1, 0xFF, 0xFF, 0x01, 0x00, // 0x00: mov eax, [0x1FFFF]
-        0xB8, 0x02, 0x00, 0x00, 0x00, // 0x05: mov eax, 2
-        0x90, // 0x0A: nop
-    ];
-    vm.cpu.mem.write_bytes(0x0, CODE, perm::NONE).unwrap();
-
-    vm.cpu.write_pc(0x00);
     assert_eq!(vm.step(1), VmExit::UnhandledException((ExceptionCode::ReadUnmapped, 0x1FFFF)));
     assert_eq!(vm.cpu.read_pc(), 0x00);
 
@@ -101,6 +107,31 @@ fn single_step_after_fault() {
 
     assert_eq!(vm.step(1), VmExit::InstructionLimit);
     assert_eq!(vm.cpu.read_pc(), 0x0A);
+}
+
+#[test]
+fn multi_step_after_fault_matches_single_steps() {
+    let fault_and_fixup = || {
+        let mut vm = i686_test_vm();
+        assert_eq!(vm.step(1), VmExit::UnhandledException((ExceptionCode::ReadUnmapped, 0x1FFFF)));
+        assert!(vm.cpu.mem.map_memory_len(0x1FF00, 0x200, Mapping {
+            perm: perm::READ | perm::EXEC,
+            value: 0xaa
+        }));
+        vm.cpu.exception.clear();
+        vm
+    };
+
+    let mut single = fault_and_fixup();
+    assert_eq!(single.step(1), VmExit::InstructionLimit);
+    assert_eq!(single.step(1), VmExit::InstructionLimit);
+
+    let mut multi = fault_and_fixup();
+    assert_eq!(multi.step(2), VmExit::InstructionLimit);
+
+    assert_eq!(single.cpu.read_pc(), 0x0A);
+    assert_eq!(multi.cpu.read_pc(), 0x0A);
+    assert_eq!(single.cpu.icount(), multi.cpu.icount());
 }
 
 #[test]
@@ -132,6 +163,50 @@ fn disasm_change_check_distinguishes_isa_modes() {
         vm.cpu.mem.write_bytes(addr, &[0x02, 0x00, 0x81, 0xE0], perm::NONE),
         Err(perm::MemError::SelfModifyingCode)
     );
+}
+
+#[test]
+fn fault_fixup_preserves_icount() {
+    let missing_mapping = Mapping { perm: perm::READ | perm::INIT, value: 0x0 };
+
+    println!("Clean run:");
+    let icount_clean = {
+        let mut vm = i686_test_vm();
+        vm.cpu.mem.map_memory_len(0x1FFFF, 0x200, missing_mapping);
+        assert_eq!(vm.step(1000), VmExit::Halt);
+        vm.cpu.icount()
+    };
+
+    println!("\n\nFaulting run:");
+    let icount_with_fault = {
+        let mut vm = i686_test_vm();
+        assert_eq!(
+            vm.step(1000),
+            VmExit::UnhandledException((ExceptionCode::ReadUnmapped, 0x1FFFF))
+        );
+        vm.cpu.mem.map_memory_len(0x1FFFF, 0x200, missing_mapping);
+        vm.cpu.exception.clear();
+        assert_eq!(vm.step(1000), VmExit::Halt);
+        vm.cpu.icount()
+    };
+    assert_eq!(icount_clean, icount_with_fault, "icount mismatch with snapshot");
+
+    println!("\n\nSnapshot run:");
+    let icount_with_snapshot = {
+        let mut vm = i686_test_vm();
+        assert_eq!(
+            vm.step(1000),
+            VmExit::UnhandledException((ExceptionCode::ReadUnmapped, 0x1FFFF))
+        );
+        let snap = vm.snapshot();
+        vm.restore(&snap);
+
+        vm.cpu.mem.map_memory_len(0x1FFFF, 0x200, missing_mapping);
+        vm.cpu.exception.clear();
+        assert_eq!(vm.step(1000), VmExit::Halt);
+        vm.cpu.icount()
+    };
+    assert_eq!(icount_clean, icount_with_snapshot, "icount mismatch with clean run");
 }
 
 #[test]
