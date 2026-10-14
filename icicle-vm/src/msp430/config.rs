@@ -79,7 +79,7 @@ pub struct Memory {
     pub end: u64,
 
     /// The initial permissions associated with the region.
-    pub perm: Perm,
+    pub perm: CfgPerm,
 
     /// The (initial) content of the mapping.
     pub value: Value,
@@ -104,7 +104,7 @@ pub enum Value {
 }
 
 #[derive(Debug, serde::Deserialize)]
-pub enum Perm {
+pub enum CfgPerm {
     None,
     R,
     W,
@@ -115,7 +115,7 @@ pub enum Perm {
     RWX,
 }
 
-impl Perm {
+impl CfgPerm {
     pub fn value(&self) -> u8 {
         match self {
             Self::None => perm::NONE,

@@ -6,15 +6,16 @@ mod ops;
 use std::collections::HashMap;
 
 use cranelift::{
-    codegen::ir::{AliasRegion, BlockArg, Endianness, FuncRef, Function, SigRef},
+    codegen::ir::{BlockArg, Endianness, FuncRef, Function, SigRef},
     frontend::Switch,
     prelude::*,
 };
+use cranelift_codegen::{ir::AliasRegionData, isa::TargetFrontendConfig};
 use cranelift_jit::JITModule;
 use cranelift_module::{FuncId, Module};
 
 use icicle_cpu::{
-    Arch, Cpu, Exception, ExceptionCode, InternalError, Regs,
+    Cpu, Exception, ExceptionCode, InternalError, Regs,
     cpu::{Fuel, JitContext},
     lifter::{Block as IcicleBlock, BlockExit, Target},
 };
@@ -143,6 +144,25 @@ macro_rules! impl_iconst {
 }
 impl_iconst! { u8, u16, u32, u64, i8, i16, i32, i64 }
 
+const TLB_REGION: AliasRegionData =
+    AliasRegionData { user_id: 1, description: std::borrow::Cow::Borrowed("tlb") };
+const VM_STATE: AliasRegionData =
+    AliasRegionData { user_id: 2, description: std::borrow::Cow::Borrowed("vm") };
+const GUEST_MEM: AliasRegionData =
+    AliasRegionData { user_id: 3, description: std::borrow::Cow::Borrowed("guest_mem") };
+const GUEST_REGS: AliasRegionData =
+    AliasRegionData { user_id: 4, description: std::borrow::Cow::Borrowed("regs") };
+const TRACER_MEM: AliasRegionData =
+    AliasRegionData { user_id: 5, description: std::borrow::Cow::Borrowed("tracer_mem") };
+
+pub const ALL_REGIONS: &[AliasRegionData] =
+    &[TLB_REGION, VM_STATE, GUEST_MEM, GUEST_REGS, TRACER_MEM];
+
+fn vm_state_mem_flags(builder: &FunctionBuilder) -> MemFlagsData {
+    let region = builder.func.dfg.alias_regions.get(VM_STATE.user_id).unwrap();
+    MemFlagsData::trusted().with_alias_region(Some(region)).with_can_move()
+}
+
 struct VmPtr(pub Value);
 
 impl VmPtr {
@@ -164,11 +184,10 @@ impl VmPtr {
         offset_of!(Cpu, jit_ctx).try_into().unwrap()
     }
 
-    fn var_memflags(var: pcode::VarNode) -> MemFlags {
-        let mut flags = MemFlags::new()
-            .with_alias_region(Some(AliasRegion::Vmctx))
-            .with_notrap()
-            .with_can_move();
+    fn var_memflags(builder: &FunctionBuilder, var: pcode::VarNode) -> MemFlagsData {
+        let region = builder.func.dfg.alias_regions.get(GUEST_REGS.user_id).unwrap();
+        let mut flags =
+            MemFlagsData::new().with_alias_region(Some(region)).with_notrap().with_can_move();
         if var.offset == 0 {
             // If the varnode has no internal offset then it is guaranteed to be aligned to at least
             // 128-bits (which is larger than any value loaded directly).
@@ -184,32 +203,31 @@ impl VmPtr {
         ty: types::Type,
     ) -> Value {
         let offset = VmPtr::var_offset(var);
-        let flags = VmPtr::var_memflags(var);
+        let flags = VmPtr::var_memflags(builder, var);
         builder.ins().load(ty, flags, self.0, offset)
     }
 
     fn store_var(&self, builder: &mut FunctionBuilder, var: pcode::VarNode, value: Value) {
         let offset = VmPtr::var_offset(var);
-        let flags = VmPtr::var_memflags(var);
+        let flags = VmPtr::var_memflags(builder, var);
         builder.ins().store(flags, value, self.0, offset);
     }
 
     fn store_arg(&self, builder: &mut FunctionBuilder, id: u16, value: Value) {
         let arg_offset = id as usize * std::mem::size_of::<u128>();
         let offset: i32 = (offset_of!(Cpu, args) + arg_offset).try_into().unwrap();
-        builder.ins().store(TRUSTED_FIELD_MEM_FLAGS, value, self.0, offset);
+        let flags = vm_state_mem_flags(builder);
+        builder.ins().store(flags, value, self.0, offset);
     }
 }
-
-const TRUSTED_FIELD_MEM_FLAGS: MemFlags =
-    MemFlags::trusted().with_alias_region(Some(AliasRegion::Vmctx)).with_can_move();
 
 macro_rules! gen_load_store {
     ($load_ident:ident, $store_ident:ident, $offset:expr, $ty:ty) => {
         impl VmPtr {
             fn $load_ident(&self, builder: &mut FunctionBuilder) -> Value {
                 let offset: i32 = ($offset).try_into().unwrap();
-                builder.ins().load(<$ty>::clif_type(), TRUSTED_FIELD_MEM_FLAGS, self.0, offset)
+                let flags = vm_state_mem_flags(builder);
+                builder.ins().load(<$ty>::clif_type(), flags, self.0, offset)
             }
 
             fn $store_ident(
@@ -219,7 +237,8 @@ macro_rules! gen_load_store {
             ) {
                 let offset: i32 = ($offset).try_into().unwrap();
                 let value = value.into().get_value(builder);
-                builder.ins().store(TRUSTED_FIELD_MEM_FLAGS, value, self.0, offset);
+                let flags = vm_state_mem_flags(builder);
+                builder.ins().store(flags, value, self.0, offset);
             }
         }
     };
@@ -271,23 +290,89 @@ impl VarState {
     }
 }
 
+bitflags::bitflags! {
+    /// Flags that control how the JIT translator behaves.
+    pub(crate) struct TranslatorFlags: u8 {
+        /// Disable JIT memory accesses, forcing all memory accesses to go through the emulator
+        /// runtime.
+        const DISABLE_JIT_MEM = 1 << 0;
+
+        /// Disable local register caching in the JIT, causing the translator to emit memory
+        /// load/stores for every varnode access.
+        const DISABLE_JIT_REG = 1 << 1;
+        /// Configures whether varnodes are immediately flushed to memory whenever they are modified in
+        /// the JIT. Does nothing if `DISABLE_JIT_REG` is set.
+        const ALWAYS_FLUSH_VARS = 1 << 2;
+        /// Flush all registers before memory accesses are performed. This must be true if memory
+        /// hooks want to _read_ the current value of CPU registers. Does nothing if
+        /// `DISABLE_JIT_REG` is set.
+        const FLUSH_BEFORE_MEM = 1 << 3;
+        /// Discard any live varnodes after any memory access is performed. This must be true if
+        /// memory hooks want to _modify_ the current value of CPU registers. Does nothing if
+        /// `DISABLE_JIT_REG` is set.
+        const RELOAD_AFTER_MEM = 1 << 4;
+
+        ///  Configures whether calls to push/pop shadow-stack are injected in the JIT.
+        const ENABLE_SHADOW_STACK = 1 << 5;
+    }
+}
+
+impl Default for TranslatorFlags {
+    fn default() -> Self {
+        Self::FLUSH_BEFORE_MEM
+    }
+}
+
+struct MemoryConfig {
+    block_size: u64,
+    tlb_entry_size: u64,
+    tlb_entries: u64,
+    #[allow(unused)] // Always true in current version.
+    has_perm_page: bool,
+}
+
+impl MemoryConfig {
+    fn new(_cpu: &Cpu) -> Self {
+        let block_size = icicle_cpu::mem::physical::PAGE_SIZE as u64;
+        let tlb_entry_size = std::mem::size_of::<icicle_cpu::mem::tlb::TLBEntry>() as u64;
+        let tlb_entries = icicle_cpu::mem::tlb::TLB_ENTRIES as u64;
+        assert_eq!(tlb_entries.count_ones(), 1);
+
+        Self { block_size, tlb_entry_size, tlb_entries, has_perm_page: true }
+    }
+
+    fn offset_bits(&self) -> u32 {
+        self.block_size.trailing_zeros()
+    }
+
+    fn tlb_index_bits(&self) -> u32 {
+        self.tlb_entries.trailing_zeros()
+    }
+
+    fn index_shift(&self) -> u32 {
+        self.offset_bits()
+    }
+
+    fn index_mask(&self) -> u64 {
+        ((1 << self.tlb_index_bits()) - 1) << self.index_shift()
+    }
+
+    fn tag_bits(&self) -> u32 {
+        64 - (self.offset_bits() + self.tlb_index_bits())
+    }
+
+    fn tag_shift(&self) -> u32 {
+        self.offset_bits() + self.tlb_index_bits()
+    }
+
+    fn tag_mask(&self) -> u64 {
+        ((1_u64 << self.tag_bits()) - 1) << self.tag_shift()
+    }
+}
+
 pub(crate) struct TranslatorCtx {
-    /// Configures whether inline address translation in JIT'ed code is attempted.
-    pub disable_jit_mem: bool,
-    /// Configures whether varnodes are always _read_ from memory whenever they are accessed.
-    pub disable_jit_reg: bool,
-    /// Configures whether varnodes are immediately flushed to memory whenever they are modified in
-    /// the JIT.
-    pub always_flush_vars: bool,
-    /// Flush all registers before memory accesses are performed. This must be true if memory hooks
-    /// want to _read_ the current value of CPU registers.
-    pub flush_before_mem: bool,
-    /// Discard any live varnodes after any memory access is performed. This must be true if memory
-    /// hooks want to _modify_ the current value of CPU registers.
-    pub reload_after_mem: bool,
-    /// Configures whether calls to push/pop shadow-stack are injected in the JIT.
-    pub enable_shadow_stack: bool,
-    page_size: u64,
+    pub flags: TranslatorFlags,
+    memory: MemoryConfig,
     reg_pc: pcode::VarNode,
     endianness: Endianness,
     local_blocks: HashMap<usize, Block>,
@@ -297,26 +382,21 @@ pub(crate) struct TranslatorCtx {
 }
 
 impl TranslatorCtx {
-    pub(crate) fn new(arch: &Arch) -> Self {
-        let endianness = match arch.sleigh.big_endian {
+    pub(crate) fn new(cpu: &Cpu) -> Self {
+        let endianness = match cpu.arch.sleigh.big_endian {
             false => Endianness::Little,
             true => Endianness::Big,
         };
 
         Self {
-            reg_pc: arch.reg_pc,
-            disable_jit_mem: false,
-            disable_jit_reg: false,
-            always_flush_vars: false,
-            flush_before_mem: true,
-            reload_after_mem: false,
-            enable_shadow_stack: true,
-            page_size: icicle_cpu::mem::physical::PAGE_SIZE as u64,
+            flags: TranslatorFlags::default(),
+            reg_pc: cpu.arch.reg_pc,
+            memory: MemoryConfig::new(cpu),
             endianness,
             local_blocks: HashMap::new(),
             entry_points: vec![],
             active_vars: HashMap::new(),
-            temporaries: arch.temporaries.clone(),
+            temporaries: cpu.arch.temporaries.clone(),
         }
     }
 
@@ -329,7 +409,9 @@ impl TranslatorCtx {
         let block = builder.create_block();
         self.local_blocks.insert(id, block);
         if let Some(entry) = guest_block.entry {
-            self.entry_points.push((entry, block));
+            // Within the same JIT function, we ensure that all entry points have the same initial
+            // context.
+            self.entry_points.push((entry.vaddr, block));
         }
     }
 
@@ -384,7 +466,7 @@ pub(crate) fn translate<'a>(
         translator.translate_block(id, block);
     }
 
-    translator.finalize();
+    translator.finalize(module.isa().frontend_config());
 }
 
 fn define_jit_entry(builder: &mut FunctionBuilder, ctx: &mut TranslatorCtx) -> (Value, Value) {
@@ -401,9 +483,13 @@ fn define_jit_entry(builder: &mut FunctionBuilder, ctx: &mut TranslatorCtx) -> (
 
     // We always load the TLB ptr ahead of time here since it is likely to be used in almost every
     // block, and Cranelift's redundant load analysis isn't good enough to avoid reloading it.
+    //
+    // @todo: it would be more efficient if the `tlb` was allocated directly inline with the rest of
+    // the CPU state.
+    let mem_flags = vm_state_mem_flags(builder);
     let tlb_ptr = builder.ins().load(
         types::I64,
-        MemFlags::trusted().with_alias_region(Some(AliasRegion::Vmctx)),
+        mem_flags,
         cpu_ptr,
         offset_of!(Cpu, jit_ctx) as i32 + offset_of!(JitContext, tlb_ptr) as i32,
     );
@@ -455,7 +541,7 @@ struct Translator<'a> {
 }
 
 impl<'a> Translator<'a> {
-    fn finalize(mut self) {
+    fn finalize(mut self, config: TargetFrontendConfig) {
         for (_, block) in self.ctx.local_blocks.drain() {
             self.builder.seal_block(block);
         }
@@ -480,7 +566,7 @@ impl<'a> Translator<'a> {
 
         self.builder.ins().return_(&[next_addr]);
 
-        self.builder.finalize();
+        self.builder.finalize(config);
     }
 
     /// Branches to `block` if `cond != 0`, creating a new block and switching to it and sealing it
@@ -567,7 +653,7 @@ impl<'a> Translator<'a> {
 
     /// Ensure that any live variables are flushed to memory.
     pub fn flush_state(&mut self, clear_dirty_flag: bool) {
-        if self.ctx.always_flush_vars {
+        if self.ctx.flags.contains(TranslatorFlags::ALWAYS_FLUSH_VARS) {
             // Already flushed when updated.
             return;
         }
@@ -613,7 +699,7 @@ impl<'a> Translator<'a> {
         // @fixme: cannot load a bool from cranelift.
         // self.read_typed(var, types::B1)
         let x = self.read_int(var);
-        self.builder.ins().icmp_imm(IntCC::NotEqual, x, 0)
+        self.builder.ins().icmp_imm_u(IntCC::NotEqual, x, 0)
     }
 
     /// Resizes value to an integer with `size` bytes, truncating or zero-extending as needed.
@@ -623,7 +709,7 @@ impl<'a> Translator<'a> {
 
     /// Casts a value to a different type.
     fn bitcast(&mut self, to_ty: Type, value: Value) -> Value {
-        self.builder.ins().bitcast(to_ty, MemFlags::new(), value)
+        self.builder.ins().bitcast(to_ty, MemFlagsData::new(), value)
     }
 
     fn load_const(&mut self, ty: types::Type, value: u64) -> Value {
@@ -639,7 +725,7 @@ impl<'a> Translator<'a> {
     }
 
     fn read_var(&mut self, var: pcode::VarNode) -> Value {
-        if self.ctx.disable_jit_reg {
+        if self.ctx.flags.contains(TranslatorFlags::DISABLE_JIT_REG) {
             return self.vm_ptr.load_var(&mut self.builder, var, sized_int(var.size));
         }
 
@@ -675,7 +761,7 @@ impl<'a> Translator<'a> {
         // Extract the part of the value we need.
         let value = match var.offset {
             0 => base_value,
-            offset => self.builder.ins().ushr_imm(base_value, 8 * offset as i64),
+            offset => self.builder.ins().ushr_imm_u(base_value, 8 * offset as i64),
         };
         self.resize_int(value, required_size, var.size)
     }
@@ -697,12 +783,12 @@ impl<'a> Translator<'a> {
     //
     // @fixme: check handling of of non-natively sized integers.
     fn write(&mut self, var: pcode::VarNode, value: Value) {
-        if self.ctx.disable_jit_reg {
+        if self.ctx.flags.contains(TranslatorFlags::DISABLE_JIT_REG) {
             self.vm_ptr.store_var(&mut self.builder, var, value);
             return;
         }
 
-        let flush = self.ctx.always_flush_vars;
+        let flush = self.ctx.flags.contains(TranslatorFlags::ALWAYS_FLUSH_VARS);
         match var.offset {
             0 if is_jit_supported_size(var.size) => {
                 let state = self.ctx.active_vars.entry(var.id).or_default();
@@ -882,19 +968,8 @@ impl<'a> Translator<'a> {
                         ctx.trans.interpret(ctx.instruction);
                     }
                     pcode::RESERVED_SPACE_END.. => {
-                        if !is_jit_supported_size(output.size) {
-                            ctx.trans.interpret(ctx.instruction);
-                            continue;
-                        }
-                        let ptr =
-                            ctx.get_trace_store_ptr(id - pcode::RESERVED_SPACE_END, inputs[0]);
-
-                        let load_flags = MemFlags::new()
-                            .with_notrap()
-                            .with_alias_region(Some(AliasRegion::Heap));
-                        let ty = sized_int(output.size);
-                        let value = ctx.trans.builder.ins().load(ty, load_flags, ptr, 0);
-                        self.write(output, value);
+                        let id = id - pcode::RESERVED_SPACE_END;
+                        tracer_load(&mut ctx, output, inputs[0], id, AccessKind::Checked)
                     }
                 },
                 Op::Store(id) => match id {
@@ -905,20 +980,16 @@ impl<'a> Translator<'a> {
                         ctx.trans.interpret(ctx.instruction);
                     }
                     pcode::RESERVED_SPACE_END.. => {
-                        if !is_jit_supported_size(inputs[1].size()) {
-                            ctx.trans.interpret(ctx.instruction);
-                            continue;
-                        }
-                        let ptr =
-                            ctx.get_trace_store_ptr(id - pcode::RESERVED_SPACE_END, inputs[0]);
-                        let value = ctx.trans.read_int(inputs[1]);
-
-                        let store_flags = MemFlags::new()
-                            .with_notrap()
-                            .with_alias_region(Some(AliasRegion::Heap));
-                        ctx.trans.builder.ins().store(store_flags, value, ptr, 0);
+                        let id = id - pcode::RESERVED_SPACE_END;
+                        tracer_store(&mut ctx, inputs, id, AccessKind::Checked)
                     }
                 },
+                Op::UncheckedTracerLoad(id, _) => {
+                    tracer_load(&mut ctx, output, inputs[0], id, AccessKind::Unchecked)
+                }
+                Op::UncheckedTracerStore(id, _) => {
+                    tracer_store(&mut ctx, inputs, id, AccessKind::Unchecked)
+                }
 
                 Op::Arg(id) => {
                     let value = self.read_zxt(inputs[0], 16);
@@ -979,13 +1050,14 @@ impl<'a> Translator<'a> {
                 }
 
                 // These operations should be removed during lifting, and IR-graph construction.
-                Op::Subpiece(_)
-                | Op::Branch(_)
-                | Op::PcodeBranch(_)
-                | Op::PcodeLabel(_)
-                | Op::Invalid => {
+                Op::Subpiece(_) | Op::Branch(_) | Op::PcodeBranch(_) | Op::PcodeLabel(_) => {
                     let msg = u64::from_be_bytes(*b"bad op  ");
                     self.exit_with_exception(ExceptionCode::InvalidInstruction, msg);
+                    return;
+                }
+
+                Op::Invalid => {
+                    self.exit_with_exception(ExceptionCode::InvalidInstruction, self.last_addr);
                     return;
                 }
 
@@ -1013,7 +1085,7 @@ impl<'a> Translator<'a> {
         self.srcloc += 1;
 
         let remaining_fuel = self.vm_ptr.load_fuel(&mut self.builder);
-        let new = self.builder.ins().iadd_imm(remaining_fuel, -(block.num_instructions as i64));
+        let new = self.builder.ins().iadd_imm_s(remaining_fuel, -(block.num_instructions as i64));
         self.vm_ptr.store_fuel(&mut self.builder, new);
 
         // Since we are exiting the block, reset the block offset and set the last address to after
@@ -1031,7 +1103,7 @@ impl<'a> Translator<'a> {
         // @fixme: make `fuel` a variable.
         let remaining_fuel = self.vm_ptr.load_fuel(&mut self.builder);
         let required_fuel = num_instructions as i64;
-        let switch_to_interpreter = self.builder.ins().icmp_imm(
+        let switch_to_interpreter = self.builder.ins().icmp_imm_u(
             IntCC::SignedLessThanOrEqual,
             remaining_fuel,
             required_fuel,
@@ -1087,7 +1159,7 @@ impl<'a> Translator<'a> {
                 }
             }
             BlockExit::Call { target, fallthrough, .. } => {
-                if self.ctx.enable_shadow_stack {
+                if self.ctx.flags.contains(TranslatorFlags::ENABLE_SHADOW_STACK) {
                     let fallthrough = self.builder.ins().iconst(types::I64, *fallthrough as i64);
                     self.builder
                         .ins()
@@ -1098,7 +1170,7 @@ impl<'a> Translator<'a> {
             }
             BlockExit::Return { target } => {
                 let addr = self.read_zxt(*target, 8);
-                if self.ctx.enable_shadow_stack {
+                if self.ctx.flags.contains(TranslatorFlags::ENABLE_SHADOW_STACK) {
                     self.builder.ins().call(self.symbols.pop_shadow_stack, &[self.vm_ptr.0, addr]);
                 }
                 self.goto_jit_exit_external_addr(addr);
@@ -1113,8 +1185,10 @@ impl<'a> Translator<'a> {
                     self.builder.ins().jump(*block, &[]);
                 }
                 None => {
-                    let msg = u64::from_be_bytes(*b"bad jump");
-                    self.exit_with_exception(ExceptionCode::JitError, msg);
+                    self.exit_with_exception(
+                        ExceptionCode::InternalError,
+                        InternalError::InvalidInternalJump as u64,
+                    );
                 }
             },
             Target::External(target) => {
@@ -1136,6 +1210,52 @@ impl<'a> Translator<'a> {
             }
         }
     }
+}
+
+enum AccessKind {
+    Checked,
+    Unchecked,
+}
+
+fn tracer_load(
+    ctx: &mut Ctx,
+    out: pcode::VarNode,
+    offset: pcode::Value,
+    id: u16,
+    kind: AccessKind,
+) {
+    if !is_jit_supported_size(out.size) {
+        ctx.trans.interpret(ctx.instruction);
+        return;
+    }
+
+    let ptr = match kind {
+        AccessKind::Checked => ctx.slice_trace_mem(id, offset, out.size),
+        AccessKind::Unchecked => ctx.slice_trace_mem_unchecked(id, offset),
+    };
+
+    let region = ctx.trans.builder.func.dfg.alias_regions.get(TRACER_MEM.user_id).unwrap();
+    let load_flags = MemFlagsData::new().with_notrap().with_alias_region(Some(region));
+    let ty = sized_int(out.size);
+    let value = ctx.trans.builder.ins().load(ty, load_flags, ptr, 0);
+    ctx.trans.write(out, value);
+}
+
+fn tracer_store(ctx: &mut Ctx, inputs: [pcode::Value; 2], id: u16, kind: AccessKind) {
+    if !is_jit_supported_size(inputs[1].size()) {
+        ctx.trans.interpret(ctx.instruction);
+        return;
+    }
+
+    let ptr = match kind {
+        AccessKind::Checked => ctx.slice_trace_mem(id, inputs[0], inputs[1].size()),
+        AccessKind::Unchecked => ctx.slice_trace_mem_unchecked(id, inputs[0]),
+    };
+
+    let value = ctx.trans.read_int(inputs[1]);
+    let region = ctx.trans.builder.func.dfg.alias_regions.get(TRACER_MEM.user_id).unwrap();
+    let store_flags = MemFlagsData::new().with_notrap().with_alias_region(Some(region));
+    ctx.trans.builder.ins().store(store_flags, value, ptr, 0);
 }
 
 fn sized_int(size: u8) -> types::Type {

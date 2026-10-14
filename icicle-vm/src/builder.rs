@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use icicle_cpu::{Arch, Config, Cpu, cpu::CallCov, exec::helpers, lifter};
+use icicle_cpu::{Arch, Config, Cpu, arch::CallCov, exec::helpers, lifter};
 use sleigh_compile::ldef::SleighLanguage;
 
 use crate::Vm;
@@ -61,7 +61,7 @@ pub fn build_with_path(config: &Config, processors: &Path) -> Result<Vm, BuildEr
     // Set initial context values for architectures that support mode switching.
     //
     // @todo: Support other architectures.
-    // @todo: Determine resolve using ldef if possible.
+    // @todo: Resolve using ldef if possible.
     let isa_mode_context = match config.triple.architecture {
         target_lexicon::Architecture::Arm(inner) => match inner.is_thumb() {
             true => vec![lang.initial_ctx],
@@ -82,8 +82,11 @@ pub fn build_with_path(config: &Config, processors: &Path) -> Result<Vm, BuildEr
         .map(|name| Ok(get_reg(name)?.id))
         .collect::<Result<Vec<_>, _>>()?;
 
+    let triple = config.triple.clone();
+    let encoding = icicle_cpu::arch::DataEncoding::from_triple_with_fallback(&triple);
     let arch = Arch {
-        triple: config.triple.clone(),
+        triple,
+        encoding,
         reg_pc: lang.pc,
         reg_next_pc,
         reg_sp: lang.sp,
@@ -91,8 +94,9 @@ pub fn build_with_path(config: &Config, processors: &Path) -> Result<Vm, BuildEr
         isa_mode_context,
         reg_init,
         temporaries,
-        calling_cov: CallCov {
+        call_cov: CallCov {
             integers: lang.default_calling_cov.int_args,
+            int_return: lang.default_calling_cov.int_return,
             stack_align: 4,
             stack_offset: 0,
         },
@@ -105,7 +109,7 @@ pub fn build_with_path(config: &Config, processors: &Path) -> Result<Vm, BuildEr
 
 fn build_vm(config: &Config, arch: Arch) -> Result<Vm, BuildError> {
     let mut cpu = Cpu::new_boxed(arch);
-    cpu.enable_shadow_stack = config.enable_shadow_stack;
+    cpu.shadow_stack_state = config.shadow_stack;
     cpu.mem.track_uninitialized = config.track_uninitialized;
 
     let settings = lifter::Settings {
@@ -171,6 +175,14 @@ fn register_helpers_for(vm: &mut Vm, arch: target_lexicon::Architecture) {
             lifter::msp430::status_register_control_patch(&mut vm.cpu, &mut vm.lifter);
             // Fixes RETI, RETA, CALLA
             patch_instruction_pointer_access(vm, true);
+        }
+        Architecture::Riscv32(_)
+        | Architecture::Riscv64(_)
+        | Architecture::Mips32(_)
+        | Architecture::Mips64(_) => {
+            if let Some(zero_reg) = vm.cpu.arch.sleigh.get_varnode("zero") {
+            	vm.lifter.patchers.push(icicle_cpu::lifter::ignore_zero_reg_write_patcher(zero_reg));
+        	}
         }
         _ => {}
     }

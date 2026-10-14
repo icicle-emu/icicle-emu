@@ -1,5 +1,5 @@
 use icicle_cpu::{
-    Config, ExceptionCode, VmExit,
+    Config, ExceptionCode, ShadowStackState, VmExit,
     mem::{Mapping, perm},
 };
 
@@ -8,7 +8,7 @@ fn branch_exception_delivery_on_single_step() {
     let mut vm = crate::build(&Config {
         triple: "riscv64-none".parse().unwrap(),
         enable_jit: false,
-        enable_shadow_stack: false,
+        shadow_stack: ShadowStackState::Disabled,
         ..Config::default()
     })
     .unwrap();

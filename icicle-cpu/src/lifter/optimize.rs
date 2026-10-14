@@ -1,4 +1,4 @@
-use ahash::{AHashMap as HashMap, AHashSet as HashSet};
+use ahash::{HashMap, HashMapExt, HashSet, HashSetExt};
 
 use pcode::{Instruction, Op, PcodeLabel, VarId, VarNode};
 

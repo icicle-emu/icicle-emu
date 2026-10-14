@@ -1,13 +1,12 @@
-use icicle_cpu::{Cpu, ExceptionCode, InternalError, mem::perm};
+use icicle_cpu::{Cpu, Exception, ExceptionCode, InternalError, mem::perm};
 
 pub unsafe extern "C" fn jit_compilation_error(cpu: *mut Cpu, addr: u64) -> u64 {
-    (*cpu).exception.code = ExceptionCode::JitError as u32;
+    (*cpu).exception = Exception::internal_error(InternalError::JitCompilationError);
     addr
 }
 
 pub unsafe extern "C" fn bad_lookup_error(cpu: *mut Cpu, addr: u64) -> u64 {
-    (*cpu).exception.code = ExceptionCode::JitError as u32;
-    (*cpu).exception.value = 0x1;
+    (*cpu).exception = Exception::internal_error(InternalError::JitBadLookup);
     addr
 }
 
@@ -122,11 +121,11 @@ pub fn unpack_instruction(op_bytes: [u64; 4]) -> pcode::Instruction {
 ///
 /// The input arguments must represent a valid instruction.
 pub unsafe extern "C" fn run_interpreter(cpu: &mut Cpu, a: u64, b: u64, c: u64, d: u64) {
-    cpu.interpret_unchecked(unpack_instruction([a, b, c, d]));
+    cpu.interpret_unchecked(&unpack_instruction([a, b, c, d]));
 }
 
 pub extern "C" fn push_shadow_stack(cpu: &mut Cpu, addr: u64) {
-    cpu.push_shadow_stack(addr);
+    cpu.force_push_shadow_stack(addr);
 }
 
 pub extern "C" fn pop_shadow_stack(cpu: &mut Cpu, target: u64) {

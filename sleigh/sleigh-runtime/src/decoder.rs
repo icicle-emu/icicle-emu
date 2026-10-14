@@ -125,6 +125,10 @@ impl Decoder {
             self.process_subtable_globalsets(sleigh, inst)?;
         }
 
+        if !self.is_valid {
+            return None;
+        }
+
         // Delay slots need to be decoded _before_ the semantic section is evaluated because the
         // specification requires that `inst_next` refers to the address after the delay slot.
         //
@@ -133,8 +137,13 @@ impl Decoder {
         if let Some(_) = inst.delay_slot {
             self.offset = self.next_offset;
             if !self.ignore_delay_slots {
-                inst.delay_slot = Some(self.decode_subtable(sleigh, inst, ROOT_TABLE_ID));
-            } else {
+                let delay_slot = self.decode_subtable(sleigh, inst, ROOT_TABLE_ID);
+                inst.delay_slot = match self.is_valid {
+                    true => Some(delay_slot),
+                    false => Some(invalid_constructor(sleigh)),
+                };
+            }
+            else {
                 // Assume the size of the delay slot is the same as the root instruction.
                 self.next_offset *= 2;
                 inst.delay_slot = Some(invalid_constructor(sleigh));
@@ -143,10 +152,6 @@ impl Decoder {
 
         inst.inst_start = self.base_addr;
         inst.inst_next = self.base_addr + self.next_offset as u64;
-
-        if !self.is_valid {
-            return None;
-        }
 
         Some(())
     }
@@ -324,7 +329,8 @@ impl Decoder {
                 Export::Value(val) | Export::RamRef(val, _) => val,
                 Export::RegisterRef(_, _) => return None,
             };
-            let crate::semantics::Local::Field(idx) = val.local else {
+            let crate::semantics::Local::Field(idx) = val.local
+            else {
                 return None;
             };
             let locals_start = subtable_constructor.locals.0 as usize;
@@ -333,11 +339,13 @@ impl Decoder {
             // Apply immediately if current address
             if addr == self.base_addr as i64 {
                 field.set(&mut self.global_context, value);
-            } else {
+            }
+            else {
                 let modifications = self.future_context_mods.entry(addr as u64).or_default();
                 if let Some(existing) = modifications.iter_mut().find(|(f, _)| *f == field) {
                     existing.1 = value;
-                } else {
+                }
+                else {
                     modifications.push((field, value));
                 }
             };
@@ -543,6 +551,10 @@ impl std::ops::Deref for SubtableCtx<'_, '_> {
 }
 
 impl<'a, 'b> SubtableCtx<'a, 'b> {
+    pub fn is_invalid(&self) -> bool {
+        self.constructor.id as usize == self.data.constructors.len() - 1
+    }
+
     pub fn visit_constructor(&self, constructor: DecodedConstructor) -> Self {
         SubtableCtx { data: self.data, inst: self.inst, constructor }
     }

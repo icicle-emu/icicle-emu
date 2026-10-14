@@ -4,6 +4,19 @@ use crate::{Cpu, ExceptionCode, ValueSource};
 
 pub type PcodeOpHelper = fn(&mut Cpu, VarNode, [Value; 2]);
 
+macro_rules! warn_once {
+    ($($arg:tt)*) => {{
+        static WARNED: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+
+        if !WARNED.load(std::sync::atomic::Ordering::Relaxed) {
+            // Note: we don't care about races causing duplicate messages.
+            WARNED.store(true, std::sync::atomic::Ordering::Relaxed);
+            tracing::warn!($($arg)*);
+        }
+    }};
+}
+
 pub fn unknown_operation(cpu: &mut Cpu, _: VarNode, _: [Value; 2]) {
     cpu.exception.code = ExceptionCode::UnimplementedOp as u32;
 }
@@ -262,11 +275,13 @@ pub mod x86 {
         ("cpuid_Extended_Feature_Enumeration_info", cpuid_extended_feature_enumeration_info),
         ("cpuid", cpuid),
         ("movmskpd", movmskpd),
+        ("divpd", divpd),
         ("pinsrw", pinsrw), // Note: implemented in SLEIGH in Ghidra 10.3.
         ("pshuflw", pshuflw),
         ("pshufhw", pshufhw),
         ("shufpd", shufpd), // Note: implemented in SLEIGH in Ghidra 10.3.
         ("pmaddwd", pmaddwd),
+        ("psadbw", psadbw),
         ("in", in_io),
         ("out", out_io),
         ("LOCK", lock),
@@ -283,12 +298,20 @@ pub mod x86 {
         cpu.write_var(dst, 0_u64);
     }
 
-    // Basic processor information
-    fn cpuid_basic_info(cpu: &mut Cpu, dst: VarNode, _: [Value; 2]) {
+    // Unpatched SLEIGH spec models CPUID as writing to memory which breaks emulation.
+    fn is_cpuid_patched(dst: VarNode) -> bool {
         if dst.size != 16 {
-            tracing::warn!(
+            warn_once!(
                 "Using unpatched SLEIGH specification, CPUID instruction will behave incorrectly"
             );
+            return false;
+        }
+        true
+    }
+
+    // Basic processor information
+    fn cpuid_basic_info(cpu: &mut Cpu, dst: VarNode, _: [Value; 2]) {
+        if !is_cpuid_patched(dst) {
             return;
         }
         tracing::debug!("cpuid(BASIC_INFO)");
@@ -309,10 +332,7 @@ pub mod x86 {
 
     // Processor info and feature bits
     fn cpuid_version_info(cpu: &mut Cpu, dst: VarNode, _: [Value; 2]) {
-        if dst.size != 16 {
-            tracing::warn!(
-                "Using unpatched SLEIGH specification, CPUID instruction will behave incorrectly"
-            );
+        if !is_cpuid_patched(dst) {
             return;
         }
         tracing::debug!("cpuid(VERSION_INFO)");
@@ -344,10 +364,7 @@ pub mod x86 {
 
     // Return structured extended feature enumeration info leaf
     fn cpuid_extended_feature_enumeration_info(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
-        if dst.size != 16 {
-            tracing::warn!(
-                "Using unpatched SLEIGH specification, CPUID instruction will behave incorrectly"
-            );
+        if !is_cpuid_patched(dst) {
             return;
         }
         let count: u32 = cpu.read(args[1]);
@@ -422,6 +439,15 @@ pub mod x86 {
         cpu.write_var(VarNode::new(dst.id, 8), result as u64);
     }
 
+    /// Divide packed double-precision floating-point values.
+    fn divpd(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
+        for offset in (0..dst.size).step_by(std::mem::size_of::<f64>()) {
+            let lhs = f64::from_bits(cpu.read::<u64>(args[0].slice(offset, 8)));
+            let rhs = f64::from_bits(cpu.read::<u64>(args[1].slice(offset, 8)));
+            cpu.write_var(dst.slice(offset, 8), (lhs / rhs).to_bits());
+        }
+    }
+
     /// Insert word
     #[allow(unused)]
     fn pinsrw(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
@@ -491,6 +517,21 @@ pub mod x86 {
                 * cpu.read::<i16>(args[1].slice(i + 2, 2)) as i32;
 
             cpu.write_var(dst.slice(i, 4), lo.wrapping_add(hi));
+        }
+    }
+
+    /// Compute Sum of Absolute Differences of 8 unsigned byte integers summed to a word
+    fn psadbw(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
+        for i in (0..dst.size).step_by(std::mem::size_of::<u64>()) {
+            let a = cpu.read::<u64>(args[0].slice(i, 8));
+            let b = cpu.read::<u64>(args[1].slice(i, 8));
+
+            let mut sum = 0_u32;
+            for (a, b) in a.to_ne_bytes().iter().zip(b.to_ne_bytes()) {
+                sum += a.abs_diff(b) as u32;
+            }
+            // Note: upper bits are zeroed
+            cpu.write_var(dst.slice(i, 8), sum as u64);
         }
     }
 
@@ -710,226 +751,7 @@ pub mod aarch64 {
     }
 }
 
-pub mod arm {
-    use super::*;
-
-    pub const HELPERS: &[(&str, PcodeOpHelper)] = &[
-        ("enableIRQinterrupts", enable_interrupts),
-        ("disableIRQinterrupts", disable_interrupts),
-        ("coprocessor_movefromRt", coprocessor_move_from_rt),
-        ("coprocessor_movefromRt2", coprocessor_move_from_rt2),
-        // NEON
-        ("VectorCompareEqual", vector_compare_equal),
-        ("VectorPairwiseAdd", vector_pairwise_add),
-        ("VectorAdd", vector_add),
-        ("VectorSub", vector_sub),
-        ("vrev", vrev),
-        ("VectorCopyNarrow", vector_copy_narrow),
-        ("FixedToFP", fpu_fixed_to_fp),
-    ];
-
-    /// The vector ops in SLEIGH are used for both widening and regular vector ops. We only support
-    /// the regular vector ops for now, so this helper checks that the arguments are well-formed for
-    /// regular vector ops avoiding a crash.
-    ///
-    /// Most of these are probably better implemented in SLEIGH directly.
-    fn ensure_matching_vector_args(
-        cpu: &mut Cpu,
-        dst: VarNode,
-        args: [Value; 2],
-        esize: u8,
-    ) -> bool {
-        if esize == 0 || dst.size % esize != 0 {
-            cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
-            cpu.exception.value = esize as u64;
-            return false;
-        }
-        if args[0].size() != dst.size || args[1].size() != dst.size {
-            cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
-            cpu.exception.value = dst.size as u64;
-            return false;
-        }
-        true
-    }
-
-    fn vector_compare_equal(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
-        if !ensure_matching_vector_args(cpu, dst, args, cpu.args[0] as u8) {
-            return;
-        }
-
-        let esize = cpu.args[0] as u8;
-        for i in 0..(dst.size / esize) {
-            let a: u64 = cpu.read_dynamic(args[0].slice(i * esize, esize)).zxt();
-            let b: u64 = cpu.read_dynamic(args[1].slice(i * esize, esize)).zxt();
-            cpu.write_trunc(dst.slice(i * esize, esize), if a == b { u64::MAX } else { 0 });
-        }
-    }
-
-    // Note: SLEIGH uses this for both widening and non-widening vector adds, but we only implement
-    // the non-widening version for now.
-    //
-    //  [a, b] + [c, d] = [a + c, b + d]
-    fn vector_add(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
-        // `esize` in sleigh is encoded as bytes.
-        let esize = cpu.args[0] as u8;
-        let is_signed = cpu.args[1] == 0;
-
-        if esize == 0 || dst.size % esize != 0 {
-            cpu.exception.code = ExceptionCode::InvalidOpSize as u32;
-            cpu.exception.value = esize as u64;
-            return;
-        }
-
-        let src0_size = args[0].size();
-        let src1_size = args[1].size();
-
-        let extract_lane = |cpu: &mut Cpu, value: Value, lane: u8| -> u64 {
-            let x = value.slice(lane * esize, esize);
-            match is_signed {
-                true => cpu.read_dynamic(x).sxt(),
-                false => cpu.read_dynamic(x).zxt(),
-            }
-        };
-        let insert_lane = |cpu: &mut Cpu, dst: VarNode, lane: u8, element: u64| {
-            cpu.write_trunc(dst.slice(lane * esize, esize), element);
-        };
-
-        // Same-width add (e.g. vadd.i*)
-        if src0_size == dst.size && src1_size == dst.size {
-            for i in 0..(dst.size / esize) {
-                let a = extract_lane(cpu, args[0], i);
-                let b = extract_lane(cpu, args[1], i);
-                insert_lane(cpu, dst, i, a.wrapping_add(b));
-            }
-        }
-        else {
-            // Widening adds (vaddl / vaddw), not currently supported
-            cpu.exception.code = ExceptionCode::UnimplementedOp as u32;
-            cpu.exception.value = cpu.read_pc();
-        }
-    }
-
-    // [a, b] - [c, d] = [a - c, b - d]
-    fn vector_sub(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
-        if !ensure_matching_vector_args(cpu, dst, args, cpu.args[0] as u8) {
-            return;
-        }
-
-        let esize = cpu.args[0] as u8;
-        for i in 0..(dst.size / esize) {
-            let a: u64 = cpu.read_dynamic(args[0].slice(i * esize, esize)).zxt();
-            let b: u64 = cpu.read_dynamic(args[1].slice(i * esize, esize)).zxt();
-            cpu.write_trunc(dst.slice(i * esize, esize), a.wrapping_sub(b));
-        }
-    }
-
-    // [a, b][c, d] = [a + b, c + d]
-    fn vector_pairwise_add(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
-        let esize = cpu.args[0] as u8;
-
-        let dst_low = dst.slice(0, dst.size / 2);
-        for i in 0..(dst_low.size / esize) {
-            let a: u64 = cpu.read_dynamic(args[0].slice((i * 2) * esize, esize)).zxt();
-            let b: u64 = cpu.read_dynamic(args[0].slice(((i * 2) + 1) * esize, esize)).zxt();
-            cpu.write_trunc(dst_low.slice(i * esize, esize), a.wrapping_add(b));
-        }
-        let dst_high = dst.slice(dst.size / 2, dst.size / 2);
-        for i in 0..(dst_high.size / esize) {
-            let a: u64 = cpu.read_dynamic(args[1].slice((i * 2) * esize, esize)).zxt();
-            let b: u64 = cpu.read_dynamic(args[1].slice(((i * 2) + 1) * esize, esize)).zxt();
-            cpu.write_trunc(dst_high.slice(i * esize, esize), a.wrapping_add(b));
-        }
-    }
-
-    fn vrev(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
-        let esize: u8 = cpu.read_dynamic(args[1]).zxt();
-        for i in 0..(dst.size / esize) {
-            let a: u64 = cpu.read_dynamic(args[0].slice(i * esize, esize)).zxt();
-            cpu.write_trunc(dst.slice(dst.size - (i + 1) * esize, esize), a);
-        }
-    }
-
-    /// Copy the lower bits of a quadword vector to a doubleword vector.
-    /// arg[0] = source, arg[1] = element size
-    ///
-    /// e.g., for element size = 4:
-    /// arg[0] [a:u32, b:32, c:u32, d:u32], dst=[a:u16, b:u16, c:u16, d:u16]
-    fn vector_copy_narrow(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
-        let src = args[0];
-        let esize = cpu.read::<u8>(args[1]);
-        let dst_esize = esize / 2;
-        for i in 0..(src.size() / esize) {
-            let value: u64 = cpu.read_dynamic(src.slice(i * esize, esize)).zxt();
-            cpu.write_trunc(dst.slice(i * dst_esize, dst_esize), value);
-        }
-    }
-
-    fn coprocessor_move_from_rt(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
-        let coproc = cpu.read::<u32>(args[0]);
-        let opc1 = cpu.read::<u32>(args[1]);
-        let crm = cpu.args[0] as u32;
-        let result = coprocessor_read(cpu, coproc, opc1, crm) as u32;
-        cpu.write_var(dst, result);
-    }
-
-    fn coprocessor_move_from_rt2(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
-        let coproc = cpu.read::<u32>(args[0]);
-        let opc1 = cpu.read::<u32>(args[1]);
-        let crm = cpu.args[0] as u32;
-        let result = (coprocessor_read(cpu, coproc, opc1, crm) >> 32) as u32;
-        cpu.write_var(dst, result);
-    }
-
-    fn coprocessor_read(cpu: &mut Cpu, coproc: u32, opc1: u32, crm: u32) -> u64 {
-        /// Virtual count register
-        const CNTVCT: (u32, u32, u32) = (0b1111, 0b1110, 0b0001);
-
-        match (coproc, crm, opc1) {
-            CNTVCT => cpu.icount(),
-            _ => {
-                tracing::debug!("Unknown MSR: coproc=p{coproc}, opc1={opc1}, crm=c{crm}");
-                cpu.exception.code = ExceptionCode::UnimplementedOp as u32;
-                0
-            }
-        }
-    }
-
-    // Pseudocode from https://developer.arm.com/documentation/ddi0597/2023-09/Shared-Pseudocode/shared-functions-float
-    //
-    // SLEIGH signature: FixedToFP(fp, M, N, fbits, unsigned, rounding)
-    fn fpu_fixed_to_fp(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
-        let m = cpu.read::<u32>(args[1]);
-        let n = cpu.args[0];
-        let fbits = cpu.args[1];
-        let is_unsigned = cpu.args[2] != 0;
-        let rounding = cpu.args[3];
-
-        assert!(m == 16 || m == 32, "fixed-point size must be 16 or 32 bits");
-        assert!(n == 32 || n == 64, "floating-point size must be 32 or 64 bits");
-        assert!(fbits <= u128::from(m), "fractional bits must fit in the fixed-point value");
-        assert!(rounding == 0, "only the default ARM rounding mode is implemented");
-
-        // Read the source register at its native VarNode size, then truncate to
-        // the fixed-point width `m`.
-        let raw: u64 = cpu.read_dynamic(args[0]).zxt();
-        let value: i64 = match (is_unsigned, m) {
-            (false, 16) => (raw as i16).into(),
-            (false, 32) => (raw as i32).into(),
-            (true, 16) => (raw as u16).into(),
-            (true, 32) => (raw as u32).into(),
-            _ => unreachable!(),
-        };
-
-        // Scaling by a power of two is exact, so convert-then-divide rounds
-        // once, matching the single FPRound in the ARM pseudocode.
-        let scale = (1u64 << fbits) as f64;
-        match n {
-            32 => cpu.write_trunc(dst, (value as f32 / scale as f32).to_bits()),
-            64 => cpu.write_trunc(dst, (value as f64 / scale).to_bits()),
-            _ => unreachable!(),
-        }
-    }
-}
+pub mod arm;
 
 #[cfg(test)]
 mod tests {

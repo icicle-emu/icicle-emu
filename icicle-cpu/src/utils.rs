@@ -174,20 +174,7 @@ pub struct BasicInstructionSource {
 
 impl BasicInstructionSource {
     pub fn new(sleigh: sleigh_runtime::SleighData) -> Self {
-        let arch = crate::Arch {
-            triple: target_lexicon::Triple::unknown(),
-            reg_pc: pcode::VarNode::new(0, 8),
-            reg_next_pc: pcode::VarNode::NONE,
-            reg_sp: pcode::VarNode::NONE,
-            reg_isa_mode: None,
-            isa_mode_context: vec![],
-            reg_init: vec![],
-            on_boot: crate::cpu::generic_on_boot,
-            calling_cov: crate::cpu::CallCov::default(),
-            temporaries: vec![],
-            sleigh,
-        };
-        Self { arch, base_addr: 0, mem: vec![] }
+        Self { arch: crate::Arch { sleigh, ..crate::Arch::none() }, base_addr: 0, mem: vec![] }
     }
 
     pub fn set_inst(&mut self, addr: u64, bytes: &[u8]) {
@@ -217,6 +204,6 @@ impl crate::lifter::InstructionSource for BasicInstructionSource {
     }
 
     fn ensure_exec(&mut self, vaddr: u64, size: usize) -> bool {
-        self.get_mem_region(vaddr, size).map_or(false, |x| x.len() == size)
+        self.get_mem_region(vaddr, size).is_some_and(|x| x.len() == size)
     }
 }

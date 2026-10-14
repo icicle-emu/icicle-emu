@@ -131,17 +131,17 @@ impl Regs {
         var.size as usize == size
             && Self::var_offset(var)
                 .checked_add(size as isize)
-                .map_or(false, |end| end > 0 && end < REGISTER_SPACE_BYTES as isize)
+                .is_some_and(|end| end > 0 && end < REGISTER_SPACE_BYTES as isize)
     }
 
     #[inline(always)]
     pub unsafe fn read_at<const N: usize>(&self, offset: isize) -> [u8; N] {
-        self.0.as_ptr().wrapping_offset(offset).cast::<[u8; N]>().read()
+        unsafe { self.0.as_ptr().wrapping_offset(offset).cast::<[u8; N]>().read() }
     }
 
     #[inline(always)]
     pub unsafe fn write_at<const N: usize>(&mut self, offset: isize, value: [u8; N]) {
-        self.0.as_mut_ptr().wrapping_offset(offset).cast::<[u8; N]>().write(value);
+        unsafe { self.0.as_mut_ptr().wrapping_offset(offset).cast::<[u8; N]>().write(value) };
     }
 
     pub fn restore_from(&mut self, other: &Regs, valid: usize) {
@@ -163,11 +163,11 @@ impl VarSource for Regs {
     }
 
     unsafe fn read_var_unchecked<const N: usize>(&self, var: pcode::VarNode) -> [u8; N] {
-        self.read_at(Self::var_offset(var))
+        unsafe { self.read_at(Self::var_offset(var)) }
     }
 
     unsafe fn write_var_unchecked<const N: usize>(&mut self, var: pcode::VarNode, value: [u8; N]) {
-        self.write_at(Self::var_offset(var), value)
+        unsafe { self.write_at(Self::var_offset(var), value) }
     }
 }
 
@@ -231,12 +231,12 @@ impl<const N: usize> RegValue for [u8; N] {
 
     #[inline(always)]
     unsafe fn read_unchecked<R: VarSource>(regs: &R, var: pcode::VarNode) -> Self {
-        regs.read_var_unchecked(var)
+        unsafe { regs.read_var_unchecked(var) }
     }
 
     #[inline(always)]
     unsafe fn write_unchecked<R: VarSource>(regs: &mut R, var: pcode::VarNode, val: Self) {
-        regs.write_var_unchecked(var, val);
+        unsafe { regs.write_var_unchecked(var, val) };
     }
 }
 
@@ -309,12 +309,12 @@ macro_rules! impl_reg_value {
 
             #[inline(always)]
             unsafe fn read_unchecked<R: VarSource>(regs: &R, var: pcode::VarNode) -> Self {
-                Self::from_ne_bytes(regs.read_var_unchecked(var))
+                Self::from_ne_bytes(unsafe { regs.read_var_unchecked(var) })
             }
 
             #[inline(always)]
             unsafe fn write_unchecked<R: VarSource>(regs: &mut R, var: pcode::VarNode, val: Self) {
-                regs.write_var_unchecked(var, val.to_ne_bytes());
+                unsafe { regs.write_var_unchecked(var, val.to_ne_bytes()) };
             }
         }
     };

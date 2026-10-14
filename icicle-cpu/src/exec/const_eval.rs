@@ -1,7 +1,6 @@
 //! A bit-level constant evaluator for pcode.
 
-use ahash::AHashMap as HashMap;
-
+use ahash::{HashMap, HashMapExt};
 const DEBUG: bool = false;
 
 pub type OutputExprId = u32;
@@ -493,7 +492,7 @@ pub trait BitVecExt {
     }
 
     /// Shift the bit-vector left by the bits in `shift`.
-    fn shift_left(&mut self, shift: &[Bit]) {
+    fn bit_shift_left(&mut self, shift: &[Bit]) {
         // Note: The sleigh specification defines overflowing shifts to saturate -- this differs
         // from most typical architectures which perform wrapping shifts.
         if shift.min() as usize >= self.slice().len() {
@@ -518,7 +517,7 @@ pub trait BitVecExt {
     }
 
     /// Rotate the bit-vector left by the bits in `shift`.
-    fn rotate_left(&mut self, shift: &[Bit]) {
+    fn bit_rotate_left(&mut self, shift: &[Bit]) {
         match shift.get_const() {
             Some(shift) => self.slice_mut().rotate_left(shift as usize),
             None => self.slice_mut().fill(Bit::Unknown),
@@ -526,7 +525,7 @@ pub trait BitVecExt {
     }
 
     /// Shift the bit-vector right by the bits in `shift`.
-    fn shift_right(&mut self, shift: &[Bit]) {
+    fn bit_shift_right(&mut self, shift: &[Bit]) {
         // Overflowing shifts must saturate.
         if shift.min() as usize >= self.slice().len() {
             self.slice_mut().fill(Bit::Zero);
@@ -551,7 +550,7 @@ pub trait BitVecExt {
     }
 
     /// Shift the bit-vector right arithmetically by the bits in `shift`.
-    fn shift_right_signed(&mut self, value: &[Bit], shift: &[Bit]) {
+    fn bit_shift_right_signed(&mut self, value: &[Bit], shift: &[Bit]) {
         // Overflowing shifts must saturate.
         if shift.min() as usize >= self.slice().len() {
             self.slice_mut().fill(value.sign());
@@ -577,7 +576,7 @@ pub trait BitVecExt {
     }
 
     /// Rotate the bit-vector right by the bits in `shift`.
-    fn rotate_right(&mut self, shift: &[Bit]) {
+    fn bit_rotate_right(&mut self, shift: &[Bit]) {
         match shift.get_const() {
             Some(shift) => self.slice_mut().rotate_right(shift as usize),
             None => self.slice_mut().fill(Bit::Unknown),
@@ -804,11 +803,11 @@ fn eval(op: pcode::Op, a: &[Bit], b: &[Bit], output: &mut [Bit]) {
             (Some(0), None) | (None, Some(0)) => output.fill(Bit::Zero),
             (Some(x), None) if x.count_ones() == 1 => {
                 output.copy(b);
-                output.shift_left(&Value::from_const((63 - x.leading_zeros()) as u64));
+                output.bit_shift_left(&Value::from_const((63 - x.leading_zeros()) as u64));
             }
             (None, Some(x)) if x.count_ones() == 1 => {
                 output.copy(a);
-                output.shift_left(&Value::from_const((63 - x.leading_zeros()) as u64));
+                output.bit_shift_left(&Value::from_const((63 - x.leading_zeros()) as u64));
             }
             _ => output.fill(Bit::Unknown),
         },
@@ -871,22 +870,22 @@ fn eval(op: pcode::Op, a: &[Bit], b: &[Bit], output: &mut [Bit]) {
 
         Op::IntLeft => {
             output.copy_any(a);
-            output.shift_left(b);
+            output.bit_shift_left(b);
         }
         Op::IntRotateLeft => {
             output.copy(a);
-            BitVecExt::rotate_left(output, b);
+            BitVecExt::bit_rotate_left(output, b);
         }
         Op::IntRight => {
             output.copy_any(a);
-            output.shift_right(b);
+            output.bit_shift_right(b);
         }
         Op::IntSignedRight => {
-            output.shift_right_signed(a, b);
+            output.bit_shift_right_signed(a, b);
         }
         Op::IntRotateRight => {
             output.copy(a);
-            BitVecExt::rotate_right(output, b);
+            BitVecExt::bit_rotate_right(output, b);
         }
         Op::BoolXor => *output.bool_mut() = a[0].xor(b[0]),
         Op::BoolAnd => *output.bool_mut() = a[0].and(b[0]),
@@ -914,7 +913,8 @@ fn eval(op: pcode::Op, a: &[Bit], b: &[Bit], output: &mut [Bit]) {
         | Op::FloatToInt => output.fill(Bit::Unknown),
 
         // These expressions always result in an unknown output.
-        Op::TracerLoad(_)
+        Op::UncheckedTracerLoad(..)
+        | Op::TracerLoad(_)
         | Op::Load(_)
         | Op::PcodeOp(_)
         | Op::Hook(_)
@@ -923,7 +923,8 @@ fn eval(op: pcode::Op, a: &[Bit], b: &[Bit], output: &mut [Bit]) {
         | Op::Indirect => output.fill(Bit::Unknown),
 
         // These expressions do not modify the output.
-        Op::TracerStore(_)
+        Op::UncheckedTracerStore(..)
+        | Op::TracerStore(_)
         | Op::Store(_)
         | Op::Branch(_)
         | Op::PcodeBranch(_)

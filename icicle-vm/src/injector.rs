@@ -1,6 +1,9 @@
 use std::any::Any;
 
-use icicle_cpu::{BlockGroup, BlockTable, Cpu};
+use icicle_cpu::{
+    Cpu,
+    lifter::{BlockGroup, BlockTable},
+};
 
 use crate::Vm;
 
