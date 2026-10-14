@@ -356,7 +356,9 @@ impl<'a, 'b> Builder<'a, 'b> {
             pcode::Op::PcodeLabel(_) | pcode::Op::InstructionMarker | pcode::Op::Invalid => {}
 
             // Internal operations not allowed in SLEIGH
-            pcode::Op::TracerLoad(_)
+            pcode::Op::UncheckedTracerLoad(..)
+            | pcode::Op::UncheckedTracerStore(..)
+            | pcode::Op::TracerLoad(_)
             | pcode::Op::TracerStore(_)
             | pcode::Op::Exception
             | pcode::Op::Indirect => {}

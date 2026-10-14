@@ -1,18 +1,37 @@
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum MemError {
-    Unallocated,
+    /// The virtual address is not mapped to any physical memory or the byte-level permission page
+    /// does not have the `MAP` permission set.
     Unmapped,
-    UnmappedRegister,
-    Uninitalized,
+    /// A read occurred on a memory region without the `INIT` permission set.
+    Uninitialized,
+    /// A read access was attempted on a memory region without the `READ` permission set.
     ReadViolation,
+    /// A write access was attempted on a memory region without the `WRITE` permission set.
     WriteViolation,
+    /// An execution access was attempted on a memory region without the `EXEC` permission set.
     ExecViolation,
+    /// A read access was attempted on a memory region that has a read watch set.
     ReadWatch,
+    /// A write access was attempted on a memory region that has a write watch set.
     WriteWatch,
+    /// Internal error used by the memory subsystem to support lazy allocation of memory.
+    Unallocated,
+    /// Attempted to map or access a memory region with an unsupported alignment
     Unaligned,
+    /// There is no active memory allocator, or the underlying physical memory limit was reached.
     OutOfMemory,
+    /// Attempted to modify a memory region that is pinned in the code cache.
     SelfModifyingCode,
+    /// An overflow occurred during an address calculation.
     AddressOverflow,
+    /// Attempted to access an IO memory region inside of an IO handler.
+    RecursiveAccess,
+    /// An operation was attempted that is not supported by the current MMU configuration.
+    Unsupported,
+    /// The region of memory could not be mapped due to an overlap with an existing mapping.
+    Overlap,
+    /// An unknown error occurred, or the error code does not match any known error.
     Unknown,
 }
 
@@ -22,18 +41,20 @@ impl std::str::FromStr for MemError {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s {
             "Unmapped" => Self::Unmapped,
-            "UnmappedRegister" => Self::UnmappedRegister,
-            "Unallocated" => Self::Unallocated,
-            "Uninitalized" => Self::Uninitalized,
+            "Uninitialized" => Self::Uninitialized,
             "ReadViolation" => Self::ReadViolation,
             "WriteViolation" => Self::WriteViolation,
             "ExecViolation" => Self::ExecViolation,
             "ReadWatch" => Self::ReadWatch,
             "WriteWatch" => Self::WriteWatch,
+            "Unallocated" => Self::Unallocated,
             "Unaligned" => Self::Unaligned,
             "OutOfMemory" => Self::OutOfMemory,
             "SelfModifyingCode" => Self::SelfModifyingCode,
             "AddressOverflow" => Self::AddressOverflow,
+            "RecursiveAccess" => Self::RecursiveAccess,
+            "Unsupported" => Self::Unsupported,
+            "Overlap" => Self::Overlap,
             _ => Self::Unknown,
         })
     }
@@ -43,18 +64,20 @@ impl MemError {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Unmapped => "Unmapped",
-            Self::UnmappedRegister => "UnmappedRegister",
-            Self::Unallocated => "Unallocated",
-            Self::Uninitalized => "Uninitalized",
+            Self::Uninitialized => "Uninitialized",
             Self::ReadViolation => "ReadViolation",
             Self::WriteViolation => "WriteViolation",
             Self::ExecViolation => "ExecViolation",
             Self::ReadWatch => "ReadWatch",
             Self::WriteWatch => "WriteWatch",
+            Self::Unallocated => "Unallocated",
             Self::Unaligned => "Unaligned",
             Self::OutOfMemory => "OutOfMemory",
             Self::SelfModifyingCode => "SelfModifyingCode",
             Self::AddressOverflow => "AddressOverflow",
+            Self::RecursiveAccess => "RecursiveAccess",
+            Self::Unsupported => "Unsupported",
+            Self::Overlap => "Overlap",
             Self::Unknown => "Unknown",
         }
     }
@@ -62,7 +85,7 @@ impl MemError {
     pub const fn code(self) -> u64 {
         match self {
             Self::Unmapped => 0x1_0000,
-            Self::Uninitalized => 0x1_0001,
+            Self::Uninitialized => 0x1_0001,
             Self::ReadViolation => 0x1_0002,
             Self::WriteViolation => 0x1_0003,
             Self::ExecViolation => 0x1_0004,
@@ -73,7 +96,9 @@ impl MemError {
             Self::OutOfMemory => 0x1_0009,
             Self::SelfModifyingCode => 0x1_000a,
             Self::AddressOverflow => 0x1_000b,
-            Self::UnmappedRegister => 0x1_000c,
+            Self::RecursiveAccess => 0x1_000c,
+            Self::Unsupported => 0x1_000d,
+            Self::Overlap => 0x1_000e,
             Self::Unknown => 0x1_FFFF,
         }
     }
@@ -81,7 +106,7 @@ impl MemError {
     pub const fn from_code(code: u64) -> MemError {
         match code {
             0x1_0000 => Self::Unmapped,
-            0x1_0001 => Self::Uninitalized,
+            0x1_0001 => Self::Uninitialized,
             0x1_0002 => Self::ReadViolation,
             0x1_0003 => Self::WriteViolation,
             0x1_0004 => Self::ExecViolation,
@@ -92,6 +117,9 @@ impl MemError {
             0x1_0009 => Self::OutOfMemory,
             0x1_000a => Self::SelfModifyingCode,
             0x1_000b => Self::AddressOverflow,
+            0x1_000c => Self::RecursiveAccess,
+            0x1_000d => Self::Unsupported,
+            0x1_000e => Self::Overlap,
             _ => Self::Unknown,
         }
     }
@@ -165,7 +193,7 @@ fn get_error_kind(perm: u8) -> MemError {
         MemError::ExecViolation
     }
     else if perm & INIT == 0 {
-        MemError::Uninitalized
+        MemError::Uninitialized
     }
     else {
         MemError::Unknown
@@ -233,9 +261,9 @@ fn test_check() {
 
     assert_eq!(check(NONE, WRITE), Err(MemError::WriteViolation));
     assert_eq!(check(NONE, EXEC), Err(MemError::ExecViolation));
-    assert_eq!(check(NONE, INIT), Err(MemError::Uninitalized));
+    assert_eq!(check(NONE, INIT), Err(MemError::Uninitialized));
 
-    assert_eq!(check(READ, READ | INIT), Err(MemError::Uninitalized));
+    assert_eq!(check(READ, READ | INIT), Err(MemError::Uninitialized));
     assert_eq!(check(INIT, READ), Err(MemError::ReadViolation));
     assert_eq!(check(READ | INIT, READ | INIT), Ok(()));
 }

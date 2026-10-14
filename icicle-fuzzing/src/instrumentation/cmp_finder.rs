@@ -608,7 +608,7 @@ fn find_comparisons(prop: &mut CmpProp) -> bool {
 
 #[cfg(test)]
 mod test {
-    use icicle_vm::cpu::lifter::{Context, Settings};
+    use icicle_vm::cpu::lifter::{BlockKey, Context, Settings};
     use pcode::PcodeDisplay;
 
     fn mipsel_ops(input: &[u8]) -> String {
@@ -641,9 +641,14 @@ mod test {
         let mut source = icicle_vm::cpu::utils::BasicInstructionSource::new(lang.sleigh);
         source.set_inst(0x0, input);
 
-        let mut code = icicle_vm::cpu::BlockTable::default();
-        let group =
-            block_lifter.lift_block(&mut Context::new(&mut source, &mut code, 0x0)).unwrap();
+        let mut code = icicle_vm::cpu::lifter::BlockTable::default();
+        let group = block_lifter
+            .lift_block(&mut Context::new(
+                &mut source,
+                &mut code,
+                BlockKey::default().with_vaddr(0x0),
+            ))
+            .unwrap();
         let block = &code.blocks[group.blocks.0];
         eprintln!("{}", block.pcode.display(&source.arch.sleigh));
         eprintln!("{}", block.exit.display(&source.arch.sleigh));

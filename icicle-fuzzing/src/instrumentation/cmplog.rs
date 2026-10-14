@@ -5,8 +5,8 @@ use std::{cell::UnsafeCell, collections::HashMap};
 use icicle_vm::{
     CodeInjector, Vm,
     cpu::{
-        BlockGroup, BlockTable, Cpu, StoreRef,
-        lifter::{Block, BlockExit},
+        BlockGroup, Cpu, StoreRef,
+        lifter::{Block, BlockExit, BlockTable},
     },
 };
 

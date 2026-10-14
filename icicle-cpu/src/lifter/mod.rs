@@ -1,25 +1,35 @@
 pub mod msp430;
+pub mod pcodeops;
 
+mod cache;
 mod optimize;
-mod pcodeops;
 mod rewriter;
 
-use ahash::AHashMap as HashMap;
+use ahash::{HashMap, HashMapExt};
 
 use pcode::PcodeDisplay;
 
-use crate::{BlockTable, cpu::Arch};
+use crate::cpu::Arch;
 
 pub use self::{
+    cache::{BlockInfoRef, BlockKey, BlockTable},
     optimize::Optimizer,
     pcodeops::{PcodeOpInjector, get_injectors},
-    rewriter::read_pc_patcher,
+    rewriter::{ignore_zero_reg_write_patcher, read_pc_patcher},
 };
 
 pub trait InstructionSource {
+    /// Gets a reference to the architecture information for the source.
     fn arch(&self) -> &Arch;
-    fn read_bytes(&mut self, vaddr: u64, buf: &mut [u8]);
-    fn ensure_exec(&mut self, vaddr: u64, size: usize) -> bool;
+
+    /// Read `buf` bytes from the address `addr` into `buf`. The instruction source is responsible
+    /// for interpreting the context of the address (e.g., any necessary address translations).
+    fn read_bytes(&mut self, addr: u64, buf: &mut [u8]);
+
+    /// Check that the target region of memory is executable and update any internal state that
+    /// needs to specifically track regions of memory that are executable. `addr` will be used
+    /// the same as the address in `read_bytes`.
+    fn ensure_exec(&mut self, addr: u64, size: usize) -> bool;
 }
 
 impl InstructionSource for crate::Cpu {
@@ -27,12 +37,17 @@ impl InstructionSource for crate::Cpu {
         &self.arch
     }
 
-    fn read_bytes(&mut self, vaddr: u64, buf: &mut [u8]) {
-        let _ = self.mem.read_bytes(vaddr, buf, icicle_mem::perm::NONE);
+    fn read_bytes(&mut self, addr: u64, buf: &mut [u8]) {
+        // We use `Perm::None` here because we potentially read values that are larger than what we
+        // can actually read from memory, so we don't want to raise an exception if the memory is
+        // not readable.
+        //
+        // The actual permissions are checked in `ensure_exec`.
+        let _ = self.mem.read_bytes(addr, buf, icicle_mem::perm::NONE);
     }
 
-    fn ensure_exec(&mut self, vaddr: u64, len: usize) -> bool {
-        self.mem.ensure_executable(vaddr, len as u64)
+    fn ensure_exec(&mut self, addr: u64, len: usize) -> bool {
+        self.mem.ensure_executable(addr, len as u64)
     }
 }
 
@@ -187,7 +202,7 @@ where
 #[derive(Clone)]
 pub struct Block {
     pub pcode: pcode::Block,
-    pub entry: Option<u64>,
+    pub entry: Option<BlockKey>,
     pub start: u64,
     pub end: u64,
     pub context: u64,
@@ -203,8 +218,8 @@ impl Block {
     }
 
     #[inline]
-    pub fn contains_addr(&self, addr: u64) -> bool {
-        self.start <= addr && addr < self.end
+    pub fn contains_vaddr(&self, vaddr: u64) -> bool {
+        self.start <= vaddr && vaddr < self.end
     }
 
     /// Returns the address and length of each instruction in the block
@@ -229,13 +244,13 @@ pub struct BlockState {
     labels: HashMap<pcode::PcodeLabel, BlockId>,
 
     /// Keeps track of the entry point to the block (if it has one).
-    entry: Option<u64>,
+    entry: Option<BlockKey>,
 
     /// The address of the first instruction in the current block.
     start: u64,
 
     /// The address of the instruction we are currently decoding.
-    current_addr: u64,
+    current_vaddr: u64,
 
     /// The address of the next instruction in the block.
     next: u64,
@@ -250,6 +265,13 @@ impl BlockState {
     }
 
     fn finish(&mut self, exit: BlockExit) -> Block {
+        // If the block exits with a jump to an invalid instruction, insert a dummy instruction
+        // marker just before the exit to allow stepping over the final instruction.
+        if let BlockExit::Jump { target: Target::Invalid(_, addr) } = exit {
+            self.pcode.push((pcode::Op::InstructionMarker, (addr, 0_u64)));
+            self.pcode.push(pcode::Op::Invalid);
+        }
+
         let pcode = std::mem::take(&mut self.pcode);
         let num_instructions = count_instructions(&pcode.instructions).try_into().unwrap();
         let block = Block {
@@ -262,13 +284,13 @@ impl BlockState {
             breakpoints: 0,
             num_instructions,
         };
-        self.start = self.current_addr;
+        self.start = self.current_vaddr;
         block
     }
 
     pub fn gen_set_pc(&mut self, src: &dyn InstructionSource) {
         let r = src.arch().reg_pc;
-        self.pcode.push((r, pcode::Op::Copy, pcode::Value::Const(self.current_addr, r.size)));
+        self.pcode.push((r, pcode::Op::Copy, pcode::Value::Const(self.current_vaddr, r.size)));
     }
 
     pub fn gen_set_next_pc(&mut self, src: &dyn InstructionSource) {
@@ -331,27 +353,31 @@ impl BlockGroup {
         blocks: &[Block],
         sleigh: &sleigh_runtime::SleighData,
         ignore_trival_exit: bool,
-        disasm: &HashMap<u64, String>,
+        disasm: &HashMap<BlockKey, String>,
     ) -> Result<String, std::fmt::Error> {
         use std::fmt::Write;
 
         let has_multiple_instructions =
             blocks[self.range()].iter().map(|x| x.num_instructions).sum::<u32>() > 1;
+        let mut entry = BlockKey::default();
         let mut out = String::new();
         for (idx, block_id) in self.range().enumerate() {
             let block = &blocks[block_id];
+            if let Some(block_entry) = block.entry {
+                entry = block_entry;
+            }
 
             match idx {
                 0 => writeln!(out, "<L0> (entry={:#0x}):", self.start)?,
-                idx => writeln!(out, "<L{}>:", idx)?,
+                idx => writeln!(out, "<L{idx}>:")?,
             }
 
             for op in &block.pcode.instructions {
                 if matches!(op.op, pcode::Op::InstructionMarker) {
                     if has_multiple_instructions {
-                        let addr = op.inputs.first().as_u64();
-                        match disasm.get(&addr) {
-                            Some(disasm) => writeln!(out, "[{addr:#0x}] {disasm}")?,
+                        let vaddr = op.inputs.first().as_u64();
+                        match disasm.get(&entry.with_vaddr(vaddr)) {
+                            Some(disasm) => writeln!(out, "[{vaddr:#0x}] {disasm}")?,
                             None => writeln!(out, "\t{}", op.display(sleigh))?,
                         }
                     }
@@ -399,12 +425,12 @@ impl Default for Settings {
 pub struct Context<'a, 'b, S> {
     src: &'a mut S,
     code: &'b mut BlockTable,
-    vaddr: u64,
+    key: BlockKey,
 }
 
 impl<'a, 'b, S> Context<'a, 'b, S> {
-    pub fn new(src: &'a mut S, code: &'b mut BlockTable, vaddr: u64) -> Self {
-        Self { src, code, vaddr }
+    pub fn new(src: &'a mut S, code: &'b mut BlockTable, key: BlockKey) -> Self {
+        Self { src, code, key }
     }
 
     fn current_block_id(&self) -> BlockId {
@@ -463,10 +489,10 @@ impl BlockLifter {
         // Lift all instructions that are part of the same block, or until we reach a maximum number
         // of instructions.
         let mut icount = 0;
-        self.current.start = ctx.vaddr;
-        self.current.entry = Some(ctx.vaddr);
+        self.current.start = ctx.key.vaddr;
+        self.current.entry = Some(ctx.key);
         let exit_target = loop {
-            ctx.vaddr = match self.lift_and_add_next_inst(ctx) {
+            ctx.key.vaddr = match self.lift_and_add_next_inst(ctx) {
                 BlockResult::Continue(next_addr) => {
                     icount += 1;
                     if icount >= self.settings.max_instructions_per_block {
@@ -479,7 +505,7 @@ impl BlockLifter {
                     // We can't return here directly because there might be previous instructions
                     // in the block before the invalid instruction and we still want to be able to
                     // execute them.
-                    break Target::Invalid(e, ctx.vaddr);
+                    break Target::Invalid(e, ctx.key.vaddr);
                 }
             };
         };
@@ -666,8 +692,8 @@ impl BlockLifter {
     where
         S: InstructionSource,
     {
-        self.current.current_addr = ctx.vaddr;
-        self.current.next = self.instruction_lifter.lift(ctx.src, ctx.vaddr)?;
+        self.current.current_vaddr = ctx.key.vaddr;
+        self.current.next = self.instruction_lifter.lift(ctx.src, ctx.key.vaddr)?;
 
         for patcher in &mut self.patchers {
             (patcher)(&mut self.instruction_lifter.lifted);
@@ -681,13 +707,13 @@ impl BlockLifter {
 
         if self.instruction_lifter.generate_disassembly {
             let new_disasm = &self.instruction_lifter.disasm;
-            match ctx.code.disasm.entry(ctx.vaddr) {
+            match ctx.code.disasm.entry(ctx.key) {
                 std::collections::hash_map::Entry::Occupied(old) => {
                     let old_disasm = old.get();
                     if old_disasm != new_disasm {
                         tracing::error!(
-                            "disassembly changed at {:#0x} (from {old_disasm} to {new_disasm})",
-                            ctx.vaddr
+                            "disassembly changed at {} (from {old_disasm} to {new_disasm})",
+                            ctx.key
                         );
                         return Err(DecodeError::DisassemblyChanged);
                     }

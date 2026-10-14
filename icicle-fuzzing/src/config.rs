@@ -243,7 +243,7 @@ pub enum Hooks {
 pub struct Memory {
     pub offset: u64,
     pub size: u64,
-    pub perm: Perm,
+    pub perm: PermCfg,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -282,7 +282,7 @@ pub enum Value {
 }
 
 #[derive(Copy, Clone, serde::Deserialize, serde::Serialize)]
-pub enum Perm {
+pub enum PermCfg {
     None,
     R,
     W,
@@ -293,7 +293,7 @@ pub enum Perm {
     RWX,
 }
 
-impl Perm {
+impl PermCfg {
     pub fn value(&self) -> u8 {
         match self {
             Self::None => perm::NONE,

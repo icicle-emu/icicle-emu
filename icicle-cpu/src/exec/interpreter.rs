@@ -7,6 +7,7 @@ use crate::{
 };
 
 pub trait PcodeExecutor: ValueSource {
+    fn invalid_instruction(&mut self);
     fn exception(&mut self, code: ExceptionCode, value: u64);
     fn next_instruction(&mut self, addr: u64, len: u64);
     fn load_mem<const N: usize>(&mut self, id: MemId, addr: u64) -> Option<[u8; N]>;
@@ -22,7 +23,7 @@ pub trait PcodeExecutor: ValueSource {
     }
 }
 
-pub fn interpret<E>(exec: &mut E, stmt: pcode::Instruction)
+pub fn interpret<E>(exec: &mut E, stmt: &pcode::Instruction)
 where
     E: PcodeExecutor,
 {
@@ -514,6 +515,15 @@ where
             store(exec, id, addr, stmt.inputs.get()[1]);
         }
 
+        (Op::UncheckedTracerLoad(id, _), ..) => {
+            let addr: u64 = exec.read_dynamic(stmt.inputs.get()[0]).zxt();
+            load(exec, id + pcode::RESERVED_SPACE_END, output, addr);
+        }
+        (Op::UncheckedTracerStore(id, _), ..) => {
+            let addr: u64 = exec.read_dynamic(stmt.inputs.get()[0]).zxt();
+            store(exec, id + pcode::RESERVED_SPACE_END, addr, stmt.inputs.get()[1]);
+        }
+
         (Op::Arg(id), ..) => {
             let value = exec.read_dynamic(stmt.inputs.get()[0]).zxt();
             exec.set_arg(id, value);
@@ -537,15 +547,15 @@ where
             let b: u64 = exec.read_dynamic(stmt.inputs.get()[1]).zxt();
             exec.exception(ExceptionCode::from_u32(a), b);
         }
-        (Op::Invalid, ..) => exec.exception(ExceptionCode::InvalidInstruction, 0),
+        (Op::Invalid | pcode::Op::TracerLoad(_) | pcode::Op::TracerStore(_), ..) => {
+            exec.invalid_instruction()
+        }
 
         (
             Op::Subpiece(_)
             | Op::Branch(_)
             | Op::PcodeBranch(_)
             | Op::PcodeLabel(_)
-            | Op::TracerLoad(_)
-            | Op::TracerStore(_)
             | Op::MultiEqual
             | Op::Indirect,
             ..,

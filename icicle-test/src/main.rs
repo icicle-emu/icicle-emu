@@ -17,42 +17,46 @@ fn main() {
         })
         .init();
 
-    if let Err(e) = run() {
-        eprintln!("{:?}", e);
+    match run() {
+        Ok(true) => std::process::exit(1),
+        Ok(false) => {}
+        Err(e) => {
+            eprintln!("{:#}", e);
+            std::process::exit(1);
+        }
     }
 }
 
 enum TestMode {
     All,
     AllNoOpt,
-    Debug,
     One(String, String),
     Trace(String, String),
     TraceNoOpt(String, String),
-    Bench,
-    Fib,
+    Bench(String, String),
 }
 
-fn run() -> anyhow::Result<()> {
+fn get_arch_and_target() -> anyhow::Result<(String, String)> {
+    let arch = std::env::args().nth(2).context("Expected architecture name")?;
+    let test = std::env::args().nth(3).context("Expected test file")?;
+    Ok((arch, test))
+}
+
+fn run() -> anyhow::Result<bool> {
     let mode_str = std::env::args().nth(1);
     let mode = match mode_str.as_deref() {
         Some("all") => TestMode::All,
         Some("all-no-opt") => TestMode::AllNoOpt,
-        Some("debug") => TestMode::Debug,
-        Some("bench") => TestMode::Bench,
-        Some("fib") => TestMode::Fib,
+        Some("bench") => {
+            let (arch, target) = get_arch_and_target()?;
+            TestMode::Bench(arch, target)
+        }
         Some("trace") => {
-            let arch =
-                std::env::args().nth(2).ok_or_else(|| anyhow::format_err!("Expected test file"))?;
-            let test =
-                std::env::args().nth(3).ok_or_else(|| anyhow::format_err!("Expected test file"))?;
+            let (arch, test) = get_arch_and_target()?;
             TestMode::Trace(arch, test)
         }
         Some("trace-no-opt") => {
-            let arch =
-                std::env::args().nth(2).ok_or_else(|| anyhow::format_err!("Expected test file"))?;
-            let test =
-                std::env::args().nth(3).ok_or_else(|| anyhow::format_err!("Expected test file"))?;
+            let (arch, test) = get_arch_and_target()?;
             TestMode::TraceNoOpt(arch, test)
         }
         Some(arch) => {
@@ -63,120 +67,113 @@ fn run() -> anyhow::Result<()> {
         _ => TestMode::All,
     };
 
-    let disable_jit = std::env::var("ICICLE_DISABLE_JIT").is_ok();
-
-    let test_icicle_cpu = |triple_str: &str, config: TestConfig| -> anyhow::Result<()> {
-        let triple: target_lexicon::Triple =
-            triple_str.parse().map_err(|_| anyhow::format_err!("Unknown target: {triple_str}"))?;
-
-        let cpu_config = icicle_vm::cpu::Config {
-            triple,
-            enable_jit: !disable_jit,
-            optimize_instructions: config.optimize,
-            optimize_block: config.optimize,
-            enable_shadow_stack: false,
-            ..Default::default()
-        };
-
-        let mut vm = icicle_vm::build(&cpu_config)
-            .map_err(|e| anyhow::format_err!("Failed to build {triple_str}: {e}"))?;
-
-        if config.dump_il {
-            vm.jit.il_dump = Some(String::new());
-        }
-        vm.cpu.mem.detect_self_modifying_code = false;
-
-        let result = match std::panic::catch_unwind::<_, anyhow::Result<_>>(
-            std::panic::AssertUnwindSafe(|| run_test_and_print(&mut vm, &config)),
-        ) {
-            Ok(result) => result,
-            Err(e) => Err(anyhow::format_err!("Internal emulator panic: {:?}", e)),
-        };
-
-        if let Some(il_dump) = &vm.jit.il_dump {
-            std::fs::write("translated.clif", il_dump).unwrap();
-        }
-
-        result
-    };
-
-    const ALL_TESTS: &[(&str, &str)] = &[
-        ("x86_64", "x64"),
-        ("i386", "x86"),
-        ("mipsel", "mipsel"),
-        ("mips", "mips"),
-        ("riscv64", "riscv64gc"),
-        ("riscv32", "riscv32gc"),
-        ("msp430", "msp430x"),
-        ("arm", "arm"),
-        ("aarch64", "aarch64"),
-        ("powerpc", "powerpc"),
-        ("m68k", "m68k"),
+    const ALL_TESTS: &[(&str, &[&str])] = &[
+        ("x86_64", &["x64"]),
+        ("i386", &["x86"]),
+        ("mipsel", &["mipsel"]),
+        ("mips", &["mips"]),
+        ("riscv64", &["riscv64gc"]),
+        ("riscv32", &["riscv32gc"]),
+        ("msp430", &["msp430x"]),
+        ("arm", &["arm"]),
+        ("aarch64", &["aarch64"]),
+        ("powerpc", &["powerpc"]),
+        ("m68k", &["m68k"]),
     ];
 
+    let mut results = Results::default();
     match mode {
         TestMode::All => {
-            for (target, test) in ALL_TESTS {
-                test_icicle_cpu(target, TestConfig::default(test))?;
+            let cfg = TestConfig::default();
+            for (target, tests) in ALL_TESTS {
+                results += configure_and_run(target, &cfg, tests)?;
             }
         }
         TestMode::AllNoOpt => {
-            for (target, test) in ALL_TESTS {
-                test_icicle_cpu(target, TestConfig {
-                    optimize: false,
-                    ..TestConfig::default(test)
-                })?;
+            let cfg = TestConfig { optimize: false, ..TestConfig::default() };
+            for (target, tests) in ALL_TESTS {
+                results += configure_and_run(target, &cfg, tests)?;
             }
         }
-        TestMode::Debug => {
-            test_icicle_cpu("x86_64", TestConfig {
-                dump_il: true,
-                ..TestConfig::default("x64_one")
-            })?;
-        }
-        TestMode::Bench => {
+        TestMode::Bench(arch, target) => {
             // Current bench results:
             //  - (debug)   0.3566 s / iter, 0.0944 ms / inst
             //  - (release) 0.0226 s / iter, 0.0060 ms / inst
-            run_bench("x86_64", &TestConfig {
-                save_pcode: false,
-                ..TestConfig::default("fib-static")
-            })?;
-        }
-        TestMode::Fib => {
-            test_icicle_cpu("x86_64", TestConfig {
-                save_pcode: false,
-                ..TestConfig::default("fib-static")
-            })?;
+            run_bench(&arch, &target)?;
         }
         TestMode::One(name, test) => {
-            test_icicle_cpu(&name, TestConfig::default(&test))?;
+            results += configure_and_run(&name, &TestConfig::default(), &[&test])?;
         }
         TestMode::Trace(name, test) => {
-            test_icicle_cpu(&name, TestConfig {
+            let cfg = TestConfig {
                 save_pcode: true,
                 trace: true,
                 optimize: true,
                 dump_il: true,
-                ..TestConfig::default(&test)
-            })?;
+                ..TestConfig::default()
+            };
+            results += configure_and_run(&name, &cfg, &[&test])?;
         }
         TestMode::TraceNoOpt(name, test) => {
-            test_icicle_cpu(&name, TestConfig {
+            let cfg = TestConfig {
                 save_pcode: true,
                 trace: true,
                 optimize: false,
                 dump_il: true,
-                ..TestConfig::default(&test)
-            })?;
+                ..TestConfig::default()
+            };
+            results += configure_and_run(&name, &cfg, &[&test])?;
         }
     }
 
-    Ok(())
+    println!("\n{} tests {} errors {} ignored", results.count, results.errors, results.skip);
+
+    Ok(results.errors != 0)
 }
 
-fn run_bench(triple: &str, config: &TestConfig) -> anyhow::Result<()> {
-    let path = Path::new("./tests").join(&format!("{}.ins", config.group));
+fn configure_and_run(
+    triple_str: &str,
+    config: &TestConfig,
+    tests: &[&str],
+) -> anyhow::Result<Results> {
+    let triple: target_lexicon::Triple =
+        triple_str.parse().map_err(|_| anyhow::format_err!("Unknown target: {triple_str}"))?;
+
+    let disable_jit = std::env::var("ICICLE_DISABLE_JIT").is_ok();
+    let cpu_config = icicle_vm::cpu::Config {
+        triple,
+        enable_jit: !disable_jit,
+        optimize_instructions: config.optimize,
+        optimize_block: config.optimize,
+        shadow_stack: icicle_vm::cpu::ShadowStackState::Disabled,
+        ..Default::default()
+    };
+
+    let mut vm = icicle_vm::build(&cpu_config)
+        .map_err(|e| anyhow::format_err!("Failed to build {triple_str}: {e}"))?;
+
+    if config.dump_il {
+        vm.jit.il_dump = Some(String::new());
+    }
+    // vm.cpu.mem.detect_self_modifying_code = false;
+
+    let result =
+        match std::panic::catch_unwind::<_, anyhow::Result<_>>(std::panic::AssertUnwindSafe(|| {
+            run_test_and_print(&mut vm, &config, tests)
+        })) {
+            Ok(result) => result,
+            Err(e) => Err(anyhow::format_err!("Internal emulator panic: {:?}", e)),
+        };
+
+    if let Some(il_dump) = &vm.jit.il_dump {
+        std::fs::write("translated.clif", il_dump).unwrap();
+    }
+
+    result
+}
+
+fn run_bench(triple: &str, test: &str) -> anyhow::Result<()> {
+    let path = Path::new("./tests").join(&format!("{test}.ins"));
     let input = std::fs::read_to_string(&path)
         .with_context(|| anyhow::format_err!("Failed to load: {}", path.display()))?;
     let mut parser = parser::Parser::new(&input);
@@ -228,18 +225,42 @@ fn run_bench(triple: &str, config: &TestConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run_test_and_print<T: Tester>(tester: &mut T, config: &TestConfig) -> anyhow::Result<()> {
-    let (count, skip, errors) = run_test(tester, config)?;
-    eprintln!("{}.ins: {} tests, {} skipped, {} errors", config.group, count, skip, errors.len());
-    for error in errors {
-        eprintln!("\t{}", error);
+#[derive(Default)]
+struct Results {
+    count: usize,
+    skip: usize,
+    errors: usize,
+}
+
+impl std::ops::AddAssign for Results {
+    fn add_assign(&mut self, rhs: Self) {
+        self.count += rhs.count;
+        self.skip += rhs.skip;
+        self.errors += rhs.errors;
     }
-    Ok(())
+}
+
+fn run_test_and_print<T: Tester>(
+    tester: &mut T,
+    config: &TestConfig,
+    tests: &[&str],
+) -> anyhow::Result<Results> {
+    let mut results = Results::default();
+    for test in tests {
+        let (count, skip, errors) = run_test(tester, test, config.save_pcode)?;
+        results.count += count;
+        results.skip += skip;
+        results.errors += errors.len();
+        eprintln!("{test}.ins: {count} tests, {skip} skipped, {} errors", errors.len());
+        for error in errors {
+            eprintln!("\t{}", error);
+        }
+    }
+    Ok(results)
 }
 
 #[derive(Clone)]
-struct TestConfig<'a> {
-    group: &'a str,
+struct TestConfig {
     save_pcode: bool,
     #[allow(dead_code)]
     dump_il: bool,
@@ -248,21 +269,28 @@ struct TestConfig<'a> {
     optimize: bool,
 }
 
-impl<'a> TestConfig<'a> {
-    fn default(group: &'a str) -> Self {
-        Self { group, optimize: true, save_pcode: true, dump_il: false, trace: false }
+impl Default for TestConfig {
+    fn default() -> Self {
+        Self { optimize: true, save_pcode: true, dump_il: false, trace: false }
     }
 }
 
 fn run_test<T: Tester>(
     tester: &mut T,
-    config: &TestConfig,
+    name: &str,
+    save_pcode: bool,
 ) -> anyhow::Result<(usize, usize, Vec<String>)> {
-    if config.save_pcode {
-        clear_pcode(config.group)?;
-    }
+    let mut writer = match save_pcode {
+        true => {
+            let path = Path::new("./tests/pcode").join(name);
+            Some(std::io::BufWriter::new(
+                std::fs::OpenOptions::new().create(true).write(true).truncate(true).open(path)?,
+            ))
+        }
+        false => None,
+    };
 
-    let path = Path::new("./tests").join(&format!("{}.ins", config.group));
+    let path = Path::new("./tests").join(&format!("{name}.ins"));
     let mut errors = vec![];
 
     let input = std::fs::read_to_string(&path)
@@ -286,7 +314,7 @@ fn run_test<T: Tester>(
             continue;
         }
 
-        if let Err(e) = check_one(config, tester, &test_case) {
+        if let Err(e) = check_one(tester, &test_case, writer.as_mut()) {
             errors.push(format!("[{}] {:?}", display_prefix, e));
         }
     }
@@ -343,17 +371,17 @@ impl<'a> std::fmt::Display for Assignment<'a> {
     }
 }
 
-fn check_one<T: Tester>(
-    config: &TestConfig,
+fn check_one<T: Tester, W: std::io::Write>(
     tester: &mut T,
     test: &TestCase,
+    output: Option<&mut W>,
 ) -> anyhow::Result<()> {
     tracing::debug!("Running test: {:?}", test);
     tester.init(test)?;
 
     let pcode = tester.check_decode_and_lift(test)?;
-    if config.save_pcode {
-        save_pcode(config.group, &pcode)?;
+    if let Some(output) = output {
+        save_pcode(output, &pcode)?;
     }
 
     for semantics in &test.semantics {
@@ -385,19 +413,7 @@ fn check_semantics<T: Tester>(
     Ok(())
 }
 
-fn save_pcode(name: &str, pcode: &str) -> std::io::Result<()> {
-    use std::io::Write;
-
-    let path = Path::new("./tests/pcode").join(name);
-    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-    file.write_all(pcode.as_bytes())?;
-    Ok(())
-}
-
-fn clear_pcode(name: &str) -> std::io::Result<()> {
-    let path = Path::new("./tests/pcode").join(name);
-    if path.exists() {
-        std::fs::remove_file(path)?;
-    }
+fn save_pcode<W: std::io::Write>(mut writer: W, pcode: &str) -> std::io::Result<()> {
+    writer.write_all(pcode.as_bytes())?;
     Ok(())
 }

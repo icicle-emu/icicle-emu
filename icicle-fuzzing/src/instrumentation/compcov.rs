@@ -1,11 +1,11 @@
 //! CompareCoverage instrumentation, aka laf-intel (inspired by the implementation from qemuafl)
 
-use ahash::{AHashMap as HashMap, AHashSet as HashSet};
+use ahash::{HashMap, HashMapExt, HashSet, HashSetExt};
 use icicle_vm::{
     CodeInjector, Vm,
     cpu::{
-        BlockGroup, BlockTable, Cpu, StoreRef,
-        lifter::{Block, BlockExit},
+        BlockGroup, Cpu, StoreRef,
+        lifter::{Block, BlockExit, BlockTable},
         mem::perm,
     },
 };
@@ -207,11 +207,13 @@ where
                     tmp_block.push((is_eq, pcode::Op::IntAnd, (is_eq, tmp)));
 
                     // bitmap[key + i] += is_eq
-                    let bitmap_id = self.coverage_map.get_store_id();
-                    let index = (fnv_hash(pc) + i as u32) & self.size_mask;
-                    tmp_block.push((count, pcode::Op::Load(bitmap_id), index));
-                    tmp_block.push((count, pcode::Op::IntAdd, (count, is_eq)));
-                    tmp_block.push((pcode::Op::Store(bitmap_id), (index, count)));
+                    let index = ((fnv_hash(pc) + i as u32) & self.size_mask) as u64;
+                    // Safety: We masked the index so that it is always in-bounds.
+                    unsafe {
+                        tmp_block.push(self.coverage_map.load_unchecked(count, index));
+                        tmp_block.push((count, pcode::Op::IntAdd, (count, is_eq)));
+                        tmp_block.push(self.coverage_map.store_unchecked(index, count));
+                    }
                 }
             }
         }

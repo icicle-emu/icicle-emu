@@ -1,6 +1,12 @@
 use std::collections::HashSet;
 
-use icicle_cpu::{debug_info::SourceLocation, utils::get_u64};
+use icicle_cpu::{
+    VmExit,
+    debug_info::SourceLocation,
+    lifter::{BlockKey, InstructionSource},
+    mem::perm,
+    utils::get_u64,
+};
 use pcode::PcodeDisplay;
 
 use crate::{ValueSource, Vm, lifter::BlockGroup};
@@ -29,17 +35,21 @@ pub fn dump_group_disasm(
 ) -> std::fmt::Result {
     use std::fmt::Write;
 
+    let mut entry = BlockKey::default();
     for i in group.range() {
         let block = &vm.code.blocks[i];
+        if let Some(block_entry) = block.entry {
+            entry = block_entry;
+        }
         if print_block_id {
             writeln!(out, "<{i}> (exit_ctx={:0b}):", block.context.reverse_bits())?;
         }
         for op in &block.pcode.instructions {
             if matches!(op.op, pcode::Op::InstructionMarker) {
-                let addr = op.inputs.first().as_u64();
-                match vm.code.disasm.get(&addr) {
-                    Some(disasm) => writeln!(out, "[{addr:#0x}] {disasm}")?,
-                    None => writeln!(out, "[{addr:#0x}] <unavailable>")?,
+                let vaddr = op.inputs.first().as_u64();
+                match vm.code.disasm.get(&entry.with_vaddr(vaddr)) {
+                    Some(disasm) => writeln!(out, "[{vaddr:#0x}] {disasm}")?,
+                    None => writeln!(out, "[{vaddr:#0x}] <unavailable>")?,
                 }
             }
         }
@@ -76,37 +86,57 @@ pub fn debug_addr(vm: &mut Vm, addr: u64) -> Result<String, std::fmt::Error> {
     let key = vm.get_block_key(addr);
     match vm.code.map.get(&key) {
         Some(group) => debug_block_group(vm, group),
-        None => Ok(format!("no block at {:#x}", addr)),
+        None => Ok(format!("no block at {addr:#x}")),
     }
 }
 
+#[doc(alias = "disasm_current_block")]
 pub fn current_disasm(vm: &Vm) -> String {
+    current_disasm_impl(vm, true)
+}
+
+pub fn disasm_current_instruction(vm: &Vm) -> String {
+    current_disasm_impl(vm, false)
+}
+
+pub fn current_disasm_impl(vm: &Vm, disasm_block: bool) -> String {
     use std::fmt::Write;
 
     let (block_id, block_offset) = match vm.get_current_block() {
         Some(state) => state,
-        None => return "<no active block>".to_string(),
+        None => return "<no active block>\n".to_string(),
     };
 
     let mut out = String::new();
 
     let block = &vm.code.blocks[block_id as usize];
-    let pc_valid = block.contains_addr(vm.cpu.read_pc());
+    let mut entry = BlockKey::default();
+    if let Some(block_entry) = block.entry {
+        entry = block_entry;
+    }
+
+    let current_pc = vm.cpu.read_pc();
+    let pc_valid = block.contains_vaddr(current_pc);
+    let mut instr_pc = block.start;
     for (i, op) in block.pcode.instructions.iter().enumerate() {
         if matches!(op.op, pcode::Op::InstructionMarker) {
-            let addr = op.inputs.first().as_u64();
-            match vm.code.disasm.get(&addr) {
-                Some(disasm) => write!(out, "[{addr:#0x}] {disasm}").unwrap(),
-                None => write!(out, "[{addr:#0x}] <unavailable>").unwrap(),
+            let vaddr = op.inputs.first().as_u64();
+            instr_pc = vaddr;
+            if disasm_block || instr_pc == current_pc {
+                match vm.code.disasm.get(&entry.with_vaddr(vaddr)) {
+                    Some(disasm) => write!(out, "[{vaddr:#0x}] {disasm}").unwrap(),
+                    None => write!(out, "[{vaddr:#0x}] <unavailable>").unwrap(),
+                }
+                out.push('\n');
             }
         }
-        else {
+        else if instr_pc == current_pc {
             write!(out, "\t{}", op.display(&vm.cpu.arch.sleigh)).unwrap();
+            if i == block_offset as usize && pc_valid {
+                write!(out, " <-- next instruction").unwrap();
+            }
+            out.push('\n');
         }
-        if i == block_offset as usize && pc_valid {
-            write!(out, " <-- next instruction").unwrap();
-        }
-        out.push('\n');
     }
 
     write!(out, "\t{}", block.exit.display(&vm.cpu.arch.sleigh)).unwrap();
@@ -421,4 +451,108 @@ pub fn log_regs(
         let _ = writeln!(&mut stdout, "({icount})");
         let _ = stdout.flush();
     });
+}
+
+impl Vm {
+    pub fn debug_exit_state<W: std::io::Write>(&mut self, out: &mut W) -> std::io::Result<()> {
+        writeln!(out, "disasm:\n{}", current_disasm(self))?;
+        writeln!(
+            out,
+            "instr: {:02x?}",
+            self.cpu.mem.read_u32(self.cpu.read_pc(), perm::NONE).unwrap_or(0).to_le_bytes()
+        )?;
+        writeln!(out, "registers:\n{}", print_regs(self, &get_debug_regs(&self.cpu)))?;
+        Ok(())
+    }
+}
+
+/// Debugging feature that treats all unsupported pcode operations as NOPs and prints out the
+/// current disassembly/pcode when they are first encountered.
+pub(crate) fn unimplemented_op_info(vm: &mut Vm) -> Option<VmExit> {
+    const TREAT_UNSUPPORTED_OP_AS_NOP: bool = false;
+    if !TREAT_UNSUPPORTED_OP_AS_NOP {
+        return None;
+    }
+
+    let stmt = vm
+        .code
+        .blocks
+        .get(vm.cpu.block_id as usize)
+        .and_then(|block| block.pcode.instructions.get(vm.cpu.block_offset as usize))?;
+
+    // Prevent duplicate message from being printed for the same op.
+    thread_local! {
+        static SEEN: std::cell::RefCell<Vec<pcode::Op>>  = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let is_new = SEEN.with(|x| {
+        let mut prev = x.borrow_mut();
+        if prev.contains(&stmt.op) {
+            return false;
+        }
+        prev.push(stmt.op);
+        true
+    });
+
+    if is_new && let Some(info) = get_current_instruction(vm) {
+        eprintln!("[{:#0x}] unknown pcode operation:", info.address);
+        eprintln!("{} \"{}\"", icicle_cpu::utils::format_bytes(&info.bytes), info.disasm);
+        for (i, stmt) in info.pcode.iter().enumerate() {
+            let marker = if i as u64 == info.pcode_offset { " <-- next instruction" } else { "" };
+            eprintln!("    {}{marker}", stmt.display(&vm.cpu.arch.sleigh));
+        }
+    }
+
+    // Treat the current instruction as a nop.
+    vm.cpu.block_offset += 1;
+    Some(VmExit::Running)
+}
+
+struct InstructionInfo {
+    address: u64,
+    bytes: Vec<u8>,
+    disasm: String,
+    pcode: Vec<pcode::Instruction>,
+    pcode_offset: u64,
+}
+
+fn get_current_instruction(vm: &mut Vm) -> Option<InstructionInfo> {
+    let (block_id, block_offset) = vm.get_current_block()?;
+    let block = &vm.code.blocks[block_id as usize];
+
+    let mut entry = BlockKey::default();
+    if let Some(block_entry) = block.entry {
+        entry = block_entry;
+    }
+
+    let current_pc = vm.cpu.read_pc();
+    let disasm = vm
+        .code
+        .disasm
+        .get(&entry.with_vaddr(current_pc))
+        .map_or_else(|| "<unavailable>".into(), |x| x.clone());
+
+    let instr_start = block.pcode.instructions.iter().position(|op| {
+        matches!(op.op, pcode::Op::InstructionMarker) && op.inputs.first().as_u64() == current_pc
+    })?;
+    let len = (&block.pcode.instructions[instr_start]).inputs.second().as_u64();
+
+    let remaining = &block.pcode.instructions[instr_start..];
+    let inst_end = remaining
+        .iter()
+        .skip(1)
+        .position(|op| matches!(op.op, pcode::Op::InstructionMarker))
+        .map_or(remaining.len(), |i| i + 1);
+
+    let instr_pcode = &remaining[..inst_end];
+
+    let mut bytes = vec![0; len as usize];
+    vm.cpu.read_bytes(current_pc, &mut bytes);
+
+    Some(InstructionInfo {
+        address: current_pc,
+        bytes,
+        disasm,
+        pcode: instr_pcode.to_vec(),
+        pcode_offset: block_offset.saturating_sub(instr_start as u64),
+    })
 }
