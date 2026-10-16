@@ -78,7 +78,7 @@ static I686_TEST_CODE: &[u8] = &[
     0xA1, 0xFF, 0xFF, 0x01, 0x00, // 0x00: mov eax, [0x1FFFF]
     0xB8, 0x02, 0x00, 0x00, 0x00, // 0x05: mov eax, 2
     0x90, // 0x0A: nop
-    0xF4, // 0x0A: hlt
+    0xF4, // 0x0B: hlt
 ];
 
 fn i686_test_vm() -> crate::Vm {
@@ -86,6 +86,7 @@ fn i686_test_vm() -> crate::Vm {
     vm.cpu.mem.map_memory_len(0x0, 0x100, Mapping { perm: perm::READ | perm::EXEC, value: 0x00 });
     vm.cpu.mem.write_bytes(0x0, I686_TEST_CODE, perm::NONE).unwrap();
     vm.cpu.write_pc(0x00);
+    vm.add_breakpoint(0xb);
     vm
 }
 
@@ -173,7 +174,7 @@ fn fault_fixup_preserves_icount() {
     let icount_clean = {
         let mut vm = i686_test_vm();
         vm.cpu.mem.map_memory_len(0x1FFFF, 0x200, missing_mapping);
-        assert_eq!(vm.step(1000), VmExit::Halt);
+        assert_eq!(vm.step(1000), VmExit::Breakpoint);
         vm.cpu.icount()
     };
 
@@ -186,7 +187,7 @@ fn fault_fixup_preserves_icount() {
         );
         vm.cpu.mem.map_memory_len(0x1FFFF, 0x200, missing_mapping);
         vm.cpu.exception.clear();
-        assert_eq!(vm.step(1000), VmExit::Halt);
+        assert_eq!(vm.step(1000), VmExit::Breakpoint);
         vm.cpu.icount()
     };
     assert_eq!(icount_clean, icount_with_fault, "icount mismatch with snapshot");
@@ -203,7 +204,7 @@ fn fault_fixup_preserves_icount() {
 
         vm.cpu.mem.map_memory_len(0x1FFFF, 0x200, missing_mapping);
         vm.cpu.exception.clear();
-        assert_eq!(vm.step(1000), VmExit::Halt);
+        assert_eq!(vm.step(1000), VmExit::Breakpoint);
         vm.cpu.icount()
     };
     assert_eq!(icount_clean, icount_with_snapshot, "icount mismatch with clean run");
