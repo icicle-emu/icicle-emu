@@ -364,7 +364,7 @@ impl JIT {
 
             // @fixme: add support for symbolizing relocated targets.
             let name = match debug_info
-                .symbolize_addr(guest_addresses[0].vaddr, 0)
+                .symbolize_addr(guest_addresses[0].vaddr)
                 .and_then(|x| x.label())
             {
                 Some(label) => format!("{label}: {guest_addresses:x?}"),
