@@ -273,7 +273,10 @@ impl FuzzConfig {
         icicle_vm::cpu::Config {
             triple: self.arch.clone(),
             enable_jit: !self.disable_jit,
-            enable_shadow_stack: self.enable_shadow_stack,
+            shadow_stack: match self.enable_shadow_stack {
+                true => icicle_vm::cpu::ShadowStackState::Enabled,
+                false => icicle_vm::cpu::ShadowStackState::Disabled,
+            },
             // Disable automatically recompilation, since this causes AFL to think the emulator
             // hangs.
             enable_recompilation: false,
@@ -528,9 +531,11 @@ pub fn gen_crash_key(vm: &mut Vm, exit: VmExit) -> String {
     let last_addr = vm.code.blocks.get(vm.cpu.block_id as usize).map_or(pc, |x| x.end);
 
     let stack = vm.get_debug_callstack();
-    let stack_hash = match vm.cpu.enable_shadow_stack {
+    let stack_hash = match vm.cpu.shadow_stack_state {
         // Without shadow stack, callstack can be unreliable so just look at the parent function.
-        false => *stack.iter().rev().skip(1).next().unwrap_or(&last_addr),
+        icicle_vm::cpu::ShadowStackState::Disabled => {
+            *stack.iter().rev().skip(1).next().unwrap_or(&last_addr)
+        }
         _ => stack.iter().rev().skip(1).take(3).fold(0x0, |acc, x| acc ^ x),
     };
 
@@ -754,6 +759,7 @@ impl From<VmExit> for CrashKind {
             VmExit::UnhandledException((ExceptionCode::Environment, value)) => Self::Custom(value),
 
             VmExit::Halt
+            | VmExit::Shutdown
             | VmExit::UnhandledException((
                 ExceptionCode::ReadWatch | ExceptionCode::WriteWatch,
                 _,
@@ -795,7 +801,9 @@ impl From<VmExit> for CrashKind {
             | VmExit::Unimplemented
             | VmExit::UnhandledException((ExceptionCode::InternalError, _)) => Self::Unknown,
 
-            VmExit::UnhandledException(..) => Self::Unknown,
+            VmExit::UnhandledException(..) | VmExit::Unknown => Self::Unknown,
+
+            VmExit::Custom(code) => Self::Custom(code),
         }
     }
 }

@@ -21,7 +21,7 @@ pub struct Trace {
 
 impl Trace {
     /// Register a new storage location.
-    pub fn register_store(&mut self, store: impl TraceStore + 'static) -> StoreRef {
+    pub fn register_store<T: TraceStore + 'static>(&mut self, store: T) -> StoreRef {
         self.storage.push(Box::new(store));
         StoreRef(self.storage.len() - 1)
     }
@@ -35,10 +35,10 @@ impl Trace {
         id
     }
 
-    /// Register arbitary data inside the emulator, returning a handle used to access the data.
+    /// Register arbitrary data inside the emulator, returning a handle used to access the data.
     pub fn register_typed_data<T: 'static>(&mut self, data: T) -> DataHandle<T> {
         self.data.push(Box::new(data));
-        DataHandle { idx: self.data.len() - 1, type_: std::marker::PhantomData::default() }
+        DataHandle { idx: self.data.len() - 1, type_: std::marker::PhantomData }
     }
 
     /// Returns an iterator to the pointers to the final address of each [TraceStore].
@@ -181,6 +181,38 @@ impl StoreRef {
     pub fn get_store_id(&self) -> u16 {
         self.0 as u16 + pcode::RESERVED_SPACE_END
     }
+
+    /// Generate a Pcode instruction for loading a value from this store at the given offset into
+    /// the destination varnode.
+    ///
+    /// Safety: the offset within the store must be valid as long as this instruction is alive.
+    #[inline]
+    pub unsafe fn load_unchecked(
+        &self,
+        dst: pcode::VarNode,
+        offset: impl Into<pcode::Value>,
+    ) -> pcode::Instruction {
+        // Safety: The caller must maintain the invariant that the offset is valid for the store.
+        let op =
+            pcode::Op::UncheckedTracerLoad(self.0 as u16, unsafe { pcode::UnsafeMarker::new() });
+        pcode::Instruction::from((dst, op, offset))
+    }
+
+    /// Generate a Pcode instruction for storing a value from the given source varnode into this
+    /// store at the given offset.
+    ///
+    /// Safety: the offset within the store must be valid as long as this instruction is alive.
+    #[inline]
+    pub unsafe fn store_unchecked(
+        &self,
+        offset: impl Into<pcode::Value>,
+        value: impl Into<pcode::Value>,
+    ) -> pcode::Instruction {
+        // Safety: The caller must maintain the invariant that the offset is valid for the store.
+        let op =
+            pcode::Op::UncheckedTracerStore(self.0 as u16, unsafe { pcode::UnsafeMarker::new() });
+        pcode::Instruction::from((op, (offset, value)))
+    }
 }
 
 pub struct DataHandle<T> {
@@ -192,7 +224,7 @@ impl<T> Copy for DataHandle<T> {}
 
 impl<T> Clone for DataHandle<T> {
     fn clone(&self) -> Self {
-        Self { idx: self.idx.clone(), type_: self.type_.clone() }
+        *self
     }
 }
 

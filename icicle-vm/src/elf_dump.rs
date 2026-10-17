@@ -1,6 +1,6 @@
 use icicle_cpu::debug_info::SymbolKind;
 use object::{
-    elf,
+    elf::{self, SymbolBind},
     write::{StringId, elf::SectionIndex},
 };
 
@@ -93,7 +93,7 @@ struct MemoryRegion {
     writeable: bool,
     executable: bool,
     data: Option<Vec<u8>>,
-    file_offset: usize,
+    file_offset: u64,
 }
 
 impl std::fmt::Debug for MemoryRegion {
@@ -119,7 +119,7 @@ pub struct Symbol {
     pub name: Vec<u8>,
     pub addr: u64,
     pub kind: SymbolKind,
-    pub binding: u8,
+    pub binding: SymbolBind,
 }
 
 struct SymbolOffset {
@@ -171,7 +171,7 @@ struct SectionGroup {
 }
 
 impl SectionGroup {
-    pub fn add(&mut self, offset: usize, addr: u64, len: usize) {
+    pub fn add(&mut self, offset: u64, addr: u64, len: usize) {
         match self.sections.last_mut() {
             Some(prev) if prev.end == addr => {
                 prev.file_offset = prev.file_offset.min(offset as u64);
@@ -251,7 +251,7 @@ fn build_elf(vm: &Vm, entry: u64, mem: &mut [MemoryRegion]) -> anyhow::Result<Ve
     for region in &mut *mem {
         match region.file_size() {
             0 => region.file_offset = writer.reserved_len(),
-            len => region.file_offset = writer.reserve(len, 0x2),
+            len => region.file_offset = writer.reserve(len as u64, 0x2),
         }
 
         match (region.executable, region.writeable, region.file_size() != 0) {
@@ -314,10 +314,10 @@ fn build_elf(vm: &Vm, entry: u64, mem: &mut [MemoryRegion]) -> anyhow::Result<Ve
     }
     writer.reserve_symtab_shndx();
     writer.reserve_strtab_section_index();
-    writer.reserve_strtab();
+    writer.reserve_strtab()?;
 
     writer.reserve_shstrtab_section_index();
-    writer.reserve_shstrtab();
+    writer.reserve_shstrtab()?;
     writer.reserve_section_headers();
 
     // Start writing the content of the file to memory.
@@ -327,7 +327,7 @@ fn build_elf(vm: &Vm, entry: u64, mem: &mut [MemoryRegion]) -> anyhow::Result<Ve
         e_type: elf::ET_EXEC,
         e_machine: machine,
         e_entry: entry,
-        e_flags: 0,
+        e_flags: elf::FileFlags::default(),
     })?;
 
     // Write program headers
@@ -376,15 +376,15 @@ fn build_elf(vm: &Vm, entry: u64, mem: &mut [MemoryRegion]) -> anyhow::Result<Ve
         let st_bind = symbol.binding;
 
         let (section, st_shndx) = match offset.section {
-            Some(section) => (Some(section), 0),
+            Some(section) => (Some(section), elf::SHN_UNDEF),
             None => (None, elf::SHN_ABS),
         };
 
         writer.write_symbol(&object::write::elf::Sym {
-            name: Some(offset.str_id),
-            section,
-            st_info: (st_bind << 4) | st_type,
-            st_other: elf::STV_DEFAULT,
+            st_name: writer.string_offset(Some(offset.str_id)),
+            section: section.map(|x| x.0),
+            st_info: elf::SymbolInfo::new(st_bind, st_type),
+            st_other: elf::SymbolOther::default().with_visibility(elf::STV_DEFAULT),
             st_shndx,
             st_value: symbol.addr,
             st_size: 0x0,
@@ -402,9 +402,9 @@ fn build_elf(vm: &Vm, entry: u64, mem: &mut [MemoryRegion]) -> anyhow::Result<Ve
 
     for section in text_sections.sections {
         writer.write_section_header(&object::write::elf::SectionHeader {
-            name: section.name,
+            sh_name: writer.string_offset(section.name),
             sh_type: elf::SHT_PROGBITS,
-            sh_flags: (elf::SHF_ALLOC | elf::SHF_EXECINSTR) as u64,
+            sh_flags: elf::SHF_ALLOC | elf::SHF_EXECINSTR,
             sh_addr: section.start,
             sh_offset: section.file_offset,
             sh_size: section.end - section.start,
@@ -416,9 +416,9 @@ fn build_elf(vm: &Vm, entry: u64, mem: &mut [MemoryRegion]) -> anyhow::Result<Ve
     }
     for section in rodata_sections.sections {
         writer.write_section_header(&object::write::elf::SectionHeader {
-            name: section.name,
+            sh_name: writer.string_offset(section.name),
             sh_type: elf::SHT_PROGBITS,
-            sh_flags: elf::SHF_ALLOC as u64,
+            sh_flags: elf::SHF_ALLOC,
             sh_addr: section.start,
             sh_offset: section.file_offset,
             sh_size: section.end - section.start,
@@ -430,9 +430,9 @@ fn build_elf(vm: &Vm, entry: u64, mem: &mut [MemoryRegion]) -> anyhow::Result<Ve
     }
     for section in data_sections.sections {
         writer.write_section_header(&object::write::elf::SectionHeader {
-            name: section.name,
+            sh_name: writer.string_offset(section.name),
             sh_type: elf::SHT_PROGBITS,
-            sh_flags: (elf::SHF_ALLOC | elf::SHF_WRITE) as u64,
+            sh_flags: elf::SHF_ALLOC | elf::SHF_WRITE,
             sh_addr: section.start,
             sh_offset: section.file_offset,
             sh_size: section.end - section.start,
@@ -444,9 +444,9 @@ fn build_elf(vm: &Vm, entry: u64, mem: &mut [MemoryRegion]) -> anyhow::Result<Ve
     }
     for section in bss_sections.sections {
         writer.write_section_header(&object::write::elf::SectionHeader {
-            name: section.name,
+            sh_name: writer.string_offset(section.name),
             sh_type: elf::SHT_NOBITS,
-            sh_flags: (elf::SHF_ALLOC | elf::SHF_WRITE) as u64,
+            sh_flags: elf::SHF_ALLOC | elf::SHF_WRITE,
             sh_addr: section.start,
             sh_offset: section.file_offset,
             sh_size: section.end - section.start,

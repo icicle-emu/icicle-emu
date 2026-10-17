@@ -270,6 +270,10 @@ impl<'a, 'b> LifterCtx<'a, 'b> {
     }
 
     fn build_subtable(&mut self) -> Result<Option<Operand>> {
+        if self.subtable.is_invalid() {
+            self.lifter.block.push(pcode::Op::Invalid);
+        }
+
         // Temporary buffer to store the inputs of an operation before it is emitted.
         let mut resolved_inputs = Vec::new();
         let semantics = self.subtable.semantics();

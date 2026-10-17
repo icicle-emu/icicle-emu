@@ -10,7 +10,11 @@ struct ParseResult<T> {
 
 impl<T> ParseResult<T> {
     fn ident(&self, name: &str) -> ast::Ident {
-        ast::Ident(self.parser.interner.lookup(name).expect("Unknown Identifier"))
+        let Some(id) = self.parser.interner.lookup(name)
+        else {
+            panic!("Unknown Identifier: {}", name);
+        };
+        ast::Ident(id)
     }
 }
 
@@ -73,6 +77,18 @@ fn basic_definitions() {
         size: 4,
         word_size: None,
         default: false,
+    });
+}
+
+#[test]
+fn define_word_size() {
+    let result = parse::<ast::Sleigh>("define space ram type=ram_space size=4 wordsize=1 default;");
+    check_item_inner!(result, items[0], ast::Item::DefineSpace, ast::Space {
+        name: result.ident("ram"),
+        kind: ast::SpaceKind::RamSpace,
+        size: 4,
+        word_size: Some(1),
+        default: true,
     });
 }
 

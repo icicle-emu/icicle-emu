@@ -12,8 +12,8 @@ sleigh-runtime = { workspace = true }
 target-lexicon = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
-ron = "0.11.0"
-bitflags = "2.5.0"
-bytemuck = { version = "1.15.0", features = ["derive"] }
-crepe = "0.1.8"
-indexmap = "2.2.6"
+bitflags = { workspace = true }
+ron = "0.12.2"
+bytemuck = { workspace = true }
+crepe = "0.2.0"
+indexmap = { workspace = true }

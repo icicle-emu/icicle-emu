@@ -262,7 +262,7 @@ fn get_layout<H>(program_headers: &[H], endian: H::Endian, use_phy_addr: bool) -
 where
     H: ProgramHeader,
 {
-    let mut base = std::u64::MAX;
+    let mut base = u64::MAX;
     let mut size = 0;
     let mut align = 0;
 
@@ -319,8 +319,8 @@ fn get_permission<H: ProgramHeader>(endian: H::Endian, header: &H) -> u8 {
     let flags = header.p_flags(endian);
 
     let mut perm = perm::MAP;
-    perm |= if (flags & elf::PF_R) == 0 { perm::NONE } else { perm::READ };
-    perm |= if (flags & elf::PF_W) == 0 { perm::NONE } else { perm::WRITE };
-    perm |= if (flags & elf::PF_X) == 0 { perm::NONE } else { perm::EXEC };
+    perm |= if flags.contains(elf::PF_R) { perm::READ } else { perm::NONE };
+    perm |= if flags.contains(elf::PF_W) { perm::WRITE } else { perm::NONE };
+    perm |= if flags.contains(elf::PF_X) { perm::EXEC } else { perm::NONE };
     perm
 }

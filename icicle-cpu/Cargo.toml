@@ -1,7 +1,8 @@
 [package]
 name = "icicle-cpu"
-version = "0.1.0"
-edition = "2021"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.96.0"
 
 [dependencies]
 icicle-mem = { path = "../icicle-mem" }
@@ -14,9 +15,13 @@ tracing = { workspace = true }
 object = { workspace = true }
 gimli = { workspace = true }
 bytemuck = { workspace = true }
-addr2line = "0.26.0"
-bitflags = "2.5.0"
-half = "2.4.1"
+bitflags = { workspace = true }
+addr2line = "0.27.1"
+half = "2.7.1"
+
+[features]
+default = []
+portable_simd = []
 
 [dev-dependencies]
-quickcheck = { version = "1.0.3", default-features = false }
+quickcheck = { version = "1.1.0", default-features = false }

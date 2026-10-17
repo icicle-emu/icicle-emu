@@ -2,16 +2,19 @@ mod debug;
 pub mod runtime;
 mod translate;
 
-use std::collections::HashMap;
+use ahash::{HashMap, HashMapExt};
 
 use codegen::ir::Endianness;
 use cranelift::{codegen::Context as CodeContext, prelude::*};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module, ModuleResult};
 
-use icicle_cpu::{Cpu, lifter::Block as IcicleBlock};
+use icicle_cpu::{
+    Cpu,
+    lifter::{Block as IcicleBlock, BlockKey},
+};
 
-use crate::translate::TranslatorCtx;
+use crate::translate::{TranslatorCtx, TranslatorFlags};
 
 pub type JitFunction = unsafe extern "C" fn(*mut Cpu, u64) -> u64;
 
@@ -53,7 +56,7 @@ impl<'a> CompilationTarget<'a> {
         self.targets.iter().copied().map(|id| (id, &self.blocks[id]))
     }
 
-    pub(crate) fn entry_points(&self) -> impl Iterator<Item = u64> + '_ {
+    pub(crate) fn entry_points(&self) -> impl Iterator<Item = BlockKey> + '_ {
         self.targets.iter().copied().filter_map(|id| self.blocks[id].entry)
     }
 }
@@ -90,13 +93,13 @@ pub struct JIT {
     pub jit_miss: u64,
 
     /// Cached JIT functions indexed by entrypoint.
-    pub entry_points: HashMap<u64, JitFunction>,
+    pub entry_points: HashMap<BlockKey, JitFunction>,
 
     /// The JIT functions for each address that are currently active.
     active: Box<[(u64, JitFunction); FAST_LOOKUP_TABLE_SIZE]>,
 
     /// Keeps track of the guest entry points of all code compiled by the JIT.
-    compiled: Vec<Vec<u64>>,
+    compiled: Vec<Vec<BlockKey>>,
 
     /// A mapping from `block_id` to the compilation group it is a part of.
     block_mapping: HashMap<usize, usize>,
@@ -105,7 +108,7 @@ pub struct JIT {
     pub dead: usize,
 
     /// A list of declared functions (id, size, guest addrs) used for debugging.
-    declared_functions: Vec<(FuncId, u32, Vec<u64>)>,
+    declared_functions: Vec<(FuncId, u32, Vec<BlockKey>)>,
 }
 
 /// Default address to fill the fast lookup table with which does not match any valid address (this
@@ -123,12 +126,18 @@ impl JIT {
         };
 
         let (module, functions) = init_module(endianness);
-        let mut translator_ctx = TranslatorCtx::new(&cpu.arch);
+        let mut translator_ctx = TranslatorCtx::new(&cpu);
         if std::env::var_os("ICICLE_ALWAYS_FLUSH_VARS").is_some() {
-            translator_ctx.always_flush_vars = true;
+            translator_ctx.flags.set(TranslatorFlags::ALWAYS_FLUSH_VARS, true);
         }
-        translator_ctx.disable_jit_mem = std::env::var_os("ICICLE_DISABLE_JIT_MEM").is_some();
-        translator_ctx.enable_shadow_stack = cpu.enable_shadow_stack;
+        translator_ctx.flags.set(
+            TranslatorFlags::DISABLE_JIT_MEM,
+            std::env::var_os("ICICLE_DISABLE_JIT_MEM").is_some(),
+        );
+        translator_ctx.flags.set(
+            TranslatorFlags::ENABLE_SHADOW_STACK,
+            cpu.shadow_stack_state != icicle_cpu::cpu::ShadowStackState::Disabled,
+        );
 
         Self {
             endianness,
@@ -194,9 +203,9 @@ impl JIT {
     /// Invalidates any generated code that references the specified block.
     pub fn invalidate(&mut self, block_id: usize) {
         if let Some(&id) = self.block_mapping.get(&block_id) {
-            for &addr in &self.compiled[id] {
-                self.active[Self::lookup_key(addr)] = INITIAL_LOOKUP_TABLE_VALUE;
-                self.entry_points.remove(&addr);
+            for &entry in &self.compiled[id] {
+                self.active[Self::lookup_key(entry.vaddr)] = INITIAL_LOOKUP_TABLE_VALUE;
+                self.entry_points.remove(&entry);
                 self.dead += 1;
             }
         }
@@ -229,12 +238,12 @@ impl JIT {
         let (func, _size) = self.translate_and_define(target, false)?;
         self.module.finalize_definitions()?;
 
-        for addr in target.entry_points() {
+        for entry in target.entry_points() {
             let jit_fn = self.get_jit_func(func);
-            if self.entry_points.insert(addr, jit_fn).is_some() {
+            if self.entry_points.insert(entry, jit_fn).is_some() {
                 self.dead += 1;
             }
-            self.active[Self::lookup_key(addr)] = (addr, jit_fn);
+            self.active[Self::lookup_key(entry.vaddr)] = (entry.vaddr, jit_fn);
         }
         let group_id = self.compiled.len();
         self.compiled.push(target.entry_points().collect());
@@ -280,7 +289,9 @@ impl JIT {
     ) -> ModuleResult<(FuncId, u32)> {
         self.module.clear_context(&mut self.code_ctx);
         self.code_ctx.want_disasm = want_disasm;
-        self.code_ctx.func.signature.call_conv = self.module.isa().default_call_conv();
+        for region in translate::ALL_REGIONS {
+            self.code_ctx.func.dfg.alias_regions.push(region.clone());
+        }
 
         let mut builder = FunctionBuilder::new(&mut self.code_ctx.func, &mut self.builder_ctx);
 
@@ -303,14 +314,13 @@ impl JIT {
         }
 
         let func = self.module.declare_anonymous_function(&self.code_ctx.func.signature)?;
-        self.module.define_function(func, &mut self.code_ctx).map_err(|err| {
-            let entry = target.iter().find_map(|(_, block)| block.entry).unwrap_or(0x0);
+        self.module.define_function(func, &mut self.code_ctx).inspect_err(|_| {
+            let entry = target.iter().find_map(|(_, block)| block.entry).map_or(0x0, |x| x.vaddr);
             std::fs::write(
                 format!("failed_function_{entry:#0x}.clif"),
                 debug::debug_il(&self.code_ctx, target),
             )
             .unwrap();
-            err
         })?;
         let size = self.code_ctx.compiled_code().unwrap().code_info().total_size;
 
@@ -349,12 +359,16 @@ impl JIT {
         for (func_id, size, guest_addresses) in &self.declared_functions {
             let host_addr = self.get_jit_func(*func_id);
             for guest_addr in guest_addresses {
-                writeln!(writer, "{func_id},{host_addr:#p},{guest_addr:#x}")?;
+                writeln!(writer, "{func_id},{host_addr:#p},{:#x}", guest_addr.vaddr)?;
             }
 
-            let name = match debug_info.symbolize_addr(guest_addresses[0]).and_then(|x| x.label()) {
-                Some(label) => format!("{label}: {:x?}", guest_addresses),
-                None => format!("{:x?}", guest_addresses),
+            // @fixme: add support for symbolizing relocated targets.
+            let name = match debug_info
+                .symbolize_addr(guest_addresses[0].vaddr)
+                .and_then(|x| x.label())
+            {
+                Some(label) => format!("{label}: {guest_addresses:x?}"),
+                None => format!("{guest_addresses:x?}"),
             };
             let timestamp = jitdump_file.get_time_stamp();
             let pid = std::process::id();
@@ -379,7 +393,7 @@ impl JIT {
         for (func_id, _size, guest_addresses) in &self.declared_functions {
             let host_addr = self.get_jit_func(*func_id);
             for guest_addr in guest_addresses {
-                writeln!(writer, "{func_id},{host_addr:#p},{guest_addr:#x}")?;
+                writeln!(writer, "{func_id},{host_addr:#p},{:#x}", guest_addr.vaddr)?;
             }
         }
 

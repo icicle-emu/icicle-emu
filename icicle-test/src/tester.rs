@@ -1,6 +1,7 @@
 use icicle_vm::cpu::{
     ValueSource,
     mem::{self, perm},
+    lifter::BlockKey,
     utils,
 };
 
@@ -46,19 +47,24 @@ impl Tester for icicle_vm::Vm {
         self.cpu.set_isa_mode(test.isa_mode);
 
         let group = self.lift(test.load_addr);
+        let mut entry = BlockKey::default();
         let mut decoded = vec![];
         if let Ok(group) = group {
             for block in &self.code.blocks[group.range()] {
+                if let Some(block_entry) = block.entry {
+                    entry = block_entry;
+                }
+
                 for stmt in &block.pcode.instructions {
                     if let pcode::Op::InstructionMarker = stmt.op {
-                        let addr = stmt.inputs.first().as_u64();
+                        let vaddr = stmt.inputs.first().as_u64();
                         let len = stmt.inputs.second().as_u64();
                         let disasm = self
                             .code
                             .disasm
-                            .get(&addr)
+                            .get(&entry.with_vaddr(vaddr))
                             .map_or("invalid_instruction", |x| x.as_str());
-                        decoded.push((addr, len, disasm));
+                        decoded.push((vaddr, len, disasm));
                     }
                 }
             }
@@ -126,6 +132,7 @@ impl Tester for icicle_vm::Vm {
         if !matches!(
             exit,
             VmExit::InstructionLimit
+                | VmExit::Halt
                 | VmExit::UnhandledException((ExceptionCode::ShadowStackInvalid, _))
         ) {
             let offset = self.cpu.block_offset;

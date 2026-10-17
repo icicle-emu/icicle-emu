@@ -1,9 +1,10 @@
-use ahash::{AHashMap as HashMap, AHashSet as HashSet};
+use ahash::{HashMap, HashMapExt, HashSet};
 
 use icicle_vm::{
     CodeInjector, InjectorRef, Vm,
     cpu::{
-        BlockGroup, BlockKey, BlockTable, Cpu, HookHandler, StoreRef, ValueSource, lifter::Block,
+        BlockGroup, Cpu, HookHandler, StoreRef, ValueSource,
+        lifter::{Block, BlockTable},
     },
 };
 use pcode::{HookId, Op};
@@ -167,11 +168,14 @@ impl ContextState {
         // function.
         //
         // saved_contexts[id] ^= <generate const>
-        let store_id = self.context_store.get_store_id();
         let tmp = block.pcode.alloc_tmp(2);
-        block.pcode.push((tmp, Op::Load(store_id), index));
-        block.pcode.push((tmp, Op::IntXor, tmp, value));
-        block.pcode.push((Op::Store(store_id), (index, tmp)));
+
+        // Safety: `self.get_context` always returns an in-bounds index.
+        unsafe {
+            block.pcode.push(self.context_store.load_unchecked(tmp, index));
+            block.pcode.push((tmp, pcode::Op::IntXor, (tmp, value)));
+            block.pcode.push(self.context_store.store_unchecked(index, tmp));
+        }
     }
 
     fn inject_restore(&mut self, addr: u64, block: &mut Block) {
@@ -183,11 +187,13 @@ impl ContextState {
 
         // context ^= saved_contexts[id]
         // saved_contexts[id] = 0;
-        let store_id = self.context_store.get_store_id();
         let saved = block.pcode.alloc_tmp(2);
-        block.pcode.instructions.insert(0, (saved, Op::Load(store_id), index).into());
-        block.pcode.instructions.insert(1, (self.var, Op::IntXor, self.var, value).into());
-        block.pcode.instructions.insert(2, (Op::Store(store_id), (index, 0_u16)).into());
+        // Safety: `self.get_context` always returns an in-bounds index.
+        unsafe {
+            block.pcode.instructions.insert(0, self.context_store.load_unchecked(saved, index));
+            block.pcode.instructions.insert(1, (self.var, Op::IntXor, self.var, value).into());
+            block.pcode.instructions.insert(2, self.context_store.store_unchecked(index, 0_u16));
+        }
     }
 
     fn maybe_inject(&mut self, cpu: &mut Cpu, code: &mut BlockTable, block_id: usize) {
@@ -197,9 +203,7 @@ impl ContextState {
         }
 
         if let icicle_vm::cpu::lifter::BlockExit::Call { fallthrough, .. } = block.exit {
-            if let Some(fallthrough_group) =
-                code.map.get(&BlockKey { vaddr: fallthrough, isa_mode: cpu.isa_mode() as u64 })
-            {
+            if let Some(fallthrough_group) = code.map.get(&cpu.get_block_key(fallthrough)) {
                 self.inject_restore(fallthrough, block);
                 code.modified.insert(fallthrough_group.blocks.0);
             }
@@ -238,11 +242,13 @@ impl<F> AFLHitCountsInjector<F> {
         }
 
         // bitmap[index] += 1
-        let bitmap_id = self.bitmap_mem_id.get_store_id();
         let count = self.tmp_block.alloc_tmp(1);
-        self.tmp_block.push((count, Op::Load(bitmap_id), index));
-        self.tmp_block.push((count, Op::IntAdd, count, 1_u8));
-        self.tmp_block.push((Op::Store(bitmap_id), (index, count)));
+        // Safety: index is always in-bounds
+        unsafe {
+            self.tmp_block.push(self.bitmap_mem_id.load_unchecked(count, index));
+            self.tmp_block.push((count, Op::IntAdd, count, 1_u8));
+            self.tmp_block.push(self.bitmap_mem_id.store_unchecked(index, count));
+        }
 
         // prev = key >> 1
         if !self.block_only {
@@ -333,8 +339,12 @@ impl<F> BlockCoverageBuilder<F> {
             context = Some(ContextState::new(&mut vm.cpu, 8));
         }
 
-        let injector =
-            BlockCoverageInjector { bitmap_mem_id, size_mask, context, filter: self.filter };
+        let injector = BlockCoverageInjector {
+            bitmap: bitmap_mem_id,
+            size_mask,
+            context,
+            filter: self.filter,
+        };
         vm.add_injector(injector);
 
         bitmap_mem_id
@@ -342,7 +352,7 @@ impl<F> BlockCoverageBuilder<F> {
 }
 
 struct BlockCoverageInjector<F> {
-    bitmap_mem_id: StoreRef,
+    bitmap: StoreRef,
     size_mask: u32,
     context: Option<ContextState>,
     filter: F,
@@ -354,8 +364,7 @@ impl<F: FnMut(&Block) -> bool + 'static> CodeInjector for BlockCoverageInjector<
             return;
         }
 
-        let bitmap_id = self.bitmap_mem_id.get_store_id();
-        let index: u16 = (fnv_hash(code.blocks[group.blocks.0].start) & self.size_mask) as u16;
+        let index = (fnv_hash(code.blocks[group.blocks.0].start) & self.size_mask) as u64;
 
         if let Some(context) = &mut self.context {
             context.maybe_inject(cpu, code, group.blocks.0);
@@ -364,13 +373,16 @@ impl<F: FnMut(&Block) -> bool + 'static> CodeInjector for BlockCoverageInjector<
             let tmp = block.pcode.alloc_tmp(1);
             let ctx = context.var.slice(0, 1);
             block.pcode.instructions.insert(0, (tmp, Op::IntXor, (ctx, 1_u8)).into());
-            block.pcode.instructions.insert(1, (Op::Store(bitmap_id), (index, tmp)).into());
+
+            // Safety: the index was masked to be always in-bounds above.
+            block.pcode.instructions.insert(1, unsafe { self.bitmap.store_unchecked(index, tmp) });
         }
         else {
             // Note: currently we are wasting 7 bits here which is not ideal, however it allows
             // us to remain compatible with existing fuzzing frontends.
             let block = &mut code.blocks[group.blocks.0];
-            block.pcode.instructions.insert(0, (Op::Store(bitmap_id), (index, 1_u8)).into());
+            // Safety: the index was masked to be always in-bounds above.
+            block.pcode.instructions.insert(0, unsafe { self.bitmap.store_unchecked(index, 1_u8) });
         }
 
         code.modified.insert(group.blocks.0);
@@ -410,11 +422,13 @@ impl CodeInjector for ExactBlockCoverageInjector {
 
         // Inject code to set the target bit.
         let block = &mut code.blocks[group.blocks.0];
-        let bitmap_id = self.store.get_store_id();
         let tmp = block.pcode.alloc_tmp(1);
-        block.pcode.instructions.insert(0, (tmp, Op::Load(bitmap_id), byte as u64).into());
-        block.pcode.instructions.insert(1, (tmp, Op::IntOr, (tmp, 1_u8 << bit)).into());
-        block.pcode.instructions.insert(2, (Op::Store(bitmap_id), (byte as u64, tmp)).into());
+        // Safety: we resized the store above so there is space for a byte load at `byte`.
+        unsafe {
+            block.pcode.instructions.insert(0, self.store.load_unchecked(tmp, byte as u64));
+            block.pcode.instructions.insert(1, (tmp, Op::IntOr, (tmp, 1_u8 << bit)).into());
+            block.pcode.instructions.insert(2, self.store.store_unchecked(byte as u64, tmp));
+        }
     }
 }
 
@@ -455,17 +469,22 @@ impl CodeInjector for ExactBlockCountCoverageInjector {
         }
 
         let block = &mut code.blocks[group.blocks.0];
-        let bitmap_id = self.store.get_store_id();
+        let offset = index as u64;
         if self.capture_counts {
             // bitmap[index] += 1
             let tmp = block.pcode.alloc_tmp(1);
-            block.pcode.instructions.insert(0, (tmp, Op::Load(bitmap_id), index as u64).into());
-            block.pcode.instructions.insert(1, (tmp, Op::IntAdd, (tmp, 1_u8)).into());
-            block.pcode.instructions.insert(2, (Op::Store(bitmap_id), (index as u64, tmp)).into());
+
+            // Safety: we resized the store above so there is space for a byte store at `offset`.
+            unsafe {
+                block.pcode.instructions.insert(0, self.store.load_unchecked(tmp, offset));
+                block.pcode.instructions.insert(1, (tmp, Op::IntAdd, (tmp, 1_u8)).into());
+                block.pcode.instructions.insert(2, self.store.store_unchecked(offset, tmp));
+            }
         }
         else {
             // bitmap[index] = 1
-            block.pcode.instructions.insert(0, (Op::Store(bitmap_id), (index as u64, 1_u8)).into());
+            // Safety: see above.
+            block.pcode.instructions.insert(0, unsafe { self.store.store_unchecked(offset, 1_u8) });
         }
     }
 }

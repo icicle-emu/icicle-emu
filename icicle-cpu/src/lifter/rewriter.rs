@@ -271,3 +271,16 @@ pub fn read_pc_patcher(
         }
     })
 }
+
+pub fn ignore_zero_reg_write_patcher(zero_reg: pcode::VarNode) -> PcodePatcher {
+    Box::new(move |block: &mut pcode::Block| {
+        let before = block.instructions.len();
+        block.instructions.retain(|inst| inst.output != zero_reg);
+        if block.instructions.len() != before {
+            tracing::trace!(
+                "Removed {} instructions writing to zero register in {block:?}",
+                before - block.instructions.len()
+            );
+        }
+    })
+}
