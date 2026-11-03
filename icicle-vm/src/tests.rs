@@ -390,3 +390,38 @@ fn mips16_to_mips32_mode_switch() {
     assert_eq!(vm.cpu.read_reg(v0), 0x1234);
     assert_eq!(vm.cpu.read_reg(v1), 0x5678);
 }
+
+#[test]
+fn self_modifying_code_after_write() {
+    fn run_from(start: u64) -> VmExit {
+        let mut vm =
+            crate::build(&Config { triple: "i686-none".parse().unwrap(), ..Config::default() })
+                .unwrap();
+
+        let rwx = Mapping { perm: perm::READ | perm::WRITE | perm::EXEC, value: 0x90 };
+
+        vm.cpu.mem.map_memory_len(0, 0x1000, rwx);
+
+        let code = [
+            // 0x00: mov byte [0x80], 1 (write elsewhere on the page)
+            0xc6, 0x05, 0x80, 0x00, 0x00, 0x00, 0x01,
+            // 0x07: mov byte [0x21], 2 (patch the immediate of the mov at 0x20)
+            0xc6, 0x05, 0x21, 0x00, 0x00, 0x00, 0x02,
+        ];
+        vm.cpu.mem.write_bytes(0x0, &code, perm::NONE).unwrap();
+        let target = [
+            0xb8, 0x01, 0x00, 0x00, 0x00, // 0x20: mov eax, 1
+            0xeb, 0xfe, // 0x25: jmp $
+        ];
+        vm.cpu.mem.write_bytes(0x20, &target, perm::NONE).unwrap();
+        vm.cpu.write_pc(start);
+
+        vm.step(100)
+    }
+
+    assert_eq!(
+        run_from(0x07),
+        VmExit::UnhandledException((ExceptionCode::SelfModifyingCode, 0x21))
+    );
+    assert_eq!(run_from(0x00), VmExit::UnhandledException((ExceptionCode::WritePerm, 0x21)));
+}
