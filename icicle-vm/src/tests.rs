@@ -1,5 +1,5 @@
 use icicle_cpu::{
-    Config, ExceptionCode, VmExit,
+    Config, ExceptionCode, ShadowStackState, VmExit,
     mem::{Mapping, perm},
 };
 
@@ -8,7 +8,7 @@ fn branch_exception_delivery_on_single_step() {
     let mut vm = crate::build(&Config {
         triple: "riscv64-none".parse().unwrap(),
         enable_jit: false,
-        enable_shadow_stack: false,
+        shadow_stack: ShadowStackState::Disabled,
         ..Config::default()
     })
     .unwrap();
@@ -74,21 +74,28 @@ fn execute_only_memory() {
     assert_eq!(vm.step(1), VmExit::InstructionLimit);
 }
 
+static I686_TEST_CODE: &[u8] = &[
+    0xA1, 0xFF, 0xFF, 0x01, 0x00, // 0x00: mov eax, [0x1FFFF]
+    0xB8, 0x02, 0x00, 0x00, 0x00, // 0x05: mov eax, 2
+    0x90, // 0x0A: nop
+    0xF4, // 0x0B: hlt
+];
+
+fn i686_test_vm() -> crate::Vm {
+    let mut vm = crate::build(&Config::from_target_triple("i686-none")).unwrap();
+    vm.cpu.mem.map_memory_len(0x0, 0x100, Mapping { perm: perm::READ | perm::EXEC, value: 0x00 });
+    vm.cpu.mem.write_bytes(0x0, I686_TEST_CODE, perm::NONE).unwrap();
+    vm.cpu.write_pc(0x00);
+    vm.add_breakpoint(0xb);
+    vm
+}
+
 #[test]
 fn single_step_after_fault() {
-    let mut vm = crate::build(&Config::from_target_triple("i686-none")).unwrap();
-    vm.cpu.mem.map_memory_len(0, 0x100, Mapping { perm: perm::READ | perm::EXEC, value: 0 });
+    let mut vm = i686_test_vm();
 
     let reg_eax = vm.cpu.arch.sleigh.get_varnode("EAX").unwrap();
 
-    static CODE: &[u8] = &[
-        0xA1, 0xFF, 0xFF, 0x01, 0x00, // 0x00: mov eax, [0x1FFFF]
-        0xB8, 0x02, 0x00, 0x00, 0x00, // 0x05: mov eax, 2
-        0x90, // 0x0A: nop
-    ];
-    vm.cpu.mem.write_bytes(0x0, CODE, perm::NONE).unwrap();
-
-    vm.cpu.write_pc(0x00);
     assert_eq!(vm.step(1), VmExit::UnhandledException((ExceptionCode::ReadUnmapped, 0x1FFFF)));
     assert_eq!(vm.cpu.read_pc(), 0x00);
 
@@ -101,6 +108,109 @@ fn single_step_after_fault() {
 
     assert_eq!(vm.step(1), VmExit::InstructionLimit);
     assert_eq!(vm.cpu.read_pc(), 0x0A);
+}
+
+#[test]
+fn multi_step_after_fault_matches_single_steps() {
+    let fault_and_fixup = || {
+        let mut vm = i686_test_vm();
+        assert_eq!(vm.step(1), VmExit::UnhandledException((ExceptionCode::ReadUnmapped, 0x1FFFF)));
+        assert!(vm.cpu.mem.map_memory_len(0x1FF00, 0x200, Mapping {
+            perm: perm::READ | perm::EXEC,
+            value: 0xaa
+        }));
+        vm.cpu.exception.clear();
+        vm
+    };
+
+    let mut single = fault_and_fixup();
+    assert_eq!(single.step(1), VmExit::InstructionLimit);
+    assert_eq!(single.step(1), VmExit::InstructionLimit);
+
+    let mut multi = fault_and_fixup();
+    assert_eq!(multi.step(2), VmExit::InstructionLimit);
+
+    assert_eq!(single.cpu.read_pc(), 0x0A);
+    assert_eq!(multi.cpu.read_pc(), 0x0A);
+    assert_eq!(single.cpu.icount(), multi.cpu.icount());
+}
+
+fn arm_test_vm() -> crate::Vm {
+    crate::build(&Config { triple: "arm".parse().unwrap(), ..Config::default() }).unwrap()
+}
+
+#[test]
+fn disasm_change_check_distinguishes_isa_modes() {
+    // The same bytes decode differently per instruction-set mode: `0x00000000` is `andeq r0,r0,r0`
+    // in ARM and `movs r0,r0` in Thumb. On interworking targets one address can legitimately be
+    // lifted in both modes, so the disassembly-change check keeps its baseline per (vaddr,
+    // isa_mode) and does not treat the second decode as self-modifying code. Lift a padding address
+    // in Thumb then ARM and confirm the second lift is accepted.
+    let mut vm = arm_test_vm();
+
+    let addr = 0x1000;
+    vm.cpu.mem.map_memory_len(addr, 0x1000, Mapping { perm: perm::NONE, value: 0 });
+    vm.cpu.mem.write_bytes(addr, &[0u8; 0x1000], perm::NONE).unwrap();
+    vm.cpu.mem.update_perm(addr, 0x1000, perm::READ | perm::INIT | perm::EXEC).unwrap();
+
+    vm.cpu.set_isa_mode(1);
+    assert!(vm.lift(addr).is_ok(), "thumb lift of padding should succeed");
+
+    vm.cpu.set_isa_mode(0);
+    assert!(
+        vm.lift(addr).is_ok(),
+        "arm lift of the same padding must not be flagged as self-modifying code"
+    );
+
+    // Check that we still identify potential self modifying code.
+    assert_eq!(
+        vm.cpu.mem.write_bytes(addr, &[0x02, 0x00, 0x81, 0xE0], perm::NONE),
+        Err(perm::MemError::SelfModifyingCode)
+    );
+}
+
+#[test]
+fn fault_fixup_preserves_icount() {
+    let missing_mapping = Mapping { perm: perm::READ | perm::INIT, value: 0x0 };
+
+    println!("Clean run:");
+    let icount_clean = {
+        let mut vm = i686_test_vm();
+        vm.cpu.mem.map_memory_len(0x1FFFF, 0x200, missing_mapping);
+        assert_eq!(vm.step(1000), VmExit::Breakpoint);
+        vm.cpu.icount()
+    };
+
+    println!("\n\nFaulting run:");
+    let icount_with_fault = {
+        let mut vm = i686_test_vm();
+        assert_eq!(
+            vm.step(1000),
+            VmExit::UnhandledException((ExceptionCode::ReadUnmapped, 0x1FFFF))
+        );
+        vm.cpu.mem.map_memory_len(0x1FFFF, 0x200, missing_mapping);
+        vm.cpu.exception.clear();
+        assert_eq!(vm.step(1000), VmExit::Breakpoint);
+        vm.cpu.icount()
+    };
+    assert_eq!(icount_clean, icount_with_fault, "icount mismatch with snapshot");
+
+    println!("\n\nSnapshot run:");
+    let icount_with_snapshot = {
+        let mut vm = i686_test_vm();
+        assert_eq!(
+            vm.step(1000),
+            VmExit::UnhandledException((ExceptionCode::ReadUnmapped, 0x1FFFF))
+        );
+        let snap = vm.snapshot();
+        vm.restore(&snap);
+
+        vm.cpu.mem.map_memory_len(0x1FFFF, 0x200, missing_mapping);
+        vm.cpu.exception.clear();
+        assert_eq!(vm.step(1000), VmExit::Breakpoint);
+        vm.cpu.icount()
+    };
+    assert_eq!(icount_clean, icount_with_snapshot, "icount mismatch with clean run");
 }
 
 #[test]
@@ -141,4 +251,177 @@ fn build_riscv64() {
 #[test]
 fn build_x86_64() {
     let _ = crate::build(&Config::from_target_triple("x86_64-none")).unwrap();
+}
+
+// Check that after JIT recompilation we don't merge blocks that share a vaddr but were lifted in
+// different ISA modes.
+#[test]
+fn recompile_does_not_mix_isa_modes() {
+    const A_MODE: u8 = 0;
+    const T_MODE: u8 = 1;
+
+    // The same bytes at 0x1000 are valid in both ARM and Thumb, but decode to different code that
+    // follows a different path:
+    //
+    // ARM:   0x1000 -> 0x1500 (increments r3) -> 0x1000
+    // Thumb: 0x1000 -> 0x1508 (increments r2) -> 0x1000
+    const CODE_A: &[u8] = &[
+        0x01, 0x00, 0x81,
+        0xe2, // 0x1000: ARM `add r0, r1, #1`; Thumb `movs r1, r0` + `b 0x1508`
+        0x3d, 0x01, 0x00, 0xea, // 0x1004: ARM `b 0x1500`
+    ];
+    const CODE_B: &[u8] = &[
+        0x01, 0x30, 0x83, 0xe2, // 0x1500: ARM `add r3, r3, #1`
+        0xbd, 0xfe, 0xff, 0xea, // 0x1504: ARM `b 0x1000`
+        0x01, 0x32, //             0x1508: Thumb `adds r2, #1`
+        0x79, 0xe5, //             0x150a: Thumb `b 0x1000`
+    ];
+
+    let mut vm = arm_test_vm();
+
+    vm.cpu.mem.map_memory_len(0x1000, 0x1000, Mapping {
+        perm: perm::READ | perm::EXEC | perm::INIT,
+        value: 0x00,
+    });
+    vm.cpu.mem.write_bytes(0x1000, CODE_A, perm::NONE).unwrap();
+    vm.cpu.mem.write_bytes(0x1500, CODE_B, perm::NONE).unwrap();
+
+    let r2 = vm.cpu.arch.sleigh.get_varnode("r2").unwrap();
+    let r3 = vm.cpu.arch.sleigh.get_varnode("r3").unwrap();
+
+    // Lift the blocks in both modes.
+    for mode in [A_MODE, T_MODE] {
+        vm.cpu.set_isa_mode(mode);
+        vm.jit.clear_fast_lookup();
+        vm.cpu.write_pc(0x1000);
+        assert_eq!(vm.step(6), VmExit::InstructionLimit);
+    }
+
+    vm.enable_recompilation = true;
+    vm.recompile();
+
+    // Each mode must only execute its own code after recompilation.
+    for mode in [A_MODE, T_MODE] {
+        vm.cpu.set_isa_mode(mode);
+        vm.jit.clear_fast_lookup();
+        vm.cpu.write_pc(0x1000);
+
+        let (before2, before3) = (vm.cpu.read_reg(r2), vm.cpu.read_reg(r3));
+        assert_eq!(vm.step(100), VmExit::InstructionLimit);
+
+        let (after2, after3) = (vm.cpu.read_reg(r2), vm.cpu.read_reg(r3));
+        if mode == A_MODE {
+            assert_eq!(after2, before2, "ARM mode ran Thumb code (r2 changed)");
+            assert!(after3 > before3, "ARM code was not executed");
+        }
+        else {
+            assert_eq!(after3, before3, "Thumb mode ran ARM code (r3 changed)");
+            assert!(after2 > before2, "Thumb code was not executed");
+        }
+    }
+}
+
+fn mips_test_vm(code: &[u8]) -> crate::Vm {
+    let mut vm =
+        crate::build(&Config { triple: "mips-none".parse().unwrap(), ..Config::default() })
+            .unwrap();
+
+    vm.cpu.mem.map_memory_len(0x1000, 0x1000, Mapping {
+        perm: perm::READ | perm::EXEC | perm::INIT,
+        value: 0x00,
+    });
+    vm.cpu.mem.write_bytes(0x1000, code, perm::NONE).unwrap();
+    vm.cpu.write_pc(0x1000);
+    vm
+}
+
+#[test]
+fn mips16_delay_slots_and_pc_relative_loads() {
+    // MIPS16e `jal` is a 4-byte instruction with a delay slot, and temporary (`noflow`) decoder
+    // context that the spec uses to track the delay slot.
+    const CODE: &[u8] = &[
+        0x18, 0x00, 0x04, 0x04, // 0x1000: jal 0x1010
+        0x65, 0x00, // 0x1004: nop (delay slot)
+        //
+        0x65, 0x00, 0x65, 0x00, 0x65, 0x00, 0x65, 0x00, // 4x nop
+        0x65, 0x00, // nop
+        //
+        0xb2, 0x03, // 0x1010: lw v0, 12(pc) = 0xdeadbeaf
+        0xe8, 0x20, // 0x1012: jr ra
+        0x65, 0x00, // 0x1014: nop (delay slot)
+        //
+        0x65, 0x00, 0x65, 0x00, 0x65, 0x00, // 4x nop
+        //
+        0xde, 0xad, 0xbe, 0xef, // 0x101c: literal
+    ];
+
+    let mut vm = mips_test_vm(&CODE);
+    vm.cpu.set_isa_mode(1);
+    let v0 = vm.cpu.arch.sleigh.get_varnode("v0").unwrap();
+
+    assert_eq!(vm.step(10), VmExit::InstructionLimit);
+    assert_eq!(vm.cpu.read_reg(v0), 0xdead_beef, "pc-relative load used the wrong base address");
+    assert_eq!(vm.cpu.isa_mode(), 1);
+}
+
+#[test]
+fn mips16_to_mips32_mode_switch() {
+    // A `jr` to an even address in MIPS16e mode switches to MIPS32 mode, and the code at the target
+    // must then be decoded as MIPS32.
+    const CODE: &[u8] = &[
+        0xeb, 0x00, // 0x1000: jr v1 (MIPS16e)
+        0x65, 0x00, // 0x1002: nop (delay slot)
+        //
+        0x65, 0x00, 0x65, 0x00, 0x65, 0x00, 0x65, 0x00, // 4x nop
+        0x65, 0x00, 0x65, 0x00, 0x65, 0x00, 0x65, 0x00, // 4x nop
+        //
+        0x24, 0x02, 0x12, 0x34, // 0x1010: addiu v0, zero, 0x1234
+        0x24, 0x03, 0x56, 0x78, // 0x1014: addiu v1, zero, 0x5678
+    ];
+
+    let mut vm = mips_test_vm(&CODE);
+    vm.cpu.set_isa_mode(1);
+    let v0 = vm.cpu.arch.sleigh.get_varnode("v0").unwrap();
+    let v1 = vm.cpu.arch.sleigh.get_varnode("v1").unwrap();
+    vm.cpu.write_reg(v1, 0x1010);
+
+    assert_eq!(vm.step(4), VmExit::InstructionLimit);
+    assert_eq!(vm.cpu.isa_mode(), 0);
+    assert_eq!(vm.cpu.read_reg(v0), 0x1234);
+    assert_eq!(vm.cpu.read_reg(v1), 0x5678);
+}
+
+#[test]
+fn self_modifying_code_after_write() {
+    fn run_from(start: u64) -> VmExit {
+        let mut vm =
+            crate::build(&Config { triple: "i686-none".parse().unwrap(), ..Config::default() })
+                .unwrap();
+
+        let rwx = Mapping { perm: perm::READ | perm::WRITE | perm::EXEC, value: 0x90 };
+
+        vm.cpu.mem.map_memory_len(0, 0x1000, rwx);
+
+        let code = [
+            // 0x00: mov byte [0x80], 1 (write elsewhere on the page)
+            0xc6, 0x05, 0x80, 0x00, 0x00, 0x00, 0x01,
+            // 0x07: mov byte [0x21], 2 (patch the immediate of the mov at 0x20)
+            0xc6, 0x05, 0x21, 0x00, 0x00, 0x00, 0x02,
+        ];
+        vm.cpu.mem.write_bytes(0x0, &code, perm::NONE).unwrap();
+        let target = [
+            0xb8, 0x01, 0x00, 0x00, 0x00, // 0x20: mov eax, 1
+            0xeb, 0xfe, // 0x25: jmp $
+        ];
+        vm.cpu.mem.write_bytes(0x20, &target, perm::NONE).unwrap();
+        vm.cpu.write_pc(start);
+
+        vm.step(100)
+    }
+
+    assert_eq!(
+        run_from(0x07),
+        VmExit::UnhandledException((ExceptionCode::SelfModifyingCode, 0x21))
+    );
+    assert_eq!(run_from(0x00), VmExit::UnhandledException((ExceptionCode::WritePerm, 0x21)));
 }

@@ -153,8 +153,8 @@ where
                 write!(f, "if {} {}()", inputs[0].display(ctx), hook.display(&()))
             }
 
-            Op::TracerLoad(id) => write!(f, "{out} = {}[{a}]", StoreIdD(id).display(&())),
-            Op::TracerStore(id) => write!(f, "{}[{a}] = {b}", StoreIdD(id).display(&())),
+            Op::UncheckedTracerLoad(id, _) | Op::TracerLoad(id) => write!(f, "{out} = {}[{a}]", StoreIdD(id).display(&())),
+            Op::UncheckedTracerStore(id, _) | Op::TracerStore(id) => write!(f, "{}[{a}] = {b}", StoreIdD(id).display(&())),
 
             Op::Exception => write!(f, "exception({a}, {b})"),
 

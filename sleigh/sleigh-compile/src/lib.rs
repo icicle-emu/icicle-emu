@@ -2,8 +2,8 @@ use std::{collections::HashMap, path::Path};
 
 use sleigh_parse::{Parser, ast};
 use sleigh_runtime::{
-    AttachmentIndex, Constructor, ConstructorDebugInfo, DecodeAction, DisplaySegment, NamedRegister,
-    RegisterAlias, RegisterAttachment, SleighData, StrIndex,
+    AttachmentIndex, Constructor, ConstructorDebugInfo, DecodeAction, DisplaySegment,
+    NamedRegister, RegisterAlias, RegisterAttachment, SleighData, StrIndex,
 };
 
 pub use sleigh_parse::resolve_dependencies;

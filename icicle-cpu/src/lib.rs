@@ -1,3 +1,4 @@
+pub mod arch;
 pub mod cpu;
 pub mod debug_info;
 pub mod elf;
@@ -13,13 +14,14 @@ mod trace;
 
 use std::any::Any;
 
-use ahash::{AHashMap as HashMap, AHashSet as HashSet};
-
 use crate::debug_info::{DebugInfo, SourceLocation};
 
 pub use crate::{
     config::Config,
-    cpu::{Arch, Cpu, CpuSnapshot, Exception, RegHandler, ShadowStack, ShadowStackEntry},
+    cpu::{
+        Arch, Cpu, CpuSnapshot, Exception, RegHandler, ShadowStack, ShadowStackEntry,
+        ShadowStackState,
+    },
     exit::VmExit,
     lifter::BlockGroup,
     regs::{RegValue, Regs, ValueSource, VarSource},
@@ -28,58 +30,6 @@ pub use crate::{
 pub use icicle_mem as mem;
 pub use icicle_mem::Mmu;
 pub use lifter::DecodeError;
-
-#[derive(Copy, Clone, Debug, Default, Hash, PartialEq, Eq)]
-pub struct BlockKey {
-    pub vaddr: u64,
-    pub isa_mode: u64,
-}
-
-/// Keeps track of all the code in the program that the emulator has discovered.
-#[derive(Default)]
-pub struct BlockTable {
-    pub map: HashMap<BlockKey, BlockGroup>,
-    pub blocks: Vec<lifter::Block>,
-    pub disasm: HashMap<u64, String>,
-    pub breakpoints: HashSet<u64>,
-    pub modified: HashSet<usize>,
-}
-
-impl BlockTable {
-    pub fn flush_code(&mut self) {
-        self.map.clear();
-        self.blocks.clear();
-        self.disasm.clear();
-        self.modified.clear();
-    }
-
-    pub fn get_info(&self, key: BlockKey) -> Option<BlockInfoRef<'_>> {
-        let group = *self.map.get(&key)?;
-        Some(BlockInfoRef { group, code: self })
-    }
-}
-
-pub struct BlockInfoRef<'a> {
-    group: BlockGroup,
-    code: &'a BlockTable,
-}
-
-impl<'a> BlockInfoRef<'a> {
-    /// Return an iterator over all (instruction start, instruction len) pairs in the group.
-    pub fn instructions(&self) -> impl Iterator<Item = (u64, u64)> + 'a {
-        self.code.blocks[self.group.range()].iter().flat_map(|block| block.instructions())
-    }
-
-    /// Return the entry block
-    pub fn entry_block(&self) -> &'a lifter::Block {
-        &self.code.blocks[self.group.blocks.0]
-    }
-
-    /// Return an iterator over all blocks in the group
-    pub fn blocks(&self) -> impl Iterator<Item = (usize, &'a lifter::Block)> + 'a {
-        self.group.range().map(|i| (i, &self.code.blocks[i]))
-    }
-}
 
 pub trait Environment {
     /// Loads the target into the enviroment.
@@ -93,7 +43,7 @@ pub trait Environment {
         u64::MAX
     }
 
-    /// Get a direct reference to the debug info loaded for the current environment
+    /// Get a direct reference to the debug info loaded for the current environment.
     fn debug_info(&self) -> Option<&DebugInfo> {
         None
     }
@@ -159,6 +109,7 @@ pub enum ExceptionCode {
     Halt = 0x0002,
     Sleep = 0x0003,
     SoftwareBreakpoint = 0x0004,
+    Shutdown = 0x0005,
 
     Syscall = 0x0101,
     CpuStateChanged = 0x0102,
@@ -181,6 +132,7 @@ pub enum ExceptionCode {
 
     OutOfMemory = 0x0501,
     AddressOverflow = 0x0502,
+    BadMapping = 0x0503,
 
     InvalidInstruction = 0x1001,
     UnknownInterrupt = 0x1002,
@@ -199,6 +151,11 @@ pub enum ExceptionCode {
     JitError = 0x3001,
     InternalError = 0x3002,
     UnmappedRegister = 0x3003,
+    /// This exception is raised when an operation attempts to access a resources that is already
+    /// being accessed. (e.g., an I/O memory region attempts to read from itself).
+    RecursiveAccess = 0x3004,
+    /// Exception code for configuration issues or unsupported operations.
+    Unsupported = 0x3005,
 
     UnknownError,
 }
@@ -212,6 +169,7 @@ impl ExceptionCode {
             0x0002 => Self::Halt,
             0x0003 => Self::Sleep,
             0x0004 => Self::SoftwareBreakpoint,
+            0x0005 => Self::Shutdown,
 
             0x0101 => Self::Syscall,
             0x0102 => Self::CpuStateChanged,
@@ -234,6 +192,7 @@ impl ExceptionCode {
 
             0x0501 => Self::OutOfMemory,
             0x0502 => Self::AddressOverflow,
+            0x0503 => Self::BadMapping,
 
             0x1001 => Self::InvalidInstruction,
             0x1002 => Self::UnknownInterrupt,
@@ -252,10 +211,12 @@ impl ExceptionCode {
             0x3001 => Self::JitError,
             0x3002 => Self::InternalError,
             0x3003 => Self::UnmappedRegister,
+            0x3004 => Self::RecursiveAccess,
+            0x3005 => Self::Unsupported,
 
             _ => {
                 if cfg!(debug_assertions) {
-                    panic!("Unknown exception code: {:#0x}", code);
+                    panic!("Unknown exception code: {code:#0x}");
                 }
                 Self::UnknownError
             }
@@ -286,7 +247,7 @@ impl ExceptionCode {
         use icicle_mem::MemError;
         match err {
             MemError::Unmapped => Self::ReadUnmapped,
-            MemError::Uninitalized => Self::ReadUninitialized,
+            MemError::Uninitialized => Self::ReadUninitialized,
             MemError::ReadViolation => Self::ReadPerm,
             MemError::Unaligned => Self::ReadUnaligned,
             MemError::ReadWatch => Self::ReadWatch,
@@ -311,17 +272,19 @@ impl From<icicle_mem::MemError> for ExceptionCode {
         use icicle_mem::MemError;
         match err {
             MemError::Unmapped => Self::ReadUnmapped,
-            MemError::Uninitalized => Self::ReadUninitialized,
+            MemError::Uninitialized => Self::ReadUninitialized,
             MemError::ReadViolation => Self::ReadPerm,
             MemError::WriteViolation => Self::WritePerm,
             MemError::ExecViolation => Self::ExecViolation,
             MemError::ReadWatch => Self::ReadWatch,
             MemError::WriteWatch => Self::WriteWatch,
             MemError::Unaligned => Self::ReadUnaligned,
+            MemError::Overlap => Self::BadMapping,
             MemError::OutOfMemory => Self::OutOfMemory,
             MemError::SelfModifyingCode => Self::SelfModifyingCode,
             MemError::AddressOverflow => Self::AddressOverflow,
-            MemError::UnmappedRegister => Self::UnmappedRegister,
+            MemError::RecursiveAccess => Self::RecursiveAccess,
+            MemError::Unsupported => Self::Unsupported,
 
             // These are errors that should be handled by the memory subsystem.
             MemError::Unallocated | MemError::Unknown => Self::UnknownError,
@@ -354,6 +317,10 @@ impl From<DecodeError> for ExceptionCode {
 pub enum InternalError {
     CorruptedBlockMap,
     UnsupportedIsaMode,
+    UnexpectedMemoryMapChanged,
+    JitCompilationError,
+    JitBadLookup,
+    InvalidInternalJump,
     SwitchToInterpreter,
 }
 

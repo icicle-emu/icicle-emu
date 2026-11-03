@@ -9,64 +9,12 @@ use crate::{
         helpers::{self, PcodeOpHelper},
         interpreter::{PcodeExecutor, interpret},
     },
-    lifter::{BlockExit, Target},
-    regs::{RegValue, Regs, ValueSource},
+    lifter::{BlockExit, BlockKey, Target},
+    regs::{DynamicValue, RegValue, Regs, ValueSource},
     trace::{self, Trace},
 };
 
-pub const SHADOW_STACK_SIZE: usize = 0x1000;
-
-#[repr(C, align(16))]
-pub struct ShadowStack {
-    pub stack: [ShadowStackEntry; SHADOW_STACK_SIZE],
-    offset: usize,
-}
-
-impl Clone for ShadowStack {
-    fn clone(&self) -> Self {
-        Self { stack: self.stack, offset: self.offset }
-    }
-
-    fn clone_from(&mut self, source: &Self) {
-        self.stack[..source.offset].clone_from_slice(&source.stack[..source.offset]);
-        self.offset = source.offset;
-    }
-}
-
-impl Default for ShadowStack {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ShadowStack {
-    pub fn new() -> Self {
-        Self { stack: [ShadowStackEntry::default(); SHADOW_STACK_SIZE], offset: 0 }
-    }
-
-    #[inline(always)]
-    pub fn as_slice(&self) -> &[ShadowStackEntry] {
-        // Safety: we always ensure that `self.offset` is in bounds
-        unsafe { self.stack.get_unchecked(..self.offset) }
-    }
-
-    #[inline(always)]
-    pub fn depth(&self) -> usize {
-        self.offset
-    }
-}
-
-#[derive(Default, Copy, Clone)]
-pub struct ShadowStackEntry {
-    pub addr: u64,
-    pub block: u64,
-}
-
-impl std::fmt::Debug for ShadowStackEntry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:#x}", self.addr)
-    }
-}
+pub use crate::arch::Arch;
 
 #[derive(Default, Debug, Copy, Clone, PartialEq)]
 #[repr(C)]
@@ -99,139 +47,18 @@ impl Exception {
     }
 
     #[inline]
+    pub const fn internal_error(error: crate::InternalError) -> Self {
+        Self { code: ExceptionCode::InternalError as u32, value: error as u64 }
+    }
+
+    #[inline]
     pub fn clear(&mut self) {
         self.code = ExceptionCode::None as u32;
         self.value = 0;
     }
-}
 
-#[derive(Clone)]
-pub struct CallCov {
-    /// Represents registers used for passing integers to functions, these will be chosen before
-    /// parameters on the stack
-    pub integers: Vec<pcode::VarNode>,
-
-    /// The alignment of parameters passed on the stack,
-    pub stack_align: u64,
-
-    /// The offset (relative to the stack pointer) of the parameters on the stack.
-    pub stack_offset: u64,
-}
-
-impl Default for CallCov {
-    fn default() -> Self {
-        Self { integers: vec![], stack_align: 1, stack_offset: 0 }
-    }
-}
-
-/// Architecture specific CPU state.
-pub struct Arch {
-    /// Target triple for the current architecture.
-    pub triple: target_lexicon::Triple,
-
-    /// The VarNode that represents the program's instruction pointer / PC.
-    pub reg_pc: pcode::VarNode,
-
-    /// The VarNode that represents address of the next instruction. This is neccessary for
-    /// handling instructions that resume on the next instruction (e.g. syscalls) in an
-    /// architecture independent way.
-    ///
-    /// Note: guaranteed to be 64-bits, and is only set after certain instructions.
-    pub reg_next_pc: pcode::VarNode,
-
-    /// The VarNode that represents the program's stack pointer.
-    pub reg_sp: pcode::VarNode,
-
-    /// The VarNode that contains the program's decoding mode.
-    pub reg_isa_mode: Option<pcode::VarNode>,
-
-    /// Context values for the decoder when running in different ISA modes.
-    pub isa_mode_context: Vec<u64>,
-
-    /// Values to initialize registers with on reset.
-    pub reg_init: Vec<(pcode::VarNode, u128)>,
-
-    /// Registers that should be treated as temporaries.
-    pub temporaries: Vec<pcode::VarId>,
-
-    /// Registers that represent arguments for the current calling convention.
-    pub calling_cov: CallCov,
-
-    /// The function to call when the VM boots.
-    pub on_boot: fn(&mut Cpu, u64),
-
-    /// The sleigh specification for the current architecture.
-    pub sleigh: sleigh_runtime::SleighData,
-}
-
-impl Arch {
-    /// A generic architecture used for testing.
-    pub fn none() -> Self {
-        let mut sleigh = sleigh_runtime::SleighData::default();
-        sleigh.alignment = 1;
-        sleigh.add_custom_reg("INVALID_VARNODE", 0);
-        let reg_pc = sleigh.add_custom_reg("pc", 8).unwrap();
-        let reg_next_pc = sleigh.add_custom_reg("next_pc", 8).unwrap();
-        let reg_sp = sleigh.add_custom_reg("sp", 8).unwrap();
-
-        sleigh.add_custom_reg("a", 8).unwrap();
-        sleigh.add_custom_reg("b", 8).unwrap();
-        sleigh.add_custom_reg("c", 8).unwrap();
-
-        Self {
-            triple: target_lexicon::Triple::unknown(),
-            reg_pc,
-            reg_next_pc,
-            reg_sp,
-            reg_isa_mode: None,
-            isa_mode_context: vec![0],
-            reg_init: vec![],
-            temporaries: vec![],
-            calling_cov: CallCov::default(),
-            on_boot: |_, _| {},
-            sleigh,
-        }
-    }
-
-    /// Converts bytes read from memory to a pointer sized integer for the current architecture by
-    /// zero extending and converting the endianness as necessary.
-    #[inline]
-    pub fn bytes_to_pointer<const N: usize>(&self, bytes: [u8; N]) -> u64 {
-        let size = (self.reg_pc.size as usize).min(N);
-
-        let mut buf = [0; 8];
-        buf[..size].copy_from_slice(&bytes[..size]);
-
-        match self.triple.endianness().unwrap() {
-            target_lexicon::Endianness::Little => u64::from_le_bytes(buf),
-            target_lexicon::Endianness::Big => u64::from_be_bytes(buf),
-        }
-    }
-}
-
-#[repr(C)]
-pub struct JitContext {
-    pub tlb_ptr: *mut TranslationCache,
-    pub tracer_mem: [*mut u8; trace::MAX_TRACER_MEM],
-    pub hooks: [trace::HookData; trace::MAX_HOOKS],
-}
-
-impl Default for JitContext {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl JitContext {
-    pub fn new() -> Self {
-        const NULL_HOOK: trace::HookData = trace::HookData::null();
-
-        Self {
-            tlb_ptr: std::ptr::null_mut(),
-            tracer_mem: [std::ptr::null_mut(); trace::MAX_TRACER_MEM],
-            hooks: [NULL_HOOK; trace::MAX_HOOKS],
-        }
-    }
+    pub const SWITCH_TO_INTERPRETER: Self =
+        Self::internal_error(InternalError::SwitchToInterpreter);
 }
 
 /// Used to control where the CPU should stop executing.
@@ -239,8 +66,9 @@ impl JitContext {
 /// Currently, 1 unit of fuel is consumed for each instruction executed.
 #[derive(Copy, Clone, Default)]
 pub struct Fuel {
-    /// The number of units of fuel remaining.
-    pub remaining: u64,
+    /// The number of units of fuel remaining. Can be negative if we requested to exit immediately
+    /// (without an exception) but still had instructions left in the block.
+    pub remaining: i64,
 
     /// The amount of fuel we started with.
     ///
@@ -258,7 +86,7 @@ pub struct Cpu {
     pub regs: Regs,
     pub args: [u128; 8],
     pub shadow_stack: ShadowStack,
-    pub enable_shadow_stack: bool,
+    pub shadow_stack_state: ShadowStackState,
 
     pub mem: Mmu,
     pub jit_ctx: JitContext,
@@ -284,7 +112,9 @@ pub struct Cpu {
     /// handlers associated are contiguous allowing for an easy lookup.
     reg_handlers: UnsafeCell<Vec<(i16, Box<dyn RegHandler>)>>,
 
+    /// Cached copy of the PC offset that has already been validated.
     pc_offset: isize,
+    /// Mask used to ensure that PC value is truncated to the correct size.
     pc_mask: u64,
 }
 
@@ -305,7 +135,7 @@ impl Cpu {
             regs: Regs::new(),
             args: [0; 8],
             shadow_stack: ShadowStack::new(),
-            enable_shadow_stack: false,
+            shadow_stack_state: ShadowStackState::Disabled,
 
             mem: Mmu::with_mask(address_mask),
             jit_ctx: JitContext::default(),
@@ -350,10 +180,10 @@ impl Cpu {
     #[inline]
     pub fn update_fuel(&mut self, new: u64) {
         // Update the instruction count based on the amount of fuel consumed.
-        self.icount += self.fuel.start - self.fuel.remaining;
+        self.icount = self.icount.strict_add_signed(self.fuel.start as i64 - self.fuel.remaining);
 
         // Set new fuel amount.
-        self.fuel.remaining = new;
+        self.fuel.remaining = new as i64;
         self.fuel.start = new;
     }
 
@@ -388,7 +218,7 @@ impl Cpu {
 
     #[inline]
     pub fn icount(&self) -> u64 {
-        self.icount + self.fuel.start - self.fuel.remaining
+        self.icount.strict_add_signed(self.fuel.start as i64 - self.fuel.remaining)
     }
 
     /// Translate a SLEIGH register offset to an Icicle varnode.
@@ -400,18 +230,40 @@ impl Cpu {
 
     /// Reads the register represented by `var`. For special registers, this may perform additional
     /// operations.
-    pub fn read_reg(&mut self, var: pcode::VarNode) -> u64 {
+    pub fn read_dyn_reg(&mut self, var: pcode::VarNode) -> DynamicValue {
         if let Some((_, handler)) =
             unsafe { (*self.reg_handlers.get()).iter_mut().find(|x| x.0 == var.id) }
         {
             handler.read(self);
         }
-        self.read_dynamic(var.into()).zxt()
+        self.read_dynamic(var.into())
+    }
+
+    /// Reads the register represented by `var`, truncating or zero-extending the value to 64 bits.
+    /// For special registers, this may perform additional operations.
+    pub fn read_reg(&mut self, var: pcode::VarNode) -> u64 {
+        self.read_dyn_reg(var).zxt()
+    }
+
+    /// Reads the register represented by `var` without performing any special operations, and
+    /// without checking that the register is valid.
+    pub unsafe fn read_var_unchecked<R: RegValue>(&self, var: pcode::VarNode) -> R {
+        unsafe { R::read_unchecked(&self.regs, var) }
     }
 
     /// Writes `val` to the register represented by `var`. For special registers, this may perform
     /// additional operations.
     pub fn write_reg(&mut self, var: pcode::VarNode, val: u64) {
+        self.write_trunc(var, val);
+        if let Some((_, handler)) =
+            unsafe { (*self.reg_handlers.get()).iter_mut().find(|x| x.0 == var.id) }
+        {
+            handler.write(self);
+        }
+    }
+
+    /// Like `write_reg` but supports writing 128-bit values.
+    pub fn write_reg_u128(&mut self, var: pcode::VarNode, val: u128) {
         self.write_trunc(var, val);
         if let Some((_, handler)) =
             unsafe { (*self.reg_handlers.get()).iter_mut().find(|x| x.0 == var.id) }
@@ -479,24 +331,29 @@ impl Cpu {
     /// part of the block, this function returns the offset of the operation that generated the
     /// exception. Otherwise the function returns None.
     ///
-    /// Safety: This function assumes that every statement in `block` is valid.
+    /// # Safety
+    ///
+    /// This function assumes that every statement in `block` is valid.
     pub unsafe fn interpret_block_unchecked(
         &mut self,
         block: &pcode::Block,
         offset: usize,
     ) -> Option<usize> {
-        for (i, inst) in block.instructions.iter().enumerate().skip(offset) {
-            self.interpret_unchecked(*inst);
+        let remaining = block.instructions.get(offset..)?;
+        for inst in remaining {
+            unsafe { self.interpret_unchecked(inst) };
             if self.exception.code != ExceptionCode::None as u32 {
-                return Some(i);
+                return block.instructions.element_offset(inst);
             }
         }
         None
     }
 
-    /// Safety: This function assumes that `stmt` is valid.
+    /// # Safety
+    ///
+    /// This function assumes that `stmt` is valid.
     #[inline]
-    pub unsafe fn interpret_unchecked(&mut self, stmt: pcode::Instruction) {
+    pub unsafe fn interpret_unchecked(&mut self, stmt: &pcode::Instruction) {
         interpret(&mut UncheckedExecutor { cpu: self }, stmt)
     }
 
@@ -508,13 +365,11 @@ impl Cpu {
                 _ => target,
             },
             BlockExit::Call { target, fallthrough } => {
-                if self.enable_shadow_stack {
-                    self.push_shadow_stack(fallthrough);
-                }
+                self.push_shadow_stack(fallthrough);
                 Target::External(target)
             }
             BlockExit::Return { target } => {
-                if self.enable_shadow_stack {
+                if self.shadow_stack_state != ShadowStackState::Disabled {
                     let target_pc = self.read_dynamic(target).zxt();
                     self.pop_shadow_stack(target_pc);
                 }
@@ -525,9 +380,18 @@ impl Cpu {
 
     #[inline]
     pub fn push_shadow_stack(&mut self, addr: u64) {
+        if self.shadow_stack_state != ShadowStackState::Disabled {
+            self.force_push_shadow_stack(addr);
+        }
+    }
+
+    #[inline]
+    pub fn force_push_shadow_stack(&mut self, addr: u64) {
         if self.shadow_stack.offset >= SHADOW_STACK_SIZE {
-            self.exception.code = ExceptionCode::ShadowStackOverflow as u32;
-            self.exception.value = addr;
+            if self.shadow_stack_state == ShadowStackState::Enabled {
+                self.exception.code = ExceptionCode::ShadowStackOverflow as u32;
+                self.exception.value = addr;
+            }
             return;
         }
 
@@ -544,23 +408,25 @@ impl Cpu {
                 return;
             }
         }
-        self.exception.code = ExceptionCode::ShadowStackInvalid as u32;
-        self.exception.value = target;
+        if self.shadow_stack_state == ShadowStackState::Enabled {
+            self.exception.code = ExceptionCode::ShadowStackInvalid as u32;
+            self.exception.value = target;
+        }
     }
 
     #[inline]
     pub fn call_hook(&mut self, id: pcode::HookId, addr: u64) {
-        // @fixme(Safety): we need a mechanism to ensure that that the `hooks` field is never
+        // @fixme(Safety): we need a mechanism to ensure that the `hooks` field is never
         // touched by the hook we are calling. (e.g., consider using a `Lens` type?).
         unsafe {
             let hooks = self.trace.hooks.get();
-            (&mut (*hooks))[id as usize].call(self, addr);
+            (&mut *hooks)[id as usize].call(self, addr);
         }
     }
 
     /// Read a pointer-like argument according to the configured calling convention
     pub fn read_ptr_arg(&mut self, n: usize) -> MemResult<u64> {
-        if let Some(&var) = self.arch.calling_cov.integers.get(n) {
+        if let Some(&var) = self.arch.call_cov.integers.get(n) {
             return Ok(self.read_dynamic(var.into()).zxt());
         }
 
@@ -568,19 +434,27 @@ impl Cpu {
         let ptr_size = self.arch.reg_pc.size as u64;
         let stack_ptr: u64 = self.read_dynamic(self.arch.reg_sp.into()).zxt();
         let addr = stack_ptr
-            + self.arch.calling_cov.stack_offset
-            + ptr_size * (n - self.arch.calling_cov.integers.len()) as u64;
+            + self.arch.call_cov.stack_offset
+            + ptr_size * (n - self.arch.call_cov.integers.len()) as u64;
+        if !self.mem.is_regular_region(addr, ptr_size) {
+            return Err(crate::mem::MemError::Unmapped);
+        }
 
         let mut buf = [0; 8];
         self.mem.read_bytes(addr, &mut buf[..ptr_size as usize], perm::READ)?;
         Ok(self.arch.bytes_to_pointer(buf))
     }
 
+    pub fn get_block_key(&self, vaddr: u64) -> BlockKey {
+        let isa_mode = self.isa_mode() as u64;
+        BlockKey { vaddr, isa_mode }
+    }
+
     /// Update pointers used directly in the JIT.
     ///
-    /// This must be called before entering the JIT.
+    /// Safety: This must be called before entering the JIT, but not called from within the JIT.
+    // @todo: optimize: this doesn't need to be done every time we enter the JIT.
     pub fn update_jit_context(&mut self) {
-        // @todo: optimize: this doesn't need to be done every time we enter the JIT.
         self.jit_ctx.tlb_ptr = self.mem.tlb.as_mut();
         for (dst, src) in self.jit_ctx.tracer_mem.iter_mut().zip(self.trace.storage_ptr()) {
             *dst = src;
@@ -626,15 +500,18 @@ impl<'a> PcodeExecutor for UncheckedExecutor<'a> {
         self.cpu.exception.value = value;
     }
 
+    fn invalid_instruction(&mut self) {
+        self.exception(ExceptionCode::InvalidInstruction, self.cpu.read_pc());
+    }
+
     fn next_instruction(&mut self, addr: u64, _len: u64) {
         self.cpu.write_pc(addr);
-        match self.cpu.fuel.remaining.checked_sub(1) {
-            Some(fuel) => self.cpu.fuel.remaining = fuel,
-            None => {
-                self.cpu.exception.code = ExceptionCode::InstructionLimit as u32;
-                self.cpu.exception.value = addr;
-            }
+        if self.cpu.fuel.remaining == 0 {
+            self.cpu.exception.code = ExceptionCode::InstructionLimit as u32;
+            self.cpu.exception.value = addr;
+            return;
         }
+        self.cpu.fuel.remaining -= 1;
     }
 
     fn load_mem<const N: usize>(&mut self, id: pcode::MemId, addr: u64) -> Option<[u8; N]> {
@@ -643,7 +520,7 @@ impl<'a> PcodeExecutor for UncheckedExecutor<'a> {
                 Ok(val) => Some(val),
                 Err(err) => {
                     self.exception(ExceptionCode::from_load_error(err), addr);
-                    return None;
+                    None
                 }
             },
             pcode::REGISTER_SPACE => {
@@ -730,6 +607,7 @@ impl<'a> PcodeExecutor for UncheckedExecutor<'a> {
     }
 }
 
+#[derive(Clone, Default)]
 pub struct CpuSnapshot {
     pub regs: Regs,
     pub args: [u128; 8],
@@ -739,6 +617,26 @@ pub struct CpuSnapshot {
     pub icount: u64,
     pub block_id: u64,
     pub block_offset: u64,
+}
+
+impl ValueSource for CpuSnapshot {
+    fn write_var<R: RegValue>(&mut self, var: pcode::VarNode, value: R) {
+        R::write(&mut self.regs, var, value)
+    }
+
+    fn read_var<R: RegValue>(&self, var: pcode::VarNode) -> R {
+        R::read(&self.regs, var)
+    }
+}
+
+impl CpuSnapshot {
+    pub fn write_u64(&mut self, var: pcode::VarNode, value: u64) {
+        self.regs.write_trunc(var, value);
+    }
+
+    pub fn read_u64(&self, var: impl Into<pcode::Value>) -> u64 {
+        self.regs.read_dynamic(var.into()).zxt()
+    }
 }
 
 impl Cpu {
@@ -753,6 +651,17 @@ impl Cpu {
             block_id: self.block_id,
             block_offset: self.block_offset,
         })
+    }
+
+    pub fn snapshot_into(&self, store: &mut CpuSnapshot) {
+        store.regs.clone_from(&self.regs);
+        store.args = self.args;
+        store.shadow_stack.clone_from(&self.shadow_stack);
+        store.exception = self.exception;
+        store.pending_exception = self.pending_exception;
+        store.icount = self.icount;
+        store.block_id = self.block_id;
+        store.block_offset = self.block_offset;
     }
 
     pub fn restore(&mut self, snapshot: &CpuSnapshot) {
@@ -773,7 +682,91 @@ impl Cpu {
     }
 }
 
-pub fn generic_on_boot(cpu: &mut Cpu, entry: u64) {
-    cpu.reset();
-    cpu.write_pc(entry);
+pub const SHADOW_STACK_SIZE: usize = 0x1000;
+
+#[repr(C, align(16))]
+pub struct ShadowStack {
+    pub stack: [ShadowStackEntry; SHADOW_STACK_SIZE],
+    offset: usize,
+}
+
+impl Clone for ShadowStack {
+    fn clone(&self) -> Self {
+        Self { stack: self.stack, offset: self.offset }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.stack[..source.offset].clone_from_slice(&source.stack[..source.offset]);
+        self.offset = source.offset;
+    }
+}
+
+impl Default for ShadowStack {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ShadowStack {
+    pub fn new() -> Self {
+        Self { stack: [ShadowStackEntry::default(); SHADOW_STACK_SIZE], offset: 0 }
+    }
+
+    #[inline(always)]
+    pub fn as_slice(&self) -> &[ShadowStackEntry] {
+        // Safety: we always ensure that `self.offset` is in bounds.
+        unsafe { self.stack.get_unchecked(..self.offset) }
+    }
+
+    #[inline(always)]
+    pub fn depth(&self) -> usize {
+        self.offset
+    }
+}
+
+#[derive(Default, Copy, Clone)]
+pub struct ShadowStackEntry {
+    pub addr: u64,
+    pub block: u64,
+}
+
+impl std::fmt::Debug for ShadowStackEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#x}", self.addr)
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum ShadowStackState {
+    /// Disable all shadow stack related operations.
+    Disabled,
+    /// Maintain a shadow stack, but do not check for invalid states.
+    Debug,
+    /// Enable shadow stack operations, and check for invalid states.
+    Enabled,
+}
+
+#[repr(C)]
+pub struct JitContext {
+    pub tlb_ptr: *mut TranslationCache,
+    pub tracer_mem: [*mut u8; trace::MAX_TRACER_MEM],
+    pub hooks: [trace::HookData; trace::MAX_HOOKS],
+}
+
+impl Default for JitContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JitContext {
+    pub fn new() -> Self {
+        const NULL_HOOK: trace::HookData = trace::HookData::null();
+
+        Self {
+            tlb_ptr: std::ptr::null_mut(),
+            tracer_mem: [std::ptr::null_mut(); trace::MAX_TRACER_MEM],
+            hooks: [NULL_HOOK; trace::MAX_HOOKS],
+        }
+    }
 }

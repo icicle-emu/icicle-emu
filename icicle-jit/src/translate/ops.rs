@@ -1,6 +1,5 @@
 use std::mem::size_of;
 
-use cranelift::codegen::ir::AliasRegion;
 use cranelift::prelude::*;
 use icicle_cpu::{Cpu, ExceptionCode, HookData, cpu::JitContext};
 use memoffset::offset_of;
@@ -20,19 +19,23 @@ pub(super) struct Ctx<'a, 'b> {
 
 impl<'a, 'b> Ctx<'a, 'b> {
     fn load_tracer_mem_ptr(&mut self, id: u16) -> Value {
-        let ptr_type = Type::int_with_byte_size(size_of::<*mut *mut u8>() as u16).unwrap();
+        let entry_type = Type::int_with_byte_size(size_of::<*mut u8>() as u16).unwrap();
+
         let offset: i32 = VmPtr::jit_ctx_offset()
             + offset_of!(JitContext, tracer_mem) as i32
-            + id as i32 * ptr_type.bytes() as i32;
-        self.trans.builder.ins().load(
-            ptr_type,
-            MemFlags::trusted().with_alias_region(Some(AliasRegion::Vmctx)),
-            self.trans.vm_ptr.0,
-            offset,
-        )
+            + id as i32 * entry_type.bytes() as i32;
+
+        let ptr_type = Type::int_with_byte_size(size_of::<*mut u8>() as u16).unwrap();
+        let mem_flags = super::vm_state_mem_flags(&self.trans.builder);
+        self.trans.builder.ins().load(ptr_type, mem_flags, self.trans.vm_ptr.0, offset)
     }
 
-    pub fn get_trace_store_ptr(&mut self, id: u16, offset: pcode::Value) -> Value {
+    pub fn slice_trace_mem(&mut self, id: u16, offset: pcode::Value, _size: u8) -> Value {
+        // @fixme: update when checked tracer storage is merged.
+        self.slice_trace_mem_unchecked(id, offset)
+    }
+
+    pub fn slice_trace_mem_unchecked(&mut self, id: u16, offset: pcode::Value) -> Value {
         let base = self.load_tracer_mem_ptr(id);
         if offset.const_eq(0) {
             return base;
@@ -46,16 +49,17 @@ impl<'a, 'b> Ctx<'a, 'b> {
             + offset_of!(JitContext, hooks) as i32
             + (id as usize * size_of::<HookData>()) as i32;
 
+        let mem_flags = super::vm_state_mem_flags(&self.trans.builder);
         let fn_ptr = self.trans.builder.ins().load(
             Type::int_with_byte_size(size_of::<fn(*mut Cpu, u64, *mut ())>() as u16).unwrap(),
-            MemFlags::trusted().with_alias_region(Some(AliasRegion::Vmctx)),
+            mem_flags,
             self.trans.vm_ptr.0,
             base + offset_of!(HookData, fn_ptr) as i32,
         );
 
         let data_ptr = self.trans.builder.ins().load(
             Type::int_with_byte_size(size_of::<fn(*mut ())>() as u16).unwrap(),
-            MemFlags::trusted().with_alias_region(Some(AliasRegion::Vmctx)),
+            mem_flags,
             self.trans.vm_ptr.0,
             base + offset_of!(HookData, data_ptr) as i32,
         );
@@ -191,9 +195,9 @@ impl<'a, 'b> Ctx<'a, 'b> {
             // Overflow only occurs when `a = -2^{bits-1} and b = -1`
             let overflow = {
                 let a_val: u64 = 1 << ((self.instruction.output.size as u32 * 8) - 1);
-                let a_cond = self.trans.builder.ins().icmp_imm(IntCC::Equal, a, a_val as i64);
+                let a_cond = self.trans.builder.ins().icmp_imm_u(IntCC::Equal, a, a_val as i64);
                 let b_val = u64::MAX >> (u64::BITS - self.instruction.output.size as u32 * 8);
-                let b_cond = self.trans.builder.ins().icmp_imm(IntCC::Equal, b, b_val as i64);
+                let b_cond = self.trans.builder.ins().icmp_imm_u(IntCC::Equal, b, b_val as i64);
                 self.trans.builder.ins().band(a_cond, b_cond)
             };
 
@@ -403,8 +407,8 @@ pub(super) fn sign_extend(
 
     let x = trans.resize_int(value, in_size, out_size);
     let shift = (out_size - in_size) as i64 * 8;
-    let x = trans.builder.ins().ishl_imm(x, shift);
-    trans.builder.ins().sshr_imm(x, shift)
+    let x = trans.builder.ins().ishl_imm_u(x, shift);
+    trans.builder.ins().sshr_imm_u(x, shift)
 }
 
 pub(super) fn float_div(trans: &mut Translator, a: Value, b: Value) -> Value {
@@ -528,7 +532,7 @@ pub(super) fn int_signed_right(
 ) -> Value {
     let max_shift = (ty.bits() - 1) as i64;
     match of {
-        Overflow::True => trans.builder.ins().sshr_imm(x, max_shift),
+        Overflow::True => trans.builder.ins().sshr_imm_u(x, max_shift),
         Overflow::False => trans.builder.ins().sshr(x, shift),
         Overflow::Unknown(overflow) => {
             let max_shift = trans.builder.ins().iconst(types::I16, max_shift);
@@ -619,7 +623,7 @@ pub(super) fn int_negate(trans: &mut Translator, x: Value) -> Value {
 
 pub(super) fn bool_not(trans: &mut Translator, input: Value) -> Value {
     let x = trans.builder.ins().bnot(input);
-    trans.builder.ins().band_imm(x, 0b1)
+    trans.builder.ins().band_imm_u(x, 0b1)
 }
 
 pub(super) fn float_less(trans: &mut Translator, a: Value, b: Value) -> Value {
@@ -642,7 +646,7 @@ pub(super) fn float_not_equal(trans: &mut Translator, a: Value, b: Value) -> Val
 mod test {
     use std::cell::RefCell;
 
-    use icicle_cpu::{Arch, Cpu, ValueSource};
+    use icicle_cpu::{Arch, Cpu, ValueSource, lifter::BlockKey};
 
     fn compile_instruction(jit: &mut crate::JIT, inst: pcode::Instruction) -> crate::JitFunction {
         jit.il_dump = Some(String::new());
@@ -653,7 +657,7 @@ mod test {
                     block.push(inst);
                     block
                 },
-                entry: Some(0x0),
+                entry: Some(BlockKey::default()),
                 start: 0x0,
                 end: 0x1,
                 context: 0,
@@ -667,7 +671,7 @@ mod test {
         })
         .unwrap();
 
-        jit.entry_points[&0]
+        jit.entry_points[&BlockKey::default()]
     }
 
     struct Checker<T> {
@@ -743,7 +747,7 @@ mod test {
             cpu.write_var(self.a, a);
             cpu.write_var(self.b, b);
             cpu.write_trunc(self.out, 0xaaaa_aaaa_u32);
-            unsafe { cpu.interpret_unchecked(self.inst) };
+            unsafe { cpu.interpret_unchecked(&self.inst) };
             let interpreter_out = cpu.read_dynamic(self.out.into()).zxt();
 
             cpu.write_var(self.a, a);
@@ -763,7 +767,7 @@ mod test {
 
             cpu.write_var(self.a, a);
             cpu.write_trunc(self.out, 0xaaaa_aaaa_u32);
-            unsafe { cpu.interpret_unchecked(self.inst) };
+            unsafe { cpu.interpret_unchecked(&self.inst) };
             let interpreter_out = cpu.read_dynamic(self.out.into()).zxt();
 
             cpu.write_var(self.a, a);

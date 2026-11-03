@@ -1,8 +1,10 @@
+use crate::ShadowStackState;
+
 pub struct Config {
     pub triple: target_lexicon::Triple,
     pub enable_jit: bool,
     pub enable_jit_mem: bool,
-    pub enable_shadow_stack: bool,
+    pub shadow_stack: ShadowStackState,
     pub enable_recompilation: bool,
     pub track_uninitialized: bool,
     pub optimize_instructions: bool,
@@ -24,7 +26,7 @@ impl Default for Config {
             triple: target_lexicon::Triple::unknown(),
             enable_jit: true,
             enable_jit_mem: true,
-            enable_shadow_stack: true,
+            shadow_stack: ShadowStackState::Disabled,
             enable_recompilation: true,
             track_uninitialized: false,
             optimize_instructions: true,

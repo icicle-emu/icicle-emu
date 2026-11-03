@@ -4,8 +4,8 @@
 use icicle_vm::{
     CodeInjector, Vm,
     cpu::{
-        BlockGroup, BlockTable, Cpu, HookHandler, ValueSource,
-        lifter::{Block, BlockExit},
+        BlockGroup, Cpu, HookHandler, ValueSource,
+        lifter::{Block, BlockExit, BlockTable},
     },
 };
 use pcode::PcodeDisplay;
@@ -80,6 +80,7 @@ impl HookHandler for CmpInstTable {
     }
 }
 
+#[derive(Clone)]
 pub struct CmpCallData {
     pub addr: u64,
     pub values: Vec<([u8; 64], [u8; 64])>,
@@ -177,11 +178,11 @@ impl HookHandler for CmpCallTable {
 #[derive(Copy, Clone)]
 pub struct CmpLog2Ref {
     /// The hook responsible for logging instruction-level comparisons.
-    inst: pcode::HookId,
+    pub inst: pcode::HookId,
     /// The hook responsible for logging call-level comparisons.
-    call: pcode::HookId,
+    pub call: pcode::HookId,
     /// The varnode that controls whether the cmplog hooks should be invoked or not.
-    enabled: pcode::VarNode,
+    pub enabled: pcode::VarNode,
 }
 
 impl CmpLog2Ref {
@@ -343,7 +344,7 @@ impl<F: FnMut(&Block) -> bool + 'static> CodeInjector for CmpLog2<F> {
                 if let Some(caller) = self.instrument_call(cpu, block) {
                     tracing::debug!(
                         "instrumenting call at {caller:#x}: {}",
-                        code.disasm.get(&caller).map_or("", String::as_str)
+                        code.disasm.get(&cpu.get_block_key(caller)).map_or("", String::as_str)
                     );
                     modified |= true;
                 }
@@ -352,7 +353,7 @@ impl<F: FnMut(&Block) -> bool + 'static> CodeInjector for CmpLog2<F> {
             for addr in cmps {
                 tracing::debug!(
                     "instrumenting comparison at {addr:#x}: {}",
-                    code.disasm.get(&addr).map_or("", String::as_str)
+                    code.disasm.get(&cpu.get_block_key(addr)).map_or("", String::as_str)
                 );
             }
 

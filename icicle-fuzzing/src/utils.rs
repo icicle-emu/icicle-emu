@@ -99,7 +99,7 @@ impl BlockCoverageTracker {
         let mut new = false;
         for block in &code.blocks[self.seen_internal_blocks..] {
             if let Some(entry) = block.entry {
-                new |= self.add(entry, input_id);
+                new |= self.add(entry.vaddr, input_id);
             }
         }
         tracing::debug!("{} blocks found ({} internal blocks)", self.seen.len(), code.blocks.len());

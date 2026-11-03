@@ -7,9 +7,9 @@ edition = "2021"
 sleigh-parse = { path = "../sleigh-parse" }
 sleigh-runtime = { path = "../sleigh-runtime" }
 pcode = { path = "../pcode" }
-serde-xml-rs = { version = "0.8.1", optional = true }
-serde = { version = "1.0.197", optional = true }
-serde_derive = { version = "1.0.197", optional = true }
+serde-xml-rs = { version = "0.8.2", optional = true }
+serde = { version = "1.0.229", optional = true }
+serde_derive = { version = "1.0.229", optional = true }
 
 [features]
 default = ["ldefs"]

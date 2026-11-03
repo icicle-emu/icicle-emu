@@ -512,6 +512,19 @@ impl From<Op> for Instruction {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct UnsafeMarker {
+    inner: (),
+}
+
+impl UnsafeMarker {
+    /// Safety: This operation requires that the caller ensures that the emulator state is
+    /// consistent with the provided inputs.
+    pub unsafe fn new() -> Self {
+        UnsafeMarker { inner: () }
+    }
+}
+
 /// P-code operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Op {
@@ -604,6 +617,9 @@ pub enum Op {
     HookIf(HookId),
     TracerLoad(StoreId),
     TracerStore(StoreId),
+    UncheckedTracerLoad(StoreId, UnsafeMarker),
+    UncheckedTracerStore(StoreId, UnsafeMarker),
+
     Exception,
 
     InstructionMarker,
@@ -613,7 +629,9 @@ pub enum Op {
 impl Op {
     pub fn has_side_effects(&self) -> bool {
         match self {
-            Op::TracerLoad(_)
+            Op::UncheckedTracerLoad(..)
+            | Op::UncheckedTracerStore(..)
+            | Op::TracerLoad(_)
             | Op::TracerStore(_)
             | Op::Load(_)
             | Op::Store(_)
@@ -734,7 +752,8 @@ impl Op {
             Op::InstructionMarker => (NONE_SIZE, (&[8], &[8])),
             Op::Invalid => (NONE_SIZE, (NONE_SIZE, NONE_SIZE)),
 
-            Op::TracerLoad(_) | Op::TracerStore(_) => unreachable!("deprecated"),
+            Op::TracerLoad(_) | Op::UncheckedTracerLoad(..) => (ALL_SIZES, (INT_SIZES, NONE_SIZE)),
+            Op::TracerStore(_) | Op::UncheckedTracerStore(..) => (NONE_SIZE, (INT_SIZES, ALL_SIZES)),
         }
     }
 }

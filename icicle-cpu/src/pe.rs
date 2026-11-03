@@ -17,14 +17,14 @@ use object::{
 
 enum RelocationError {
     Access(icicle_mem::MemError),
-    Unsupported(u16),
+    Unsupported(pe::BaseRelocationType),
 }
 
 impl std::fmt::Display for RelocationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Access(err) => write!(f, "Failed to access relocation data: {err:?}"),
-            Self::Unsupported(typ) => write!(f, "Relocation type {typ:#06x} not supported"),
+            Self::Unsupported(typ) => write!(f, "Relocation type {typ:?} not supported"),
         }
     }
 }
@@ -102,7 +102,7 @@ where
 
     // find memory
     let (base_addr, relocation_offset) =
-        if dll_characteristics & pe::IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE == 0 {
+        if !dll_characteristics.contains(pe::IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE) {
             (requested_base_addr, 0)
         }
         else {
@@ -234,10 +234,10 @@ where
 }
 
 fn get_permission(section: &ImageSectionHeader) -> u8 {
-    let flags: u32 = section.characteristics.get(object::LittleEndian).into();
+    let flags: pe::SectionFlags = section.characteristics.get(object::LittleEndian).into();
     let mut perm = perm::MAP;
-    perm |= if (flags & pe::IMAGE_SCN_MEM_READ) == 0 { perm::NONE } else { perm::READ };
-    perm |= if (flags & pe::IMAGE_SCN_MEM_WRITE) == 0 { perm::NONE } else { perm::WRITE };
-    perm |= if (flags & pe::IMAGE_SCN_MEM_EXECUTE) == 0 { perm::NONE } else { perm::EXEC };
+    perm |= if flags.contains(pe::IMAGE_SCN_MEM_READ) { perm::READ } else { perm::NONE };
+    perm |= if flags.contains(pe::IMAGE_SCN_MEM_WRITE) { perm::WRITE } else { perm::NONE };
+    perm |= if flags.contains(pe::IMAGE_SCN_MEM_EXECUTE) { perm::EXEC } else { perm::NONE };
     perm
 }

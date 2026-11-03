@@ -15,4 +15,4 @@ pcode = { workspace = true }
 target-lexicon = { workspace = true }
 bitflags = "2.5.0"
 bstr = { version = "1.9.1", default-features = false, features = ["std"] }
-bytemuck = "1.15.0"
+bytemuck = { workspace = true }
