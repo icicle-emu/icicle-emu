@@ -53,10 +53,8 @@ pub fn build_with_path(config: &Config, processors: &Path) -> Result<Vm, BuildEr
     // Ghidra 12.1 removed the ISAModeSwitch register from the ARM SLEIGH spec and replaced
     // it with a .pspec alias (TB -> ISAModeSwitch). Since we don't parse .pspec register_data
     // aliases, fall back to the underlying TB register.
-    let reg_isa_mode = lang
-        .sleigh
-        .get_varnode("ISAModeSwitch")
-        .or_else(|| lang.sleigh.get_varnode("TB"));
+    let reg_isa_mode =
+        lang.sleigh.get_varnode("ISAModeSwitch").or_else(|| lang.sleigh.get_varnode("TB"));
 
     // Set initial context values for architectures that support mode switching.
     //
@@ -67,6 +65,16 @@ pub fn build_with_path(config: &Config, processors: &Path) -> Result<Vm, BuildEr
             true => vec![lang.initial_ctx],
             false => vec![arm::ARM_MODE_CTX, arm::THUMB_MODE_CTX],
         },
+        target_lexicon::Architecture::Mips32(_) => {
+            match lang.sleigh.get_context_field("ISA_MODE") {
+                Some(field) => {
+                    let mut alternate_ctx = lang.initial_ctx;
+                    field.field.set(&mut alternate_ctx, 1);
+                    vec![lang.initial_ctx, alternate_ctx]
+                }
+                None => vec![lang.initial_ctx],
+            }
+        }
         _ => vec![lang.initial_ctx],
     };
 
@@ -181,8 +189,10 @@ fn register_helpers_for(vm: &mut Vm, arch: target_lexicon::Architecture) {
         | Architecture::Mips32(_)
         | Architecture::Mips64(_) => {
             if let Some(zero_reg) = vm.cpu.arch.sleigh.get_varnode("zero") {
-            	vm.lifter.patchers.push(icicle_cpu::lifter::ignore_zero_reg_write_patcher(zero_reg));
-        	}
+                vm.lifter
+                    .patchers
+                    .push(icicle_cpu::lifter::ignore_zero_reg_write_patcher(zero_reg));
+            }
         }
         _ => {}
     }
