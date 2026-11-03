@@ -1,26 +1,6 @@
 #![allow(unused)]
 
-use super::*;
-
-macro_rules! checked {
-    ($func:path) => {
-        |cpu: &mut Cpu, dst: VarNode, args: [Value; 2]| call_checked(cpu, dst, args, $func)
-    };
-}
-
-type Result<T = (), E = ExceptionCode> = std::result::Result<T, E>;
-
-fn call_checked(
-    cpu: &mut Cpu,
-    dst: VarNode,
-    args: [Value; 2],
-    func: impl FnOnce(&mut Cpu, VarNode, [Value; 2]) -> Result,
-) {
-    if let Err(e) = func(cpu, dst, args) {
-        cpu.exception.code = e as u32;
-        cpu.exception.value = 0;
-    }
-}
+use super::{simd::Simd, *};
 
 pub const HELPERS: &[(&str, PcodeOpHelper)] = &[
     ("enableIRQinterrupts", enable_interrupts),
@@ -30,10 +10,13 @@ pub const HELPERS: &[(&str, PcodeOpHelper)] = &[
     // NEONv7
     ("ArmV7NeonProbe", arm_v7_neon_probe),
     ("VectorCompareEqual", checked!(vector_compare_equal)),
+    ("VectorCompareGreaterThanOrEqual", checked!(vector_compare_greater_than_or_equal)),
+    ("VectorCompareGreaterThan", checked!(vector_compare_greater_than)),
     ("VectorPairwiseAdd", checked!(vector_pairwise_add)),
     ("VectorAdd", checked!(vector_add)),
     ("VectorSub", checked!(vector_sub)),
     ("vrev", vrev),
+    ("VectorCopyLong", checked!(vector_copy_long)),
     ("VectorCopyNarrow", checked!(vector_copy_narrow)),
     ("VectorShiftRight", checked!(vector_shift_right)),
     ("VectorShiftRightInsert", checked!(vector_shift_right_insert)),
@@ -52,7 +35,7 @@ pub const HELPERS: &[(&str, PcodeOpHelper)] = &[
     ("SHA256ScheduleUpdate0", sha256_schedule_update_0),
     ("SHA256ScheduleUpdate1", sha256_schedule_update_1),
     ("SHA256hash", sha256_hash),
-	("FixedToFP", fpu_fixed_to_fp),
+    ("FixedToFP", fpu_fixed_to_fp),
 ];
 
 fn arm_v7_neon_probe(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
@@ -74,150 +57,22 @@ fn ensure_matching_vector_args(cpu: &mut Cpu, dst: VarNode, args: [Value; 2], es
     true
 }
 
-fn ones(bits: u32) -> u128 {
-    if bits == 128 { u128::MAX } else { (1u128 << bits) - 1 }
-}
-
-struct Simd {
-    value: u128,
-    size: u8,
-    lane_size: u8,
-}
-
-impl Simd {
-    fn read(cpu: &mut Cpu, value: Value, esize: u8) -> Result<Self> {
-        let size = value.size();
-        if ![1, 2, 4, 8].contains(&esize) || size % esize != 0 || size > 128 {
-            return Err(ExceptionCode::InvalidOpSize);
-        }
-        let value: u128 = cpu.read_dynamic(value).zxt();
-        Ok(Self::new(value, size, esize))
-    }
-
-    fn new(value: u128, size: u8, lane_size: u8) -> Self {
-        Self { value, size, lane_size }
-    }
-
-    fn broadcast(value: u128, size: u8, lane_size: u8) -> Self {
-        let mut out = Self::new(0, size, lane_size);
-        for index in 0..out.n_lanes() {
-            out.set_lane(index, value);
-        }
-        out
-    }
-
-    fn n_lanes(&self) -> u8 {
-        (self.size / self.lane_size)
-    }
-
-    fn set_lane(&mut self, index: u8, value: u128) {
-        let shift = index * (self.lane_size * 8);
-        let mask = ones(self.lane_size as u32 * 8) << shift;
-        self.value = (self.value & !mask) | (((value as u128) << shift) & mask);
-    }
-
-    fn get_lane(&self, index: u8) -> u128 {
-        let shift = index * (self.lane_size * 8);
-        let mask = ones(self.lane_size as u32 * 8) << shift;
-        ((self.value & mask) >> shift) as u128
-    }
-
-    fn apply(&self, mut f: impl FnMut(u128) -> u128) -> Simd {
-        let mut out = Simd::new(0, self.size, self.lane_size);
-        for index in 0..self.n_lanes() {
-            out.set_lane(index, f(self.get_lane(index)));
-        }
-        out
-    }
-
-    fn resize_lanes(&self, new_lane_size: u8) -> Self {
-        assert!([1, 2, 4, 8, 16].contains(&new_lane_size));
-
-        let mut out = Simd::new(0, new_lane_size * self.n_lanes(), new_lane_size);
-        for index in 0..self.n_lanes() {
-            out.set_lane(index, self.get_lane(index));
-        }
-        out
-    }
-
-    fn resize_sxt(&self, new_lane_size: u8) -> Self {
-        assert!([1, 2, 4, 8, 16].contains(&new_lane_size));
-
-        let mut out = Simd::new(0, new_lane_size * self.n_lanes(), new_lane_size);
-        for index in 0..self.n_lanes() {
-            out.set_lane(index, pcode::sxt128(self.get_lane(index), 8 * self.lane_size as u64));
-        }
-        out
-    }
-
-    fn concat(&self, y: &Simd) -> Result<Simd> {
-        if self.size + y.size > 16 {
-            return Err(ExceptionCode::InvalidOpSize);
-        }
-        Ok(Simd::new(self.get() | (y.get() << self.size), self.size + y.size, self.lane_size))
-    }
-
-    fn get(&self) -> u128 {
-        self.value & ones(self.size as u32 * 8)
-    }
-}
-
-struct OpSizeError;
-
-fn check_size_match(a: &Simd, b: &Simd) -> Result {
-    if a.size != b.size {
-        return Err(ExceptionCode::InvalidOpSize);
-    }
-    Ok(())
-}
-
-fn packed(a: &Simd, b: &Simd, mut f: impl FnMut(u128, u128) -> u128) -> Result<Simd> {
-    check_size_match(a, b)?;
-    let mut out = Simd::new(0, a.size, a.lane_size);
-    for lane in 0..a.n_lanes() {
-        let a = a.get_lane(lane);
-        let b = b.get_lane(lane);
-        out.set_lane(lane, f(a, b));
-    }
-    Ok(out)
-}
-
-fn packed_signed(
-    a: &Simd,
-    b: &Simd,
-    mut f: impl FnMut(i128, i128) -> i128,
-) -> Result<Simd, ExceptionCode> {
-    packed(a, b, |x, y| {
-        let x = pcode::sxt128(x, 8 * a.lane_size as u64);
-        let y = pcode::sxt128(y, 8 * a.lane_size as u64);
-        f(x as i128, y as i128) as u128
-    })
-}
-
-fn pairwise(x: &Simd, mut f: impl FnMut(u64, u64) -> u64) -> Result<Simd> {
-    let mut out = Simd::new(0, x.size / 2, x.lane_size);
-    for lane in (0..x.n_lanes()).step_by(2) {
-        let a = x.get_lane(lane) as u64;
-        let b = x.get_lane(lane + 1) as u64;
-        out.set_lane(lane / 2, f(a as u64, b as u64) as u128);
-    }
-    Ok(out)
-}
-
-fn simd_set(cpu: &mut Cpu, dst: VarNode, value: Simd) -> Result {
-    if dst.size != value.size as u8 {
-        return Err(ExceptionCode::InvalidOpSize);
-    }
-    cpu.write_trunc(dst, value.value);
-    Ok(())
-}
-
 fn vector_compare_equal(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) -> Result {
-    let esize = cpu.args[0] as u8;
-    let a = Simd::read(cpu, args[0], esize)?;
-    let b = Simd::read(cpu, args[1], esize)?;
-    let result = packed(&a, &b, |x, y| if x == y { u128::MAX } else { 0 })?;
-    simd_set(cpu, dst, result)
+    simd::vector_compare(cpu, dst, args, cpu.args[0] as u8, true, |a, b| a == b)
+}
+
+/// cpu.args[1] = whether the elements are unsigned.
+///
+/// Note: the forms that compare against zero (which do not set `cpu.args[1]`) are not supported.
+fn vector_compare_greater_than_or_equal(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) -> Result {
+    let is_unsigned = cpu.args[1] == 1;
+    simd::vector_compare(cpu, dst, args, cpu.args[0] as u8, is_unsigned, |a, b| a >= b)
+}
+
+/// See [`vector_compare_greater_than_or_equal`].
+fn vector_compare_greater_than(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) -> Result {
+    let is_unsigned = cpu.args[1] == 1;
+    simd::vector_compare(cpu, dst, args, cpu.args[0] as u8, is_unsigned, |a, b| a > b)
 }
 
 // Note: SLEIGH uses this for both widening and non-widening vector adds, but we only implement
@@ -236,10 +91,10 @@ fn vector_add(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) -> Result {
 
     let is_signed = cpu.args[1] == 0;
     let result = match is_signed {
-        true => packed_signed(&a, &b, |a, b| a.wrapping_add(b))?,
-        false => packed(&a, &b, |a, b| a.wrapping_add(b))?,
+        true => simd::packed_signed(&a, &b, |a, b| a.wrapping_add(b))?,
+        false => simd::packed(&a, &b, |a, b| a.wrapping_add(b))?,
     };
-    simd_set(cpu, dst, result)
+    simd::simd_set(cpu, dst, result)
 }
 
 // [a, b] - [c, d] = [a - c, b - d]
@@ -247,8 +102,8 @@ fn vector_sub(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) -> Result {
     let esize = cpu.args[0] as u8;
     let a = Simd::read(cpu, args[0], esize)?;
     let b = Simd::read(cpu, args[1], esize)?;
-    let result = packed(&a, &b, |a, b| a.wrapping_sub(b))?;
-    simd_set(cpu, dst, result)
+    let result = simd::packed(&a, &b, |a, b| a.wrapping_sub(b))?;
+    simd::simd_set(cpu, dst, result)
 }
 
 // [a, b][c, d] = [a + b, c + d]
@@ -256,9 +111,9 @@ fn vector_pairwise_add(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) -> Result 
     let esize = cpu.args[0] as u8;
     let a = Simd::read(cpu, args[0], esize)?;
     let b = Simd::read(cpu, args[1], esize)?;
-    let low = pairwise(&a, |a, b| a.wrapping_add(b))?;
-    let high = pairwise(&b, |a, b| a.wrapping_add(b))?;
-    simd_set(cpu, dst, low.concat(&high)?)
+    let low = simd::pairwise(&a, |a, b| a.wrapping_add(b))?;
+    let high = simd::pairwise(&b, |a, b| a.wrapping_add(b))?;
+    simd::simd_set(cpu, dst, low.concat(&high)?)
 }
 
 // arg[0] = source, arg[1] = element size (bytes), cpu.args[0] = group_size (bytes)
@@ -275,7 +130,7 @@ fn vrev(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
     }
 
     let source: u128 = cpu.read_dynamic(args[0]).zxt();
-    let lane_mask = ones(esize as u32 * 8);
+    let lane_mask = simd::ones(esize as u32 * 8);
     for chunk in (0..dst.size as usize).step_by(group_size) {
         for i in 0..(group_size / esize_bytes) {
             let src_offset = chunk + i * esize_bytes;
@@ -286,6 +141,19 @@ fn vrev(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
     }
 }
 
+/// Sign or zero extend each element of a doubleword vector to twice the size (`vmovl`).
+/// arg[0] = source, arg[1] = element size, cpu.args[0] = whether the elements are unsigned
+fn vector_copy_long(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) -> Result {
+    let esize = cpu.read::<u8>(args[1]);
+    let is_unsigned = cpu.args[0] == 1;
+    let src = Simd::read(cpu, args[0], esize)?;
+    let result = match is_unsigned {
+        true => src.resize_lanes(2 * esize),
+        false => src.resize_sxt(2 * esize),
+    };
+    simd::simd_set(cpu, dst, result)
+}
+
 /// Copy the lower bits of a quadword vector to a doubleword vector.
 /// arg[0] = source, arg[1] = element size
 ///
@@ -294,7 +162,7 @@ fn vrev(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
 fn vector_copy_narrow(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) -> Result {
     let esize = cpu.read::<u8>(args[1]);
     let result = Simd::read(cpu, args[0], esize)?.resize_lanes(esize / 2);
-    simd_set(cpu, dst, result)
+    simd::simd_set(cpu, dst, result)
 }
 
 /// Take each element of a vector and shift it right by an immediate value storing the truncated
@@ -305,7 +173,7 @@ fn vector_shift_right(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) -> Result {
     let esize = cpu.args[0] as u8;
     let imm: u32 = cpu.read_dynamic(args[1]).zxt();
     let x = Simd::read(cpu, args[0], esize)?;
-    simd_set(cpu, dst, x.apply(|x| x >> imm))
+    simd::simd_set(cpu, dst, x.apply(|x| x >> imm))
 }
 
 /// Shift each element in source right by imm and insert into destination.
@@ -318,9 +186,9 @@ fn vector_shift_right_insert(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) -> R
     let a = Simd::read(cpu, args[0], esize)?;
     let b = Simd::read(cpu, args[1], esize)?;
 
-    let mask = ones(esize as u32 * 8) >> shift;
-    let result = packed(&a, &b, |x, y| (x & !mask) | (y >> shift))?;
-    simd_set(cpu, dst, result)
+    let mask = simd::ones(esize as u32 * 8) >> shift;
+    let result = simd::packed(&a, &b, |x, y| (x & !mask) | (y >> shift))?;
+    simd::simd_set(cpu, dst, result)
 }
 
 /// Shift each element in source left by imm and insert into destination.
@@ -333,9 +201,9 @@ fn vector_shift_left_insert(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) -> Re
     let a = Simd::read(cpu, args[0], esize)?;
     let b = Simd::read(cpu, args[1], esize)?;
 
-    let mask = ones(esize as u32 * 8) << shift;
-    let result = packed(&a, &b, |x, y| (x & !mask) | (y << shift))?;
-    simd_set(cpu, dst, result)
+    let mask = simd::ones(esize as u32 * 8) << shift;
+    let result = simd::packed(&a, &b, |x, y| (x & !mask) | (y << shift))?;
+    simd::simd_set(cpu, dst, result)
 }
 
 /// For each bit, copy the corresponding bit from source_d if the original destination was 1
@@ -377,7 +245,7 @@ fn vector_zip(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) -> Result {
 
     let a = Simd::read(cpu, args[0], esize)?;
     let b = Simd::read(cpu, args[1], esize)?;
-    check_size_match(&a, &b)?;
+    simd::check_size_match(&a, &b)?;
 
     let n_lanes = a.n_lanes();
     let mut out = Simd::new(0, a.size, esize);
@@ -389,7 +257,7 @@ fn vector_zip(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) -> Result {
         };
         out.set_lane(i, value);
     }
-    simd_set(cpu, dst, out)
+    simd::simd_set(cpu, dst, out)
 }
 
 /// Gets a dynamic element from a vector.
@@ -414,10 +282,10 @@ fn vector_multiply_accumulate(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) -> 
         true => Simd::broadcast(cpu.read_dynamic(args[1]).zxt(), dst.size, dst_esize),
         false => Simd::read(cpu, args[1], esize)?.resize_lanes(dst_esize),
     };
-    let product = packed(&a, &b, |a, b| a.wrapping_mul(b))?;
+    let product = simd::packed(&a, &b, |a, b| a.wrapping_mul(b))?;
 
     let prev = Simd::read(cpu, dst.into(), dst_esize)?;
-    simd_set(cpu, dst, packed(&prev, &product, |a, b| a.wrapping_add(b))?)
+    simd::simd_set(cpu, dst, simd::packed(&prev, &product, |a, b| a.wrapping_add(b))?)
 }
 
 // Note: even though there is a separate VectorMultipleLong op, this is still is used for some vmull
@@ -433,7 +301,7 @@ fn vector_multiply(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) -> Result {
         false => Simd::read(cpu, args[1], esize)?.resize_lanes(dst_esize),
     };
 
-    simd_set(cpu, dst, packed(&a, &b, |a, b| a.wrapping_mul(b))?)
+    simd::simd_set(cpu, dst, simd::packed(&a, &b, |a, b| a.wrapping_mul(b))?)
 }
 
 fn vector_multiply_long(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) -> Result {
@@ -445,15 +313,15 @@ fn vector_multiply_long(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) -> Result
         true => {
             let a = Simd::read(cpu, args[0], esize)?.resize_lanes(dst_esize);
             let b = Simd::read(cpu, args[1], esize)?.resize_lanes(dst_esize);
-            packed(&a, &b, |a, b| a.wrapping_mul(b))?
+            simd::packed(&a, &b, |a, b| a.wrapping_mul(b))?
         }
         false => {
             let a = Simd::read(cpu, args[0], esize)?.resize_sxt(dst_esize);
             let b = Simd::read(cpu, args[1], esize)?.resize_sxt(dst_esize);
-            packed(&a, &b, |a, b| a.wrapping_mul(b))?
+            simd::packed(&a, &b, |a, b| a.wrapping_mul(b))?
         }
     };
-    simd_set(cpu, dst, product)
+    simd::simd_set(cpu, dst, product)
 }
 
 /// Implements polynomial multiplication.
@@ -484,11 +352,11 @@ fn polynomial_multiply(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) -> Result 
     }
 
     let product = match esize {
-        1 => packed(&a, &b, |x, y| poly_mult(x, y, esize * 8))?,
-        8 => packed(&a, &b, |x, y| poly_mult(x, y, esize * 8))?,
+        1 => simd::packed(&a, &b, |x, y| poly_mult(x, y, esize * 8))?,
+        8 => simd::packed(&a, &b, |x, y| poly_mult(x, y, esize * 8))?,
         _ => return Err(ExceptionCode::InvalidOpSize),
     };
-    simd_set(cpu, dst, product)
+    simd::simd_set(cpu, dst, product)
 }
 
 fn sha256_hash(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
@@ -701,3 +569,71 @@ fn fpu_fixed_to_fp(cpu: &mut Cpu, dst: VarNode, args: [Value; 2]) {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fpu_fixed_to_fp_8byte_varnode_n32() {
+        let arch = crate::Arch::none();
+        let mut cpu = crate::Cpu::new_boxed(arch);
+
+        // Source register "a" (8 bytes) and destination register "b" (8 bytes).
+        let reg_a = cpu.arch.sleigh.get_varnode("a").unwrap();
+        let reg_b = cpu.arch.sleigh.get_varnode("b").unwrap();
+
+        // Write a fixed-point value into the 8-byte source register.
+        // Using 0x0001_0000 which represents 1.0 with 16 fractional bits.
+        cpu.write_var::<u64>(reg_a, 0x0001_0000);
+
+        // args[1] = m (fixed-point size in bits); pass via a const Value.
+        let m_value = pcode::Value::Const(32, 4);
+        let src_value = pcode::Value::Var(reg_a);
+
+        // cpu.args: [0]=n (float size), [1]=fbits, [2]=unsigned flag (0 = signed), [3]=rounding
+        cpu.args[0] = 32; // n = 32-bit float output
+        cpu.args[1] = 16; // fbits = 16 fractional bits
+        cpu.args[2] = 0; // signed
+        cpu.args[3] = 0; // default rounding
+
+        // Call through the public HELPERS table (same path as the interpreter).
+        let helper = arm::HELPERS.iter().find(|(name, _)| *name == "FixedToFP").unwrap().1;
+        // This panicked before the fix because the 8-byte VarNode was read as i32.
+        helper(&mut cpu, reg_b, [src_value, m_value]);
+
+        // Result should be 1.0f32 written into the lower bytes of reg_b.
+        let result: u64 = cpu.read_var(reg_b);
+        let float_val = f32::from_bits(result as u32);
+        assert!((float_val - 1.0).abs() < f32::EPSILON, "expected 1.0, got {float_val}");
+    }
+
+    /// `fbits == 32` is encodable (`vcvt.f32.s32 d0, d0, #32`: fbits = 64 - imm6)
+    /// and is the boundary case for the scale-factor shift.
+    #[test]
+    fn test_fpu_fixed_to_fp_fbits_32() {
+        let arch = crate::Arch::none();
+        let mut cpu = crate::Cpu::new_boxed(arch);
+
+        let reg_a = cpu.arch.sleigh.get_varnode("a").unwrap();
+        let reg_b = cpu.arch.sleigh.get_varnode("b").unwrap();
+
+        // 0x8000_0000 as a signed 32-bit fixed-point value with 32 fractional
+        // bits represents -2^31 / 2^32 = -0.5.
+        cpu.write_var::<u64>(reg_a, 0x8000_0000);
+
+        let m_value = pcode::Value::Const(32, 4);
+        let src_value = pcode::Value::Var(reg_a);
+
+        cpu.args[0] = 32; // n = 32-bit float output
+        cpu.args[1] = 32; // fbits = 32 fractional bits
+        cpu.args[2] = 0; // signed
+        cpu.args[3] = 0; // default rounding
+
+        let helper = arm::HELPERS.iter().find(|(name, _)| *name == "FixedToFP").unwrap().1;
+        helper(&mut cpu, reg_b, [src_value, m_value]);
+
+        let result: u64 = cpu.read_var(reg_b);
+        let float_val = f32::from_bits(result as u32);
+        assert!((float_val + 0.5).abs() < f32::EPSILON, "expected -0.5, got {float_val}");
+    }
+}
