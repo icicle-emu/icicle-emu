@@ -135,6 +135,10 @@ fn multi_step_after_fault_matches_single_steps() {
     assert_eq!(single.cpu.icount(), multi.cpu.icount());
 }
 
+fn arm_test_vm() -> crate::Vm {
+    crate::build(&Config { triple: "arm".parse().unwrap(), ..Config::default() }).unwrap()
+}
+
 #[test]
 fn disasm_change_check_distinguishes_isa_modes() {
     // The same bytes decode differently per instruction-set mode: `0x00000000` is `andeq r0,r0,r0`
@@ -142,8 +146,7 @@ fn disasm_change_check_distinguishes_isa_modes() {
     // lifted in both modes, so the disassembly-change check keeps its baseline per (vaddr,
     // isa_mode) and does not treat the second decode as self-modifying code. Lift a padding address
     // in Thumb then ARM and confirm the second lift is accepted.
-    let mut vm =
-        crate::build(&Config { triple: "arm".parse().unwrap(), ..Config::default() }).unwrap();
+    let mut vm = arm_test_vm();
 
     let addr = 0x1000;
     vm.cpu.mem.map_memory_len(addr, 0x1000, Mapping { perm: perm::NONE, value: 0 });
@@ -248,4 +251,72 @@ fn build_riscv64() {
 #[test]
 fn build_x86_64() {
     let _ = crate::build(&Config::from_target_triple("x86_64-none")).unwrap();
+}
+
+// Check that after JIT recompilation we don't merge blocks that share a vaddr but were lifted in
+// different ISA modes.
+#[test]
+fn recompile_does_not_mix_isa_modes() {
+    const A_MODE: u8 = 0;
+    const T_MODE: u8 = 1;
+
+    // The same bytes at 0x1000 are valid in both ARM and Thumb, but decode to different code that
+    // follows a different path:
+    //
+    // ARM:   0x1000 -> 0x1500 (increments r3) -> 0x1000
+    // Thumb: 0x1000 -> 0x1508 (increments r2) -> 0x1000
+    const CODE_A: &[u8] = &[
+        0x01, 0x00, 0x81,
+        0xe2, // 0x1000: ARM `add r0, r1, #1`; Thumb `movs r1, r0` + `b 0x1508`
+        0x3d, 0x01, 0x00, 0xea, // 0x1004: ARM `b 0x1500`
+    ];
+    const CODE_B: &[u8] = &[
+        0x01, 0x30, 0x83, 0xe2, // 0x1500: ARM `add r3, r3, #1`
+        0xbd, 0xfe, 0xff, 0xea, // 0x1504: ARM `b 0x1000`
+        0x01, 0x32, //             0x1508: Thumb `adds r2, #1`
+        0x79, 0xe5, //             0x150a: Thumb `b 0x1000`
+    ];
+
+    let mut vm = arm_test_vm();
+
+    vm.cpu.mem.map_memory_len(0x1000, 0x1000, Mapping {
+        perm: perm::READ | perm::EXEC | perm::INIT,
+        value: 0x00,
+    });
+    vm.cpu.mem.write_bytes(0x1000, CODE_A, perm::NONE).unwrap();
+    vm.cpu.mem.write_bytes(0x1500, CODE_B, perm::NONE).unwrap();
+
+    let r2 = vm.cpu.arch.sleigh.get_varnode("r2").unwrap();
+    let r3 = vm.cpu.arch.sleigh.get_varnode("r3").unwrap();
+
+    // Lift the blocks in both modes.
+    for mode in [A_MODE, T_MODE] {
+        vm.cpu.set_isa_mode(mode);
+        vm.jit.clear_fast_lookup();
+        vm.cpu.write_pc(0x1000);
+        assert_eq!(vm.step(6), VmExit::InstructionLimit);
+    }
+
+    vm.enable_recompilation = true;
+    vm.recompile();
+
+    // Each mode must only execute its own code after recompilation.
+    for mode in [A_MODE, T_MODE] {
+        vm.cpu.set_isa_mode(mode);
+        vm.jit.clear_fast_lookup();
+        vm.cpu.write_pc(0x1000);
+
+        let (before2, before3) = (vm.cpu.read_reg(r2), vm.cpu.read_reg(r3));
+        assert_eq!(vm.step(100), VmExit::InstructionLimit);
+
+        let (after2, after3) = (vm.cpu.read_reg(r2), vm.cpu.read_reg(r3));
+        if mode == A_MODE {
+            assert_eq!(after2, before2, "ARM mode ran Thumb code (r2 changed)");
+            assert!(after3 > before3, "ARM code was not executed");
+        }
+        else {
+            assert_eq!(after3, before3, "Thumb mode ran ARM code (r3 changed)");
+            assert!(after2 > before2, "Thumb code was not executed");
+        }
+    }
 }
