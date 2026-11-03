@@ -2,6 +2,8 @@
 
 use ahash::{HashMap, HashSet};
 
+/// Key for blocks of code in the code cache, allowing multiple translations at the same address
+/// to exist if they are lifted in different contexts (e.g., ISA mode or different address spaces).
 #[derive(Copy, Clone, Debug, Default, Hash, PartialEq, Eq)]
 pub struct BlockKey {
     pub vaddr: u64,
@@ -9,6 +11,11 @@ pub struct BlockKey {
 }
 
 impl BlockKey {
+    pub fn is_same_mem_block(&self, vaddr: u64, block_size: u64) -> bool {
+        let block_mask = !(block_size - 1);
+        (self.vaddr & block_mask) == (vaddr & block_mask)
+    }
+
     pub fn with_vaddr(mut self, vaddr: u64) -> Self {
         self.vaddr = vaddr;
         self
@@ -17,10 +24,7 @@ impl BlockKey {
 
 impl std::fmt::Display for BlockKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!(
-            "[vaddr={:#x},mode={}]",
-            self.vaddr, self.isa_mode
-        ))
+        f.write_fmt(format_args!("[vaddr={:#x},mode={}]", self.vaddr, self.isa_mode))
     }
 }
 

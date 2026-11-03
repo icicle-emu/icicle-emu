@@ -232,8 +232,7 @@ impl Vm {
     }
 
     pub(crate) fn get_block_key(&self, vaddr: u64) -> BlockKey {
-        let isa_mode = self.cpu.isa_mode() as u64;
-        BlockKey { vaddr, isa_mode }
+        self.cpu.get_block_key(vaddr)
     }
 
     fn handle_exception(&mut self) -> VmExit {
@@ -699,6 +698,9 @@ impl Vm {
             // ISA mode has changed so we need to prevent addresses from the previous ISA mode from
             // being included in the fast look up table (which doesn't check the ISA mode).
             self.prev_isa_mode = key.isa_mode as u8;
+            if let Some(ctx) = self.cpu.arch.isa_mode_context.get(key.isa_mode as usize) {
+                self.lifter.set_context(*ctx);
+            }
             self.jit.clear_fast_lookup();
         }
 
@@ -761,8 +763,7 @@ impl Vm {
         let mut stack = vec![];
         let mut compilation_group = vec![];
 
-        // @fixme: this is broken if a jump performs a context switch.
-        let isa_mode = self.cpu.isa_mode() as u64;
+        let block_size = icicle_cpu::mem::physical::PAGE_SIZE as u64;
 
         for (i, block) in self.code.blocks.iter().enumerate().skip(self.recompile_offset) {
             let entry = match block.entry {
@@ -786,8 +787,15 @@ impl Vm {
 
                 let mut add_target = |target: &lifter::Target| match target {
                     Target::Internal(id) => stack.push((*id, &self.code.blocks[*id])),
-                    Target::External(pcode::Value::Const(addr, _)) => {
-                        let key = BlockKey { vaddr: *addr, isa_mode };
+                    &Target::External(pcode::Value::Const(vaddr, _)) => {
+                        if !entry.is_same_mem_block(vaddr, block_size) {
+                            // Currently we only allow direct chaining within a single block since
+                            // we can't lookup the physical address of inactive address spaces. So
+                            // if this jump leads to a new physical block, drop it from the current
+                            // compilation group.
+                            return;
+                        }
+                        let key = BlockKey { vaddr, ..entry };
                         if let Some(group) = self.code.map.get(&key) {
                             let entry_block = group.blocks.0;
                             stack.push((entry_block, &self.code.blocks[entry_block]));
@@ -816,6 +824,11 @@ impl Vm {
                 compilation_group.clear();
             }
         }
+
+        // Need to clear the fast lookup path, because `jit.compile` eagerly inserts into the fast
+        // lookup table, which is is only valid if everything had the same context (which may not
+        // be the case).
+        self.jit.clear_fast_lookup();
 
         tracing::info!(
             "Recompiled {} blocks in {:?} ({} entrypoints now dead)",
