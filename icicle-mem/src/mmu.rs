@@ -832,13 +832,8 @@ impl Mmu {
                     // Prevent writes to the region we are executing (we don't currently support
                     // self modifying code).
                     if self.detect_self_modifying_code {
-                        unsafe {
-                            page.write_ptr().ptr.as_mut().add_perm_unchecked(
-                                offset,
-                                len,
-                                perm::IN_CODE_CACHE,
-                            );
-                        };
+                        page.data_mut().perm[offset..offset + len]
+                            .fill((perm & !perm::WRITE) | perm::IN_CODE_CACHE);
                     }
 
                     tlb.remove_write(mapping.addr);
