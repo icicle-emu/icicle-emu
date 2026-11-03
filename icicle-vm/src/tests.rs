@@ -320,3 +320,73 @@ fn recompile_does_not_mix_isa_modes() {
         }
     }
 }
+
+fn mips_test_vm(code: &[u8]) -> crate::Vm {
+    let mut vm =
+        crate::build(&Config { triple: "mips-none".parse().unwrap(), ..Config::default() })
+            .unwrap();
+
+    vm.cpu.mem.map_memory_len(0x1000, 0x1000, Mapping {
+        perm: perm::READ | perm::EXEC | perm::INIT,
+        value: 0x00,
+    });
+    vm.cpu.mem.write_bytes(0x1000, code, perm::NONE).unwrap();
+    vm.cpu.write_pc(0x1000);
+    vm
+}
+
+#[test]
+fn mips16_delay_slots_and_pc_relative_loads() {
+    // MIPS16e `jal` is a 4-byte instruction with a delay slot, and temporary (`noflow`) decoder
+    // context that the spec uses to track the delay slot.
+    const CODE: &[u8] = &[
+        0x18, 0x00, 0x04, 0x04, // 0x1000: jal 0x1010
+        0x65, 0x00, // 0x1004: nop (delay slot)
+        //
+        0x65, 0x00, 0x65, 0x00, 0x65, 0x00, 0x65, 0x00, // 4x nop
+        0x65, 0x00, // nop
+        //
+        0xb2, 0x03, // 0x1010: lw v0, 12(pc) = 0xdeadbeaf
+        0xe8, 0x20, // 0x1012: jr ra
+        0x65, 0x00, // 0x1014: nop (delay slot)
+        //
+        0x65, 0x00, 0x65, 0x00, 0x65, 0x00, // 4x nop
+        //
+        0xde, 0xad, 0xbe, 0xef, // 0x101c: literal
+    ];
+
+    let mut vm = mips_test_vm(&CODE);
+    vm.cpu.set_isa_mode(1);
+    let v0 = vm.cpu.arch.sleigh.get_varnode("v0").unwrap();
+
+    assert_eq!(vm.step(10), VmExit::InstructionLimit);
+    assert_eq!(vm.cpu.read_reg(v0), 0xdead_beef, "pc-relative load used the wrong base address");
+    assert_eq!(vm.cpu.isa_mode(), 1);
+}
+
+#[test]
+fn mips16_to_mips32_mode_switch() {
+    // A `jr` to an even address in MIPS16e mode switches to MIPS32 mode, and the code at the target
+    // must then be decoded as MIPS32.
+    const CODE: &[u8] = &[
+        0xeb, 0x00, // 0x1000: jr v1 (MIPS16e)
+        0x65, 0x00, // 0x1002: nop (delay slot)
+        //
+        0x65, 0x00, 0x65, 0x00, 0x65, 0x00, 0x65, 0x00, // 4x nop
+        0x65, 0x00, 0x65, 0x00, 0x65, 0x00, 0x65, 0x00, // 4x nop
+        //
+        0x24, 0x02, 0x12, 0x34, // 0x1010: addiu v0, zero, 0x1234
+        0x24, 0x03, 0x56, 0x78, // 0x1014: addiu v1, zero, 0x5678
+    ];
+
+    let mut vm = mips_test_vm(&CODE);
+    vm.cpu.set_isa_mode(1);
+    let v0 = vm.cpu.arch.sleigh.get_varnode("v0").unwrap();
+    let v1 = vm.cpu.arch.sleigh.get_varnode("v1").unwrap();
+    vm.cpu.write_reg(v1, 0x1010);
+
+    assert_eq!(vm.step(4), VmExit::InstructionLimit);
+    assert_eq!(vm.cpu.isa_mode(), 0);
+    assert_eq!(vm.cpu.read_reg(v0), 0x1234);
+    assert_eq!(vm.cpu.read_reg(v1), 0x5678);
+}

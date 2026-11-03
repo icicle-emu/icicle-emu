@@ -137,11 +137,20 @@ impl Decoder {
         if let Some(_) = inst.delay_slot {
             self.offset = self.next_offset;
             if !self.ignore_delay_slots {
+                // Delay slot decoding does not inherit temporary context changes so reset back the
+                // context here.
+                self.context = self.global_context;
                 let delay_slot = self.decode_subtable(sleigh, inst, ROOT_TABLE_ID);
                 inst.delay_slot = match self.is_valid {
                     true => Some(delay_slot),
                     false => Some(invalid_constructor(sleigh)),
                 };
+
+                // Any `noflow` values set for the delay slot have now been consumed, and must not
+                // apply to the instruction following the delay slot.
+                for entry in sleigh.context_fields.iter().filter(|entry| !entry.flow) {
+                    entry.field.set(&mut self.global_context, 0);
+                }
             }
             else {
                 // Assume the size of the delay slot is the same as the root instruction.
