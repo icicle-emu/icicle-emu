@@ -50,6 +50,18 @@ impl BlockTable {
         let group = *self.map.get(&key)?;
         Some(BlockInfoRef { group, code: self })
     }
+
+    /// Returns an iterator over all blocks that have an instruction _starting_ at `addr`.
+    pub fn blocks_with_instruction(
+        &mut self,
+        addr: u64,
+    ) -> impl Iterator<Item = (usize, &mut super::Block)> {
+        self.blocks.iter_mut().enumerate().filter(move |(_, block)| {
+            block.start <= addr
+                && addr < block.end
+                && block.instructions().any(|(inst_addr, _)| inst_addr == addr)
+        })
+    }
 }
 
 pub struct BlockInfoRef<'a> {

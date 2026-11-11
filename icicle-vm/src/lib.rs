@@ -613,13 +613,11 @@ impl Vm {
         // Add breakpoints to the lifted code.
         if !self.code.breakpoints.is_empty() {
             for block in &mut self.code.blocks[group.range()] {
-                for inst in &block.pcode.instructions {
-                    if matches!(inst.op, pcode::Op::InstructionMarker)
-                        && self.code.breakpoints.contains(&inst.inputs.first().as_u64())
-                    {
-                        block.breakpoints += 1;
-                    }
-                }
+                let breakpoints_in_block = block
+                    .instructions()
+                    .filter(|(addr, _)| self.code.breakpoints.contains(&addr))
+                    .count();
+                block.breakpoints = breakpoints_in_block as u32;
             }
         }
 
@@ -1018,13 +1016,11 @@ impl Vm {
             return false;
         }
 
-        for (id, block) in self.code.blocks.iter_mut().enumerate() {
-            if block.start <= addr && addr < block.end {
-                block.breakpoints += 1;
-                // Invalidate the entire compilation group so that superblocks containing
-                // this block are removed from entry_points (not just the fast lookup).
-                self.jit.invalidate(id);
-            }
+        for (id, block) in self.code.blocks_with_instruction(addr) {
+            block.breakpoints += 1;
+            // Invalidate the entire compilation group so that superblocks containing this block are
+            // removed from entry_points (not just the fast lookup).
+            self.jit.invalidate(id);
         }
 
         true
@@ -1039,7 +1035,7 @@ impl Vm {
             return false;
         }
 
-        for block in self.code.blocks.iter_mut().filter(|x| x.start <= addr && addr < x.end) {
+        for (_, block) in self.code.blocks_with_instruction(addr) {
             block.breakpoints -= 1;
         }
 
