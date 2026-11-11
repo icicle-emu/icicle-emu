@@ -221,7 +221,8 @@ impl Vm {
                 self.cpu.update_fuel(0);
             }
             else {
-                self.cpu.exception.code = ExceptionCode::InstructionLimit as u32;
+                self.cpu.exception =
+                    Exception::new(ExceptionCode::InstructionLimit, self.cpu.read_pc());
             }
 
             match self.handle_exception() {
@@ -243,6 +244,8 @@ impl Vm {
         if let Some(exit) = self.env.handle_exception(&mut self.cpu) {
             return exit;
         }
+        // The environment may have changed when it next needs to run (e.g., env arming a timer).
+        self.update_timer();
 
         let code = ExceptionCode::from_u32(self.cpu.exception.code);
         tracing::trace!("{code:?}: icount={}, next_timer={}", self.cpu.icount, self.next_timer);
@@ -254,7 +257,6 @@ impl Vm {
                 if self.code.breakpoints.contains(&self.cpu.read_pc()) {
                     return VmExit::Breakpoint;
                 }
-                self.update_timer();
                 VmExit::Running
             }
             ExceptionCode::SoftwareBreakpoint => VmExit::Breakpoint,
