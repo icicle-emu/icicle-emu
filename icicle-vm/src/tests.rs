@@ -425,3 +425,44 @@ fn self_modifying_code_after_write() {
     );
     assert_eq!(run_from(0x00), VmExit::UnhandledException((ExceptionCode::WritePerm, 0x21)));
 }
+
+#[test]
+fn remove_breakpoint_on_jump_target() {
+    let mut vm =
+        crate::build(&Config { triple: "x86_64-none".parse().unwrap(), ..Config::default() })
+            .unwrap();
+    vm.cpu.mem.map_memory_len(0, 0x1000, Mapping { perm: perm::READ | perm::EXEC, value: 0 });
+
+    const CODE: &[u8] = &[
+        0xb8, 0x90, 0x90, 0x90, 0x90, // 0x00: mov eax, 0x90909090
+        0xeb, 0xfa, // (into the mov's immediate, which runs as nops)
+    ];
+    vm.cpu.mem.write_bytes(0x0, CODE, perm::NONE).unwrap();
+
+    vm.add_breakpoint(0x01);
+    assert_eq!(vm.step(100), VmExit::Breakpoint);
+    assert_eq!(vm.cpu.read_pc(), 0x01);
+    vm.remove_breakpoint(0x01);
+}
+
+#[test]
+fn remove_breakpoint_skips_another() {
+    let mut vm =
+        crate::build(&Config { triple: "x86_64-none".parse().unwrap(), ..Config::default() })
+            .unwrap();
+    vm.cpu.mem.map_memory_len(0, 0x1000, Mapping { perm: perm::READ | perm::EXEC, value: 0 });
+
+    const CODE: &[u8] = &[
+        0xb8, 0x90, 0x90, 0x90, 0x90, // 0x00: mov eax, 0x90909090
+        0xeb, 0xf9, // 0x05: jmp 0x00
+    ];
+    vm.cpu.mem.write_bytes(0x0, CODE, perm::NONE).unwrap();
+
+    vm.add_breakpoint(0x01); // inside the mov
+    vm.add_breakpoint(0x05); // on the jmp
+    assert_eq!(vm.step(100), VmExit::Breakpoint);
+    assert_eq!(vm.cpu.read_pc(), 0x05);
+
+    vm.remove_breakpoint(0x01);
+    assert_eq!(vm.step(100), VmExit::Breakpoint);
+}
