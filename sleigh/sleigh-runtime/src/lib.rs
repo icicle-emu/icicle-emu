@@ -174,6 +174,16 @@ impl Field {
         }
     }
 
+    /// Extract and sign-extend the field from a wide (up to 128-bit) token
+    /// value. Field values are always at most 64 bits wide.
+    pub fn extract128(&self, value: u128) -> i64 {
+        let value = ((value >> self.offset) & (pcode::mask(self.num_bits as u64) as u128)) as u64;
+        match self.signed {
+            true => pcode::sxt64(value, self.num_bits as u64) as i64,
+            false => value as i64,
+        }
+    }
+
     /// Write the value of the field to `dst`.
     pub fn set(&self, dst: &mut u64, value: i64) {
         let mask = self.mask();
@@ -183,6 +193,11 @@ impl Field {
     /// Get a mask representing the bits that are read as part of `field`.
     pub fn mask(&self) -> u64 {
         pcode::mask(self.num_bits as u64) << self.offset
+    }
+
+    /// Get a mask for the field, wide enough for fields at offsets beyond 63.
+    pub fn mask128(&self) -> u128 {
+        (pcode::mask(self.num_bits as u64) as u128) << self.offset
     }
 }
 

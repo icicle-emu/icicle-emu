@@ -266,7 +266,9 @@ impl Decoder {
                 DecodeAction::Eval(idx, kind) => {
                     ctx.locals_mut()[*idx as usize] = match kind {
                         EvalKind::ContextField(field) => field.extract(self.context),
-                        EvalKind::TokenField(token, field) => field.extract(self.get_token(*token)),
+                        EvalKind::TokenField(token, field) => {
+                            field.extract128(self.get_token(*token))
+                        }
                     };
                 }
                 DecodeAction::Subtable(idx, id) => {
@@ -368,22 +370,22 @@ impl Decoder {
     ///
     /// Note: The instruction stream is padded with zeros.
     #[inline]
-    pub fn get_raw_token(&self, token_offset: usize, token_size: usize) -> u64 {
+    pub fn get_raw_token(&self, token_offset: usize, token_size: usize) -> u128 {
         let start = token_offset + self.offset;
         let end = (start + token_size).min(self.bytes.len());
 
         match self.bytes.get(start..end) {
             Some(bytes) => {
-                let mut buf = [0; 8];
+                let mut buf = [0; 16];
                 buf[..bytes.len()].copy_from_slice(bytes);
-                u64::from_le_bytes(buf)
+                u128::from_le_bytes(buf)
             }
             None => 0,
         }
     }
 
     /// Read a token from the instruction stream.
-    pub(crate) fn get_token(&self, token: Token) -> u64 {
+    pub(crate) fn get_token(&self, token: Token) -> u128 {
         // Macro for specialized token sizes.
         macro_rules! read_token {
             ($ty:ty) => {{
@@ -392,8 +394,8 @@ impl Decoder {
                     Some(bytes) => {
                         let array = bytes.try_into().unwrap();
                         match token.big_endian {
-                            true => <$ty>::from_be_bytes(array) as u64,
-                            false => <$ty>::from_le_bytes(array) as u64,
+                            true => <$ty>::from_be_bytes(array) as u128,
+                            false => <$ty>::from_le_bytes(array) as u128,
                         }
                     }
                     None => 0,
@@ -406,13 +408,14 @@ impl Decoder {
             2 => read_token!(u16),
             4 => read_token!(u32),
             8 => read_token!(u64),
-            x if x < 8 => {
+            16 => read_token!(u128),
+            x if x < 16 => {
                 let mut raw_token =
                     self.get_raw_token(token.offset.into(), token.size.into()).to_le_bytes();
                 if token.big_endian {
                     raw_token[..x].reverse();
                 }
-                u64::from_le_bytes(raw_token)
+                u128::from_le_bytes(raw_token)
             }
             _ => panic!("invalid token size: {}", token.size),
         }
@@ -699,7 +702,7 @@ impl EvalPatternValue for &'_ Decoder {
     fn eval(&self, value: &Self::Value) -> i64 {
         match value {
             ContextModValue::ContextField(field) => field.extract(self.context),
-            ContextModValue::TokenField(token, field) => field.extract(self.get_token(*token)),
+            ContextModValue::TokenField(token, field) => field.extract128(self.get_token(*token)),
             ContextModValue::InstStart => self.base_addr as i64,
             // NOTE: self.next_state is still zero when this is called so we just set InstNext to
             // InstStart. Since the context field already has to be modified locally for that

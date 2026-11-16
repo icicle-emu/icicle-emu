@@ -97,7 +97,7 @@ fn build_case_matcher(
     }
 
     let token_bytes = tokens.bits.len() as u8 / 8;
-    if token_bytes > 8 {
+    if token_bytes > 16 {
         return Err(format!("Constraint requires matching {token_bytes} bytes"));
     }
 
@@ -126,7 +126,7 @@ impl BitMatcher {
         value: Option<u64>,
         is_be: bool,
     ) -> Result<(), String> {
-        if field.offset as u32 >= u64::BITS {
+        if field.offset as u32 >= u128::BITS {
             return Err(format!("Field offset to large: {}", field.offset));
         }
 
@@ -134,11 +134,17 @@ impl BitMatcher {
         let token_bits = (token.size * 8) as usize;
         self.grow(token_offset + token_bits);
 
-        let mut mask = field.mask();
-        if is_be {
-            mask = byteswap_value(mask, token_bits as u64);
+        if is_be && token_bits > 64 {
+            return Err(format!(
+                "big-endian tokens larger than 64 bits are not supported (token is {token_bits} bits)"
+            ));
         }
-        let new_mask = BitVec::from_u64(mask, token_bits).shift_start(token_offset);
+
+        let mut mask = field.mask128();
+        if is_be {
+            mask = byteswap_value(mask as u64, token_bits as u64) as u128;
+        }
+        let new_mask = BitVec::from_u128(mask, token_bits).shift_start(token_offset);
 
         let Some(value) = value
         else {
@@ -152,11 +158,17 @@ impl BitMatcher {
         // the bytes in the value and mask before we build the final pattern.
         //
         // @fixme: Ghidra is more restrictive when checking overlapping tokens.
-        let mut shifted = value << field.offset;
-        if is_be {
-            shifted = byteswap_value(shifted, token_bits as u64);
+        if is_be && token_bits > 64 {
+            return Err(format!(
+                "big-endian tokens larger than 64 bits are not supported (token is {token_bits} bits)"
+            ));
         }
-        let bits = BitVec::from_u64(shifted, token_bits).shift_start(token_offset);
+        let mut shifted = (value as u128) << field.offset;
+        if is_be {
+            // token_bits <= 64 is guaranteed by the check above.
+            shifted = byteswap_value(shifted as u64, token_bits as u64) as u128;
+        }
+        let bits = BitVec::from_u128(shifted, token_bits).shift_start(token_offset);
 
         // Check whether the new constraint is incompatible with an existing constraint
         let in_both = new_mask.and(&self.mask);
@@ -182,8 +194,8 @@ impl BitMatcher {
 
     pub(crate) fn pattern(&self) -> sleigh_runtime::matcher::Pattern {
         sleigh_runtime::matcher::Pattern {
-            bits: self.bits.value as u64,
-            mask: self.mask.value as u64,
+            bits: self.bits.value,
+            mask: self.mask.value,
         }
     }
 
@@ -237,6 +249,11 @@ pub(crate) struct BitVec {
 impl BitVec {
     /// Creates a new bit vector from a u64 value
     pub fn from_u64(value: u64, len: usize) -> Self {
+        Self::from_u128(value as u128, len)
+    }
+
+    /// Creates a new bit vector from a u128 value
+    pub fn from_u128(value: u128, len: usize) -> Self {
         let mut bit_vec = Self::default();
         for &byte in &value.to_le_bytes() {
             let mut byte = byte;

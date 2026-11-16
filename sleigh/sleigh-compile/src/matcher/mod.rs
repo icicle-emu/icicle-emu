@@ -117,20 +117,46 @@ struct MatcherOrdering {
     pub ord: Option<Ordering>,
 }
 
+/// A token and context bit set pair. Token patterns can be up to 128 bits
+/// wide, so they no longer pack into a single u128 alongside the context.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct PatternBits {
+    token: u128,
+    context: u64,
+}
+
+impl PatternBits {
+    fn and(self, other: Self) -> Self {
+        Self { token: self.token & other.token, context: self.context & other.context }
+    }
+
+    fn or(self, other: Self) -> Self {
+        Self { token: self.token | other.token, context: self.context | other.context }
+    }
+
+    fn not(self) -> Self {
+        Self { token: !self.token, context: !self.context }
+    }
+
+    fn is_empty(self) -> bool {
+        self.token == 0 && self.context == 0
+    }
+}
+
 /// Returns a mask and value for fields representing the bits with simple
 /// constraints.
-fn pattern_mask_value_simple(case: &MatchCase) -> (u128, u128) {
-    let mask = (case.token.mask as u128) << u64::BITS | case.context.mask as u128;
-    let value = (case.token.bits as u128) << u64::BITS | case.context.bits as u128;
+fn pattern_mask_value_simple(case: &MatchCase) -> (PatternBits, PatternBits) {
+    let mask = PatternBits { token: case.token.mask, context: case.context.mask as u64 };
+    let value = PatternBits { token: case.token.bits, context: case.context.bits as u64 };
     //NOTE value & mask is important because of the complex constraint
-    (mask, value & mask)
+    (mask, value.and(mask))
 }
 
 /// Returns the mask for fields representing the bits with complex constraints.
-fn pattern_mask_complex(case: &MatchCase) -> u128 {
-    let mask = (case.token.mask as u128) << u64::BITS | case.context.mask as u128;
-    let value = (case.token.bits as u128) << u64::BITS | case.context.bits as u128;
-    !mask & value
+fn pattern_mask_complex(case: &MatchCase) -> PatternBits {
+    let mask = PatternBits { token: case.token.mask, context: case.context.mask as u64 };
+    let value = PatternBits { token: case.token.bits, context: case.context.bits as u64 };
+    mask.not().and(value)
 }
 
 /// Calculate the ordering of the simple constraints.
@@ -141,9 +167,9 @@ fn simple_ordering(case_a: &MatchCase, case_b: &MatchCase) -> MatcherOrdering {
     let ord = ordering_from_mask(mask_a, mask_b);
     let same_intersection = match ord {
         Some(Ordering::Equal) => value_a == value_b,
-        None => value_a & mask_b == value_b & mask_a,
-        Some(Ordering::Greater) => value_a & mask_b == value_b,
-        Some(Ordering::Less) => value_b & mask_a == value_a,
+        None => value_a.and(mask_b) == value_b.and(mask_a),
+        Some(Ordering::Greater) => value_a.and(mask_b) == value_b,
+        Some(Ordering::Less) => value_b.and(mask_a) == value_a,
     };
     MatcherOrdering { equal_intersection: same_intersection, ord }
 }
@@ -158,7 +184,7 @@ fn complex_ordering(case_a: &MatchCase, case_b: &MatchCase) -> Option<Ordering> 
 /// Compare the complex constraints, returning true if the intersection have the
 /// same constraint.
 fn complex_equal_intersection(case_a: &MatchCase, case_b: &MatchCase) -> bool {
-    let intersection = pattern_mask_complex(case_a) & pattern_mask_complex(case_b);
+    let intersection = pattern_mask_complex(case_a).and(pattern_mask_complex(case_b));
     // @todo: check for equivalent constraints between both complex constraints.
     // https://github.com/icicle-emu/icicle-emu/pull/36#issuecomment-1595633902
 
@@ -178,18 +204,17 @@ fn complex_equal_intersection(case_a: &MatchCase, case_b: &MatchCase) -> bool {
 }
 
 // Returns true if the constraint affect the mask
-fn constraint_in_mask(constraint: &Constraint, mask: u128) -> bool {
-    let bits = match constraint {
+fn constraint_in_mask(constraint: &Constraint, mask: PatternBits) -> bool {
+    match constraint {
         Constraint::Token { token, field, .. } => {
-            let mut bits = field.mask();
+            let mut bits = field.mask128();
             if token.big_endian {
-                bits = byteswap_value(bits, token.size as u64 * 8);
+                bits = byteswap_value(bits as u64, token.size as u64 * 8) as u128;
             }
-            (bits as u128) >> 64
+            bits & mask.token != 0
         }
-        Constraint::Context { field, .. } => field.mask().into(),
-    };
-    bits & mask != 0
+        Constraint::Context { field, .. } => field.mask() & mask.context != 0,
+    }
 }
 
 /// Compares the bits set in self with other.
@@ -207,9 +232,9 @@ fn compare_match_cases(case_a: &MatchCase, case_b: &MatchCase) -> MatcherOrderin
     MatcherOrdering { ord, equal_intersection }
 }
 
-fn ordering_from_mask(mask_a: u128, mask_b: u128) -> Option<Ordering> {
-    let extra_a = mask_a & !mask_b != 0;
-    let extra_b = mask_b & !mask_a != 0;
+fn ordering_from_mask(mask_a: PatternBits, mask_b: PatternBits) -> Option<Ordering> {
+    let extra_a = !mask_a.and(mask_b.not()).is_empty();
+    let extra_b = !mask_b.and(mask_a.not()).is_empty();
     match (extra_a, extra_b) {
         (false, false) => Some(Ordering::Equal),
         (true, true) => None,
@@ -226,8 +251,8 @@ fn find_conflict_solver(
 ) -> Option<usize> {
     let (mask_value_a, value_a) = pattern_mask_value_simple(conflict_a);
     let (mask_value_b, value_b) = pattern_mask_value_simple(conflict_b);
-    let mask_solver = mask_value_a | mask_value_b;
-    let value_solver = value_a | value_b;
+    let mask_solver = mask_value_a.or(mask_value_b);
+    let value_solver = value_a.or(value_b);
 
     //@todo check if the complex constraint is equal to the intersection
     cases
@@ -238,7 +263,7 @@ fn find_conflict_solver(
 
 #[allow(unused)]
 fn bit_to_string(case: &Pattern) -> String {
-    (0..64)
+    (0..128)
         .map(|bit| match (case.mask >> bit & 1 != 0, case.bits >> bit & 1 != 0) {
             (true, true) => '1',
             (true, false) => '0',

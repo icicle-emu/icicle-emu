@@ -67,8 +67,8 @@ pub struct MatchCase {
 }
 
 impl MatchCase {
-    fn matches(&self, state: &Decoder, context_reg: u64, token: u64) -> bool {
-        self.context.matches(context_reg)
+    fn matches(&self, state: &Decoder, context_reg: u64, token: u128) -> bool {
+        self.context.matches(context_reg as u128)
             && self.token.matches(token)
             && (self.constraints.is_empty() || self.matches_complex(state))
     }
@@ -81,15 +81,15 @@ impl MatchCase {
 
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Pattern {
-    pub bits: u64,
-    pub mask: u64,
+    pub bits: u128,
+    pub mask: u128,
 }
 
 impl std::fmt::Display for Pattern {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use std::fmt::Write;
 
-        for bit in 0..u64::BITS {
+        for bit in 0..u128::BITS {
             match ((self.mask >> bit) & 1 != 0, (self.bits >> bit) & 1 != 0) {
                 (true, true) => f.write_char('1')?,
                 (true, false) => f.write_char('0')?,
@@ -102,7 +102,7 @@ impl std::fmt::Display for Pattern {
 }
 
 impl Pattern {
-    pub fn matches(&self, other: u64) -> bool {
+    pub fn matches(&self, other: u128) -> bool {
         self.mask & self.bits == self.mask & other
     }
 }
@@ -131,33 +131,33 @@ impl Constraint {
                 eval_constraint(*field, state.get_token(*token), operand, *cmp)
             }
             Self::Context { field, cmp, operand } => {
-                eval_constraint(*field, state.context, operand, *cmp)
+                eval_constraint(*field, state.context as u128, operand, *cmp)
             }
         }
     }
 }
 
 struct ConstraintEvalCtx {
-    src_val: u64,
+    src_val: u128,
 }
 
 impl EvalPatternValue for ConstraintEvalCtx {
     type Value = Field;
 
     fn eval(&self, value: &Self::Value) -> i64 {
-        value.extract(self.src_val)
+        value.extract128(self.src_val)
     }
 }
 fn eval_constraint(
     field: Field,
-    src_val: u64,
+    src_val: u128,
     operand: &ConstraintOperand,
     cmp: ConstraintCmp,
 ) -> bool {
-    let lhs = field.extract(src_val);
+    let lhs = field.extract128(src_val);
     let rhs = match operand {
         ConstraintOperand::Constant(x) => *x,
-        ConstraintOperand::Field(field) => field.extract(src_val),
+        ConstraintOperand::Field(field) => field.extract128(src_val),
         ConstraintOperand::Expr(expr) => {
             // @todo: consider reusing allocations here.
             let mut stack = vec![];
