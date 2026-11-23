@@ -286,22 +286,24 @@ where
 
         (Op::IntLeft, ..) => {
             let x: u128 = exec.read_dynamic(a).zxt();
-            let y: u32 = exec.read_dynamic(b).zxt();
-            let result = if y >= output.size as u32 * 8 { 0 } else { x << y };
+            // the count may be wider than 32 bits (the packed shifts take a quadword)
+            let y: u128 = exec.read_dynamic(b).zxt();
+            let result = if y >= output.size as u128 * 8 { 0 } else { x << y };
             exec.write_trunc(output, result);
         }
 
         (Op::IntRight, ..) => {
             let x: u128 = exec.read_dynamic(a).zxt();
-            let y: u32 = exec.read_dynamic(b).zxt();
-            let result = if y >= output.size as u32 * 8 { 0 } else { x >> y };
+            // the count may be wider than 32 bits (the packed shifts take a quadword)
+            let y: u128 = exec.read_dynamic(b).zxt();
+            let result = if y >= output.size as u128 * 8 { 0 } else { x >> y };
             exec.write_trunc(output, result);
         }
 
         (Op::IntSignedRight, ..) => {
             let x: u128 = exec.read_dynamic(stmt.inputs.get()[0]).sxt();
-            let y: u32 = exec.read_dynamic(stmt.inputs.get()[1]).zxt();
-            let shift = y.min(output.size as u32 * 8 - 1);
+            let y: u128 = exec.read_dynamic(stmt.inputs.get()[1]).zxt();
+            let shift = y.min(output.size as u128 * 8 - 1);
             exec.write_trunc(output, x >> shift);
         }
 
