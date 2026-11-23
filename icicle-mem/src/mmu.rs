@@ -708,7 +708,7 @@ impl Mmu {
         let snapshot = SnapshotData {
             mapping: self.mapping.clone(),
             physical: self.physical.snapshot(),
-            parent: Some(self.parent_state.clone()),
+            parent: None,
             io: self.io.iter_mut().map(|x| x.snapshot()).collect(),
         };
 
