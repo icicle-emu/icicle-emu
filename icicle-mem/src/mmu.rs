@@ -1079,7 +1079,10 @@ impl Mmu {
         page.modified = true;
         page.data_mut().write(addr, value, perm)?;
 
-        let uncachable = self.write_hooks.contains_address(addr, page_size);
+        // A cached write entry would let later stores into lifted code on this page skip the self-modifying
+        // code check above.
+        let uncachable = self.write_hooks.contains_address(addr, page_size)
+            || (page.executed && self.detect_self_modifying_code);
         if !uncachable {
             // Safety: `page.data_mut()` ensures the page is a unique copy of the underlying data.
             self.tlb.insert_write(page_start, unsafe { page.write_ptr() });
