@@ -1,0 +1,30 @@
+name: Format Check
+
+on:
+  pull_request:
+    branches: [ master ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt
+        toolchain: 1.90
+
+    - name: Check formatting
+      run: cargo fmt --all -- --check 2> /dev/null
+
+    - name: Format code (if check fails)
+      if: failure()
+      run: |
+        echo "Code formatting check failed. Run 'cargo fmt' to fix formatting issues."
+        echo "The following files need formatting:"
+        cargo fmt --all -- --check 2> /dev/null || true
