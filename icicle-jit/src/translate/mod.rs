@@ -996,6 +996,8 @@ impl<'a> Translator<'a> {
                     self.vm_ptr.store_arg(&mut self.builder, id, value);
                 }
                 Op::PcodeOp(_id) => {
+                    // a helper may read and write registers that are not its operands
+                    ctx.trans.varnode_fence();
                     ctx.trans.interpret(ctx.instruction);
                     // The pcode operation may set an interupt, so check it here.
                     // @fixme: avoid checking all helpers.
