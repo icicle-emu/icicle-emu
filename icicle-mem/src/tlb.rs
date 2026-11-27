@@ -118,7 +118,7 @@ impl TranslationCache {
             return;
         }
 
-        for addr in (start & !(PAGE_SIZE - 1) as u64..=end).step_by(PAGE_SIZE) {
+        for addr in (start & !PAGE_MASK..=end).step_by(PAGE_SIZE) {
             self.remove(addr);
         }
     }
